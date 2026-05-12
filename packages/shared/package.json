@@ -1,0 +1,19 @@
+{
+  "name": "@reggie-db/dbx-tools-appkit-shared",
+  "version": "0.1.0",
+  "description": "Shared wire-format types for @reggie-db/dbx-tools-appkit and -ui.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

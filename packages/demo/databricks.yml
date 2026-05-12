@@ -1,0 +1,71 @@
+bundle:
+  name: dbx-tools-demo
+
+# Lakebase Autoscaling resources backing the demo's memory tools. Deploys
+# a single autoscaling Postgres endpoint with scale-to-zero enabled, so
+# the compute idles for free between user sessions and wakes on the next
+# connection.
+#
+# Layout: one project, one branch (`main`). The read-write endpoint named
+# `primary` is auto-created by Lakebase when the branch is created and
+# inherits the autoscaling + suspend settings from
+# `default_endpoint_settings` on the project. The default `production`
+# branch is also auto-provisioned with its own endpoint when the project
+# is created; the demo doesn't use it. Delete it manually with
+# `databricks postgres delete-branch projects/dbx-tools-demo/branches/production`
+# if you want a tidier project.
+#
+# Why no explicit `postgres_endpoints` resource: every new branch
+# (including the production default) auto-provisions a `primary` r/w
+# endpoint at branch-creation time. Declaring our own `postgres_endpoints`
+# entry collides with it ("read_write endpoint already exists") because a
+# branch can only hold ONE read-write endpoint at a time. Configuring
+# `default_endpoint_settings` on the project gives us the same effect
+# without the conflict.
+#
+# Deploy:
+#   databricks bundle validate
+#   databricks bundle deploy
+#
+# After deploy, look up the endpoint host with:
+#   databricks postgres get-endpoint projects/dbx-tools-demo/branches/main/endpoints/primary
+# and paste `status.hosts.host` into .env as PGHOST.
+#
+# If you deployed an earlier revision of this bundle that landed the
+# endpoint with the wrong settings (1-1 CU, 0s suspend), force it to
+# match the project defaults with:
+#   databricks postgres update-endpoint \
+#     projects/dbx-tools-demo/branches/main/endpoints/primary \
+#     --json '{"spec": {"autoscaling_limit_min_cu": 0.5, "autoscaling_limit_max_cu": 2, "suspend_timeout_duration": "300s"}}' \
+#     --update-mask "spec.autoscaling_limit_min_cu,spec.autoscaling_limit_max_cu,spec.suspend_timeout_duration"
+#
+# Tear-down (note: `databricks bundle destroy` does NOT work for Lakebase
+# read-write endpoints; you have to delete the whole project):
+#   databricks postgres delete-project projects/dbx-tools-demo
+
+targets:
+  dev:
+    default: true
+
+resources:
+  postgres_projects:
+    demo_project:
+      project_id: dbx-tools-demo
+      display_name: dbx-tools-appkit demo
+      pg_version: 17
+      # Settings that flow into every auto-created endpoint (including
+      # the `primary` endpoint on every branch). 0.5 CU floor is the
+      # smallest unit; max of 2 CU keeps demo cost bounded. 300s suspend
+      # = 5min idle then scale-to-zero (free). Minimum allowed suspend
+      # is 60s; max is 604800s. Wakeup from suspend is a few hundred ms.
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 2
+        suspend_timeout_duration: 300s
+
+  postgres_branches:
+    demo_branch:
+      parent: ${resources.postgres_projects.demo_project.id}
+      branch_id: main
+      is_protected: false
+      no_expiry: true

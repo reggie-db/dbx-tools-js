@@ -1,0 +1,35 @@
+packages:
+  - "packages/*"
+
+# Explicitly allow build scripts from these dependencies. pnpm 11 refuses to
+# silently run lifecycle scripts; listing them here is the workspace-wide
+# equivalent of running `pnpm approve-builds`.
+onlyBuiltDependencies:
+  - "@databricks/appkit"
+  - "@databricks/appkit-ui"
+  - "@google/genai"
+  - better-sqlite3
+  - esbuild
+  - protobufjs
+
+allowBuilds:
+  "@databricks/appkit": true
+  "@databricks/appkit-ui": true
+  # mem0ai transitively depends on @google/genai (for the google LLM provider)
+  # and better-sqlite3 (for the default sqlite history store). We don't use
+  # either path at runtime - the memory tool uses Databricks Foundation Model
+  # serving for LLM + embeddings and disables mem0's history store - but pnpm
+  # needs explicit approval before it'll run their postinstall scripts (native
+  # binary builds for sqlite, etc). Allow them so the modules resolve cleanly
+  # in case anything in mem0's init path eagerly imports them.
+  "@google/genai": true
+  better-sqlite3: true
+  esbuild: true
+  protobufjs: true
+
+# Force a single zod version across the workspace. @databricks/appkit pins
+# zod to exactly 4.3.6, so anything our packages declare must dedupe to that
+# - otherwise tsc sees two structurally-different `ZodObject` types and
+# blows up on every `tool({ schema })` call.
+overrides:
+  zod: 4.3.6
