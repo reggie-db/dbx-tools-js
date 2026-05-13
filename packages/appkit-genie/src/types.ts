@@ -2,12 +2,12 @@ import type { BasePluginConfig } from "@databricks/appkit";
 import type { Memory } from "mem0ai/oss";
 
 // Public types for the dbx-tools plugin. Wire-format types live in
-// @reggie-db/dbx-tools-appkit-shared so the UI package can consume them
+// @dbx-tools/appkit-genie-shared so the UI package can consume them
 // without pulling Node-only server deps.
 export type {
   ToolProgressEvent,
   ToolProgressPhase,
-} from "@reggie-db/dbx-tools-appkit-shared";
+} from "@dbx-tools/appkit-genie-shared";
 
 /**
  * Per-call user-id resolver. Returns the identifier mem0 should scope

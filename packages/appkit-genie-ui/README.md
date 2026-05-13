@@ -1,13 +1,13 @@
-# @reggie-db/dbx-tools-appkit-ui
+# @dbx-tools/appkit-genie-ui
 
-React UI for [`@reggie-db/dbx-tools-appkit`](../server). Drops in an `<AgentChat>` component that renders an agent's streaming response plus live tool-progress updates, styled to match [`@databricks/appkit-ui`](https://www.npmjs.com/package/@databricks/appkit-ui)'s `<GenieChat>` so the two can sit side by side.
+React UI for [`@dbx-tools/appkit-genie`](../appkit-genie). Drops in an `<AgentChat>` component that renders an agent's streaming response plus live tool-progress updates, styled to match [`@databricks/appkit-ui`](https://www.npmjs.com/package/@databricks/appkit-ui)'s `<GenieChat>` so the two can sit side by side.
 
-This package has **no runtime dependency on the server plugin**. Shared wire-format types (`ToolProgressEvent`, `ToolProgressPhase`) come from [`@reggie-db/dbx-tools-appkit-shared`](../shared), so the UI can be bundled into a browser without dragging in Node-only AppKit code.
+This package has **no runtime dependency on the server plugin**. Shared wire-format types (`ToolProgressEvent`, `ToolProgressPhase`) come from [`@dbx-tools/appkit-genie-shared`](../appkit-genie-shared), so the UI can be bundled into a browser without dragging in Node-only AppKit code.
 
 ## Quick start
 
 ```tsx
-import { AgentChat } from "@reggie-db/dbx-tools-appkit-ui";
+import { AgentChat } from "@dbx-tools/appkit-genie-ui";
 import "@databricks/appkit-ui/styles.css";
 
 export function ChatPage() {
@@ -34,7 +34,7 @@ interface AgentChatProps {
   /** Chat SSE endpoint. Default `"/api/agents/chat"`. */
   endpoint?: string;
   /**
-   * Tool-progress SSE URL produced by @reggie-db/dbx-tools-appkit. Default
+   * Tool-progress SSE URL produced by @dbx-tools/appkit-genie. Default
    * `"/api/dbx-tools/tool-progress"`. Pass `false` to disable the side channel.
    */
   progressUrl?: string | false;
@@ -63,7 +63,7 @@ import {
   useToolProgress,
   type ChatTurn,
   type ToolProgressEvent,
-} from "@reggie-db/dbx-tools-appkit-ui";
+} from "@dbx-tools/appkit-genie-ui";
 ```
 
 `useAgentChat` and `useToolProgress` are the same hooks `<AgentChat>` uses internally. They cover thread persistence + stale-thread retry and the dbx-tools SSE channel respectively.
@@ -80,7 +80,7 @@ import "@databricks/appkit-ui/styles.css";
 
 ```bash
 pnpm install
-pnpm --filter @reggie-db/dbx-tools-appkit-ui typecheck
+pnpm --filter @dbx-tools/appkit-genie-ui typecheck
 ```
 
 ## License

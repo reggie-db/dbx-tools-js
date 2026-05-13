@@ -1,4 +1,4 @@
-import { AgentChat } from "@reggie-db/dbx-tools-appkit-ui";
+import { AgentChat } from "@dbx-tools/appkit-genie-ui";
 
 // Minimal embed of <AgentChat>. The component handles:
 //
@@ -20,7 +20,7 @@ export default function App() {
           <p className="text-sm text-muted-foreground">
             AgentChat wired to a Databricks Genie space via{" "}
             <code className="rounded bg-muted px-1 py-0.5 text-xs">
-              appkit-plugin-dbx-tools
+              @dbx-tools/appkit-genie
             </code>
             . Tool progress streams live underneath each tool-call card.
           </p>

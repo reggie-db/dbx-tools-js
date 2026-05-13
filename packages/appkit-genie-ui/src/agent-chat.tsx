@@ -1,6 +1,6 @@
 import { Button, cn } from "@databricks/appkit-ui/react";
 import type { AgentChatEvent } from "@databricks/appkit-ui/react";
-import type { ToolProgressEvent } from "@reggie-db/dbx-tools-appkit-shared";
+import type { ToolProgressEvent } from "@dbx-tools/appkit-genie-shared";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AgentChatInput } from "./agent-chat-input.js";
 import { AgentChatMessageList } from "./agent-chat-message-list.js";
@@ -10,7 +10,7 @@ import { useToolProgress } from "./use-tool-progress.js";
 
 // Full-featured chat interface for an agent registered with the appkit agents
 // plugin. Handles message streaming, thread persistence, tool-call rendering,
-// and live tool-progress updates from the appkit-plugin-dbx-tools server.
+// and live tool-progress updates from the @dbx-tools/appkit-genie server.
 //
 // Layout mirrors @databricks/appkit-ui's GenieChat: ScrollArea message list,
 // Card-based bubbles with Avatar, auto-expanding textarea input, and a
@@ -23,7 +23,7 @@ export interface AgentChatProps {
   /** Chat SSE endpoint. Default `"/api/agents/chat"`. */
   endpoint?: string;
   /**
-   * Tool-progress SSE URL produced by `appkit-plugin-dbx-tools`. Default
+   * Tool-progress SSE URL produced by `@dbx-tools/appkit-genie`. Default
    * `"/api/dbx-tools/tool-progress"`. Pass `false` to disable the live
    * tool-progress side channel.
    */

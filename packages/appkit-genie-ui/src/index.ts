@@ -1,4 +1,4 @@
-// Public entry point for `appkit-plugin-dbx-tools-ui`.
+// Public entry point for `@dbx-tools/appkit-genie-ui`.
 
 export { AgentChat, type AgentChatProps } from "./agent-chat.js";
 export {
@@ -25,12 +25,12 @@ export {
   type UseToolProgressOptions,
 } from "./use-tool-progress.js";
 
-// Wire-format types come from @reggie-db/dbx-tools-appkit-shared. Re-export
+// Wire-format types come from @dbx-tools/appkit-genie-shared. Re-export
 // them so UI consumers do not have to install the shared package directly.
 export type {
   ToolProgressEvent,
   ToolProgressPhase,
-} from "@reggie-db/dbx-tools-appkit-shared";
+} from "@dbx-tools/appkit-genie-shared";
 
 // UI-internal types exposed for advanced compositions.
 export type { ChatTurn, ToolCall, ToolStatusUpdate } from "./types.js";

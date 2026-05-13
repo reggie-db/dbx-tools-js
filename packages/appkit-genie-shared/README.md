@@ -1,6 +1,6 @@
-# @reggie-db/dbx-tools-appkit-shared
+# @dbx-tools/appkit-genie-shared
 
-Pure-type package that holds the wire-format contracts shared between [`@reggie-db/dbx-tools-appkit`](../server) (server plugin) and [`@reggie-db/dbx-tools-appkit-ui`](../ui) (React component).
+Pure-type package that holds the wire-format contracts shared between [`@dbx-tools/appkit-genie`](../appkit-genie) (server plugin) and [`@dbx-tools/appkit-genie-ui`](../appkit-genie-ui) (React component).
 
 Currently exports `ToolProgressEvent` and `ToolProgressPhase`. No runtime, no Node-only imports - safe to bundle into the browser.
 

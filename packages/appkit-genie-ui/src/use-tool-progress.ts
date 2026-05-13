@@ -1,4 +1,4 @@
-import type { ToolProgressEvent } from "@reggie-db/dbx-tools-appkit-shared";
+import type { ToolProgressEvent } from "@dbx-tools/appkit-genie-shared";
 import { useEffect, useRef } from "react";
 
 // Subscribes to the dbx-tools tool-progress SSE channel and dispatches each

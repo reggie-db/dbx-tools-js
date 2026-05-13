@@ -1,5 +1,5 @@
-// Wire-format types shared between @reggie-db/dbx-tools-appkit (server) and
-// @reggie-db/dbx-tools-appkit-ui (React). This package is pure types: no
+// Wire-format types shared between @dbx-tools/appkit-genie (server) and
+// @dbx-tools/appkit-genie-ui (React). This package is pure types: no
 // runtime dependencies, no Node-only imports, safe for browser bundles.
 
 /** Lifecycle phase reported by tool-progress events. */

@@ -1,4 +1,4 @@
-// Public entry point for `@reggie-db/dbx-tools-appkit`.
+// Public entry point for `@dbx-tools/appkit-genie`.
 
 export { DbxTools, dbxTools } from "./dbx-tools.js";
 export {

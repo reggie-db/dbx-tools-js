@@ -1,17 +1,25 @@
 {
-  "name": "@reggie-db/dbx-tools-appkit-ui",
+  "name": "@dbx-tools/appkit-genie-ui",
   "version": "0.1.0",
-  "description": "React <AgentChat> component for @reggie-db/dbx-tools-appkit, styled to match @databricks/appkit-ui.",
+  "description": "React <AgentChat> component for @dbx-tools/appkit-genie, styled to match @databricks/appkit-ui.",
   "license": "Apache-2.0",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "files": ["src"],
+  "files": ["dist", "src"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": ["databricks", "appkit", "react", "chat", "genie"],
   "peerDependencies": {
@@ -20,7 +28,7 @@
     "react-dom": ">=18.0.0"
   },
   "dependencies": {
-    "@reggie-db/dbx-tools-appkit-shared": "workspace:*",
+    "@dbx-tools/appkit-genie-shared": "workspace:*",
     "dompurify": "^3.3.0",
     "lucide-react": "^0.554.0",
     "marked": "^16.0.0"
@@ -31,7 +39,6 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "typescript": "^5.6.0"
+    "react-dom": "^19.0.0"
   }
 }

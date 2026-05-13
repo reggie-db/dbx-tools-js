@@ -3,3 +3,7 @@ dist
 *.tsbuildinfo
 .env
 client/dist
+
+# AppKit's postinstall hook drops a starter plugin scaffold here.
+# We're a workspace of pre-built AppKit plugins so we don't want it.
+/plugins

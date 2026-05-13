@@ -1,10 +1,10 @@
-# @reggie-db/dbx-tools-appkit-demo
+# demo
 
 Runnable AppKit demo that wires up all three sibling packages in this repo:
 
-- [`@reggie-db/dbx-tools-appkit`](../server) (server plugin) auto-wires the `genie` plugin and exposes a `genie` tool with live tool-progress over SSE.
-- [`@reggie-db/dbx-tools-appkit-ui`](../ui) (React component) renders `<AgentChat>` and subscribes to the tool-progress channel to surface phase updates under the running tool card.
-- [`@reggie-db/dbx-tools-appkit-shared`](../shared) is pulled in transitively via the two packages above for the shared `ToolProgressEvent` contract.
+- [`@dbx-tools/appkit-genie`](../appkit-genie) (server plugin) auto-wires the `genie` plugin and exposes a `genie` tool with live tool-progress over SSE.
+- [`@dbx-tools/appkit-genie-ui`](../appkit-genie-ui) (React component) renders `<AgentChat>` and subscribes to the tool-progress channel to surface phase updates under the running tool card.
+- [`@dbx-tools/appkit-genie-shared`](../appkit-genie-shared) is pulled in transitively via the two packages above for the shared `ToolProgressEvent` contract.
 
 All sibling deps are wired through `workspace:*`, so any change you make to the source of any sibling package is hot-reloaded in the demo without a publish or build step.
 
@@ -33,7 +33,7 @@ cp .env.example .env
 databricks auth login --host "$DATABRICKS_HOST"
 
 pnpm install                                # from the repo root
-pnpm --filter @reggie-db/dbx-tools-appkit-demo dev
+pnpm --filter demo dev
 # or, from inside this folder:
 pnpm dev
 ```

@@ -1,9 +1,9 @@
 import { createApp, genie, lakebase, server, serving } from "@databricks/appkit";
 import { agents } from "@databricks/appkit/beta";
-import { dbxTools } from "@reggie-db/dbx-tools-appkit";
+import { dbxTools } from "@dbx-tools/appkit-genie";
 import { analystAgent } from "./agents/analyst.js";
 
-// AppKit demo wiring for `appkit-plugin-dbx-tools` + `appkit-plugin-dbx-tools-ui`.
+// AppKit demo wiring for `@dbx-tools/appkit-genie` + `@dbx-tools/appkit-genie-ui`.
 //
 // Plugin order matters in two places:
 // 1. `genie()` and `lakebase()` must appear before `dbxTools()` so they're

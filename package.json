@@ -2,16 +2,31 @@
   "name": "dbx-tools-appkit",
   "private": true,
   "version": "0.1.0",
-  "description": "Monorepo for @reggie-db/dbx-tools-appkit, -ui, -shared, and a runnable demo.",
+  "description": "Monorepo for @dbx-tools/appkit-* plugins and reference apps.",
   "license": "Apache-2.0",
-  "packageManager": "pnpm@11.0.6",
+  "type": "module",
+  "workspaces": ["packages/*"],
   "scripts": {
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "dev": "pnpm --filter @reggie-db/dbx-tools-appkit-demo dev",
-    "clean": "pnpm -r clean && rm -rf node_modules"
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "dev": "bun run --filter './packages/demo' dev",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "bun run build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.27.10",
     "typescript": "^5.6.0"
+  },
+  "trustedDependencies": [
+    "@databricks/appkit",
+    "@databricks/appkit-ui",
+    "@google/genai",
+    "better-sqlite3",
+    "esbuild",
+    "protobufjs"
+  ],
+  "overrides": {
+    "zod": "4.3.6"
   }
 }

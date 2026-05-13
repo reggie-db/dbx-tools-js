@@ -1,4 +1,4 @@
-# @reggie-db/dbx-tools-appkit
+# @dbx-tools/appkit-genie
 
 AppKit server plugin. Wraps the [genie plugin](https://databricks.github.io/appkit/docs/plugins/genie)'s `sendMessage` AsyncGenerator into an agent tool and streams phase updates onto an in-process event bus so the chat UI can render live "Submitted -> Executing SQL -> Completed" status under the running tool-call card.
 
@@ -11,7 +11,7 @@ Register `dbxTools()` alongside the `genie` plugin, then spread `dbxTools.toolki
 ```ts
 import { createApp, genie, server, serving } from "@databricks/appkit";
 import { agents, createAgent } from "@databricks/appkit/beta";
-import { dbxTools } from "@reggie-db/dbx-tools-appkit";
+import { dbxTools } from "@dbx-tools/appkit-genie";
 
 const kpiWriter = createAgent({
   model: "databricks-claude-sonnet-4-6",
@@ -93,10 +93,10 @@ appkit.dbxTools.toolkit(options);
 
 ## Types
 
-Wire-format types (`ToolProgressEvent`, `ToolProgressPhase`) live in [`@reggie-db/dbx-tools-appkit-shared`](../shared) and are re-exported from this package, so a single import gets you both the runtime and the contracts:
+Wire-format types (`ToolProgressEvent`, `ToolProgressPhase`) live in [`@dbx-tools/appkit-genie-shared`](../appkit-genie-shared) and are re-exported from this package, so a single import gets you both the runtime and the contracts:
 
 ```ts
-import { dbxTools, type ToolProgressEvent } from "@reggie-db/dbx-tools-appkit";
+import { dbxTools, type ToolProgressEvent } from "@dbx-tools/appkit-genie";
 ```
 
 ## Development
@@ -105,7 +105,7 @@ From the repo root:
 
 ```bash
 pnpm install
-pnpm --filter @reggie-db/dbx-tools-appkit typecheck
+pnpm --filter @dbx-tools/appkit-genie typecheck
 ```
 
 ## License
