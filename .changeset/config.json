@@ -1,17 +1,7 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
-  "changelog": "@changesets/cli/changelog",
-  "commit": false,
-  "fixed": [
-    [
-      "@dbx-tools/appkit-genie",
-      "@dbx-tools/appkit-genie-ui",
-      "@dbx-tools/appkit-genie-shared"
-    ]
-  ],
-  "linked": [],
   "access": "public",
   "baseBranch": "main",
-  "updateInternalDependencies": "patch",
-  "ignore": []
+  "fixed": [["@dbx-tools/*"]],
+  "privatePackages": false
 }

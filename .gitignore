@@ -4,6 +4,11 @@ dist
 .env
 client/dist
 
+# bun.lock is uncommitted because it bakes in the registry URLs of whoever
+# ran `bun install` (e.g. a corporate npm proxy), which we don't want
+# leaking to the public repo or to other contributors.
+bun.lock
+
 # AppKit's postinstall hook drops a starter plugin scaffold here.
 # We're a workspace of pre-built AppKit plugins so we don't want it.
 /plugins

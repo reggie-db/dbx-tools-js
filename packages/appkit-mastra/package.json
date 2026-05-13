@@ -1,7 +1,6 @@
 {
-  "name": "@dbx-tools/appkit-genie-shared",
+  "name": "@dbx-tools/appkit-mastra",
   "version": "0.1.0",
-  "description": "Shared wire-format types for @dbx-tools/appkit-genie and @dbx-tools/appkit-genie-ui.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,9 +12,23 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@databricks/appkit": "^0.33.0"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.32.1",
+    "@mastra/memory": "^1.17.5",
+    "@mastra/pg": "^1.10.0",
+    "mastra": "^1.8.2-alpha.0",
+    "pg": "^8.20.0",
+    "zod": "^4.3.6"
   }
 }

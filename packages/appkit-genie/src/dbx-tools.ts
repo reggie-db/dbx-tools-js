@@ -16,7 +16,6 @@ import {
 import { Memory } from "mem0ai/oss";
 import type { Pool } from "pg";
 import { installAdapterPatch, SKIP_TEXT_FALLBACK_KEY } from "./adapter.js";
-import manifest from "./manifest.json" with { type: "json" };
 import {
   DATABRICKS_FM_API_KEY,
   installDatabricksLlmPatch,
@@ -66,8 +65,16 @@ interface LakebasePluginWithExports {
   exports(): LakebaseExports;
 }
 
+const manifest: PluginManifest<"dbx-tools"> = {
+  name: "dbx-tools",
+  displayName: "Databricks Tools",
+  description:
+    "Reusable agent tools for AppKit apps: Genie streaming with live tool progress.",
+  resources: { required: [], optional: [] },
+};
+
 export class DbxTools extends Plugin<IDbxToolsConfig> {
-  static manifest = manifest as unknown as PluginManifest<"dbx-tools">;
+  static manifest = manifest;
 
   private readonly progress = new ToolProgressBus();
   private readonly wirings = new Map<string, GenieWiring>();

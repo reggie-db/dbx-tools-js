@@ -1,9 +1,8 @@
 {
-  "name": "demo",
+  "name": "@dbx-tools/appkit-demo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Runnable AppKit demo for @dbx-tools/appkit-genie and @dbx-tools/appkit-genie-ui.",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch --tsconfig ./tsconfig.server.json --env-file-if-exists=./.env ./server/server.ts",

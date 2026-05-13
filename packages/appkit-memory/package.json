@@ -1,7 +1,6 @@
 {
-  "name": "@dbx-tools/appkit-genie-shared",
+  "name": "@dbx-tools/appkit-memory",
   "version": "0.1.0",
-  "description": "Shared wire-format types for @dbx-tools/appkit-genie and @dbx-tools/appkit-genie-ui.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,9 +12,15 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@databricks/appkit": "^0.33.0"
   }
 }

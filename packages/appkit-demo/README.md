@@ -1,4 +1,4 @@
-# demo
+# @dbx-tools/appkit-demo
 
 Runnable AppKit demo that wires up all three sibling packages in this repo:
 
@@ -11,7 +11,7 @@ All sibling deps are wired through `workspace:*`, so any change you make to the 
 ## Layout
 
 ```
-packages/demo/
+packages/appkit-demo/
   server/
     server.ts            # createApp(): server, serving, genie, dbxTools, agents
     agents/analyst.ts    # createAgent() with a single genie tool
@@ -32,13 +32,13 @@ cp .env.example .env
 # DATABRICKS_SERVING_ENDPOINT_NAME, then:
 databricks auth login --host "$DATABRICKS_HOST"
 
-pnpm install                                # from the repo root
-pnpm --filter demo dev
+bun install                                 # from the repo root
+bun run --filter '@dbx-tools/appkit-demo' dev
 # or, from inside this folder:
-pnpm dev
+bun dev
 ```
 
-`pnpm dev` starts AppKit's server (which mounts Vite in middleware mode), so the React UI hot-reloads against the live server.
+`bun dev` starts AppKit's server (which mounts Vite in middleware mode), so the React UI hot-reloads against the live server.
 
 ## What happens at runtime
 
@@ -55,12 +55,12 @@ pnpm dev
 
 ## Scripts
 
-| Command           | What it does                                                  |
-| ----------------- | ------------------------------------------------------------- |
-| `pnpm dev`        | `tsx watch` over `server/server.ts` (also serves the client). |
-| `pnpm build`      | TypeScript build of the server + Vite build of the client.    |
-| `pnpm typecheck`  | Type-check both `server/` and `client/`.                      |
-| `pnpm clean`      | Remove build output.                                          |
+| Command          | What it does                                                  |
+| ---------------- | ------------------------------------------------------------- |
+| `bun dev`        | `tsx watch` over `server/server.ts` (also serves the client). |
+| `bun run build`  | TypeScript build of the server + Vite build of the client.    |
+| `bun typecheck`  | Type-check both `server/` and `client/`.                      |
+| `bun run clean`  | Remove build output.                                          |
 
 ## License
 
