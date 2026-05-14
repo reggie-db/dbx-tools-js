@@ -8,7 +8,7 @@
   "scripts": {
     "build": "bun run --filter '*' build",
     "typecheck": "bun run --filter '*' typecheck",
-    "dev": "bun run --filter '@dbx-tools/appkit-demo' dev",
+    "dev": "bun --elide-lines=0 run --filter '@dbx-tools/appkit-demo' dev",
     "create": "bun scripts/create-package.ts",
     "changeset": "changeset",
     "version": "changeset version",

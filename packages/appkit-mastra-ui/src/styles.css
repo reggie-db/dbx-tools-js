@@ -1,0 +1,11 @@
+/* Light-touch CSS layer for AI Elements components rendered by
+ * @dbx-tools/appkit-mastra-ui. The vendored components use Tailwind
+ * classes that assume the shadcn/ui CSS variables (`--background`,
+ * `--foreground`, `--primary`, ...) are in scope. If your app already
+ * loads @databricks/appkit-ui/styles.css or your own shadcn theme,
+ * these variables will already be defined and this file is a no-op.
+ *
+ * It's exported as `@dbx-tools/appkit-mastra-ui/styles.css` so callers
+ * who don't ship a shadcn theme can still get sensible defaults:
+ *   @import "@dbx-tools/appkit-mastra-ui/styles.css";
+ */

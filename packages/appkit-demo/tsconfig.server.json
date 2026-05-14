@@ -3,7 +3,8 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.server.tsbuildinfo",
     "noEmit": true,
-    "rootDir": "./"
+    "rootDir": "./",
+    "customConditions": []
   },
   "include": ["server/**/*"],
   "exclude": ["node_modules", "dist", "client"]

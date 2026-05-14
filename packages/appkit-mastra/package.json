@@ -24,11 +24,20 @@
     "@databricks/appkit": "^0.33.0"
   },
   "dependencies": {
+    "@dbx-tools/appkit-mastra-shared": "workspace:*",
+    "@mastra/ai-sdk": "^1.3.3",
     "@mastra/core": "^1.32.1",
     "@mastra/memory": "^1.17.5",
     "@mastra/pg": "^1.10.0",
-    "mastra": "^1.8.2-alpha.0",
+    "ai": "^5.0.0",
     "pg": "^8.20.0",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@databricks/appkit": "^0.33.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.20.0",
+    "express": "^5.0.0"
   }
 }

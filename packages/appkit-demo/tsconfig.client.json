@@ -12,6 +12,7 @@
     "jsx": "react-jsx",
     "erasableSyntaxOnly": true,
     "noUncheckedSideEffectImports": true,
+    "customConditions": [],
     "baseUrl": "./client",
     "paths": {
       "@/*": ["./src/*"]

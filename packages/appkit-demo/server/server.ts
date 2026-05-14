@@ -1,20 +1,23 @@
-import { createApp, genie, lakebase, server, serving } from "@databricks/appkit";
-import { agents } from "@databricks/appkit/beta";
-import { dbxTools } from "@dbx-tools/appkit-genie";
-import { analystAgent } from "./agents/analyst.js";
+import { createApp, lakebase, server, serving } from "@databricks/appkit";
+import { appkitMastra } from "@dbx-tools/appkit-mastra";
 
-// AppKit demo wiring for `@dbx-tools/appkit-genie` + `@dbx-tools/appkit-genie-ui`.
+// AppKit demo wiring for `@dbx-tools/appkit-mastra`.
 //
-// Plugin order matters in two places:
-// 1. `genie()` and `lakebase()` must appear before `dbxTools()` so they're
-//    already registered when dbx-tools reads their context in setup().
-// 2. `agents()` must come after `dbxTools()` so the tool registry is
-//    populated by the time the agents plugin reads it.
+// Plugin order:
+// 1. `server()` + `serving()` + `lakebase()` must register before
+//    `appkitMastra()` so its `setup:complete` lifecycle hook can read
+//    the resolved serving endpoint name and lakebase `pg.Pool`.
+// 2. `serving()` exposes the model endpoint that appkit-mastra resolves
+//    via `servingAlias`. The Mastra agent calls the workspace via the
+//    OpenAI-compatible base URL (`/serving-endpoints`) using a fresh
+//    user-scoped bearer minted via `asUser(req)` per request.
+// 3. `lakebase()` backs Mastra's `Memory` (`PostgresStore` + `PgVector`)
+//    with the workspace's Lakebase Postgres pool, so threads and recall
+//    vectors live in the user's Lakebase instance.
 //
-// `lakebase()` will only successfully register if the LAKEBASE_* env vars
-// are set (see .env.example). If they're absent, drop `lakebase()` from
-// the plugins list - dbx-tools will silently skip wiring the memory
-// tools and the agent gets `genie` only.
+// Required env vars (see .env.example):
+// - DATABRICKS_SERVING_ENDPOINT_NAME=databricks-claude-sonnet-4-6
+// - LAKEBASE_* (instance + database names, etc.)
 
 await createApp({
   plugins: [
@@ -24,13 +27,11 @@ await createApp({
         default: { env: "DATABRICKS_SERVING_ENDPOINT_NAME" },
       },
     }),
-    genie(),
     lakebase(),
-    dbxTools(),
-    agents({
-      dir: false,
-      agents: { analyst: analystAgent },
-      defaultAgent: "analyst",
+    appkitMastra({
+      servingAlias: "default",
+      storage: true,
+      memory: true,
     }),
   ],
 });

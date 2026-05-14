@@ -1,9 +1,4 @@
-export {
-  AppkitMastra,
-  appkitMastra,
-  type AppkitMastraAgentOpts,
-  type AppkitMastraExports,
-} from "./appkit-mastra.js";
+export { AppkitMastra, appkitMastra } from "./appkit-mastra.js";
 export {
   buildGenieTools,
   defaultGenieToolName,

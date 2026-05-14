@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "NODE_ENV=development tsx watch --tsconfig ./tsconfig.server.json --env-file-if-exists=./.env ./server/server.ts",
+    "dev": "NODE_ENV=development NODE_OPTIONS='--conditions=source' tsx watch --tsconfig ./tsconfig.server.json --env-file-if-exists=./.env ./server/server.ts",
     "build:client": "vite build --config client/vite.config.ts",
     "build:server": "tsc -b tsconfig.server.json",
     "build": "bun run build:server && bun run build:client",
@@ -17,6 +17,9 @@
     "@databricks/appkit-ui": "^0.33.0",
     "@dbx-tools/appkit-genie": "workspace:*",
     "@dbx-tools/appkit-genie-ui": "workspace:*",
+    "@dbx-tools/appkit-mastra": "workspace:*",
+    "@dbx-tools/appkit-mastra-shared": "workspace:*",
+    "@dbx-tools/appkit-mastra-ui": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.3.0"
