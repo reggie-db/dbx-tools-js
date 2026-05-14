@@ -25,8 +25,8 @@ export {
   type UseToolProgressOptions,
 } from "./use-tool-progress.js";
 
-// Wire-format types come from @dbx-tools/appkit-genie-shared. Re-export
-// them so UI consumers do not have to install the shared package directly.
+// Wire-format types come from @dbx-tools/appkit-genie-shared. Re-export them
+// so UI consumers do not have to install the shared package directly.
 export type {
   ToolProgressEvent,
   ToolProgressPhase,

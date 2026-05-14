@@ -2,16 +2,16 @@
 
 Runnable AppKit demo that wires up all three sibling packages in this repo:
 
-- [`@dbx-tools/appkit-genie`](../appkit-genie) (server plugin) auto-wires the `genie` plugin and exposes a `genie` tool with live tool-progress over SSE.
-- [`@dbx-tools/appkit-genie-ui`](../appkit-genie-ui) (React component) renders `<AgentChat>` and subscribes to the tool-progress channel to surface phase updates under the running tool card.
-- [`@dbx-tools/appkit-genie-shared`](../appkit-genie-shared) is pulled in transitively via the two packages above for the shared `ToolProgressEvent` contract.
+- [`@dbx-tools/appkit-genie`](../genie) (server plugin) auto-wires the `genie` plugin and exposes a `genie` tool with live tool-progress over SSE.
+- [`@dbx-tools/appkit-genie-ui`](../genie-ui) (React component) renders `<AgentChat>` and subscribes to the tool-progress channel to surface phase updates under the running tool card.
+- [`@dbx-tools/appkit-genie-shared`](../genie-shared) is pulled in transitively via the two packages above for the shared `ToolProgressEvent` contract.
 
 All sibling deps are wired through `workspace:*`, so any change you make to the source of any sibling package is hot-reloaded in the demo without a publish or build step.
 
 ## Layout
 
 ```
-packages/appkit-demo/
+packages/demo/
   server/
     server.ts            # createApp(): server, serving, genie, dbxTools, agents
     agents/analyst.ts    # createAgent() with a single genie tool

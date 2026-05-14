@@ -3,7 +3,8 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -14,18 +15,18 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "customConditions": ["source"],
+    "baseUrl": ".",
     "paths": {
-      "@dbx-tools/appkit-shared": ["./packages/shared/src/index.ts"],
-      "@dbx-tools/appkit-genie": ["./packages/genie/src/index.ts"],
-      "@dbx-tools/appkit-genie-shared": ["./packages/genie-shared/src/index.ts"],
-      "@dbx-tools/appkit-genie-ui": ["./packages/genie-ui/src/index.ts"],
-      "@dbx-tools/appkit-mastra": ["./packages/mastra/src/index.ts"],
-      "@dbx-tools/appkit-mastra-shared": ["./packages/mastra-shared/src/index.ts"],
-      "@dbx-tools/appkit-mastra-ui": ["./packages/mastra-ui/src/index.ts"],
-      "@dbx-tools/appkit-memory": ["./packages/memory/src/index.ts"]
+      "@/*": ["./packages/demo/client/src/*"]
     }
-  }
+  },
+  "include": [
+    "packages/*/src",
+    "packages/demo/server",
+    "packages/demo/client/src",
+    "packages/demo/shared"
+  ]
 }

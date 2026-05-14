@@ -6,7 +6,7 @@ import {
   type PluginManifest,
 } from "@databricks/appkit";
 
-// appkit-memory persists into a Lakebase Postgres branch via the lakebase
+// memory persists into a Lakebase Postgres branch via the lakebase
 // plugin's `pg.Pool`, so its resource requirements are identical. Forward
 // lakebase's `resources.required` verbatim instead of duplicating the
 // postgres / branch / database field declarations and risking drift when
@@ -18,9 +18,9 @@ import {
 // We use this instead of `getPluginManifest(lakebase().plugin)` (also
 // exported from appkit) because we want the raw declared shape, not the
 // post-validation normalized form.
-const manifest: PluginManifest<"appkit-memory"> = {
-  name: "appkit-memory",
-  displayName: "Appkit Memory",
+const manifest: PluginManifest<"memory"> = {
+  name: "memory",
+  displayName: "Memory",
   description: "",
   stability: "beta",
   resources: {
@@ -29,20 +29,20 @@ const manifest: PluginManifest<"appkit-memory"> = {
   },
 };
 
-export class AppkitMemory extends Plugin {
+export class MemoryPlugin extends Plugin {
   static manifest = manifest;
 
-  injectRoutes(router: IAppRouter): void {
+  injectRoutes(_router: IAppRouter): void {
     // Add your routes here, e.g.:
     // this.route(router, {
     //   name: "example",
     //   method: "get",
     //   path: "/",
     //   handler: async (_req, res) => {
-    //     res.json({ message: "Hello from appkit-memory" });
+    //     res.json({ message: "Hello from memory" });
     //   },
     // });
   }
 }
 
-export const appkitMemory = toPlugin(AppkitMemory);
+export const memory = toPlugin(MemoryPlugin);

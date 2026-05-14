@@ -12,7 +12,7 @@ import { MastraChat } from "@dbx-tools/appkit-mastra-ui";
 export default function App() {
   return (
     <MastraChat
-      api="/api/appkit-mastra/chat"
+      api="/api/mastra/chat"
       title="Analyst"
       description="Mastra agent backed by Lakebase memory and Databricks Model Serving."
       suggestions={["Show me last month's revenue", "I prefer EUR"]}
@@ -23,7 +23,7 @@ export default function App() {
 ```
 
 The component is a thin wrapper around `useChat` from `@ai-sdk/react`
-with a `DefaultChatTransport` pointed at the AppKit-Mastra `POST /chat`
+with a `DefaultChatTransport` pointed at the mastra plugin's `POST /chat`
 route. The route emits an AI SDK v5 UI Message Stream (via
 `@mastra/ai-sdk`'s `handleChatStream`), so there is no custom payload
 parsing on either side.

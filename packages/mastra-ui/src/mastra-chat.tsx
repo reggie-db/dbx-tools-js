@@ -50,7 +50,7 @@ export interface MastraChatProps {
 }
 
 export function MastraChat({
-  api = "/api/appkit-mastra/chat",
+  api = "/api/mastra/chat",
   memory,
   initialMessages,
   suggestions,

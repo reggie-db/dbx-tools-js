@@ -17,8 +17,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.build.json"
   },
   "peerDependencies": {
     "@databricks/appkit": "^0.33.0"

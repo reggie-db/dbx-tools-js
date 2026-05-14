@@ -1,1 +1,1 @@
-export { AppkitMemory, appkitMemory } from "./appkit-memory";
+export { MemoryPlugin, memory } from "./memory";

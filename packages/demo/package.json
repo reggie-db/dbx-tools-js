@@ -6,11 +6,8 @@
   "license": "Apache-2.0",
   "scripts": {
     "dev": "NODE_ENV=development NODE_OPTIONS='--conditions=source' tsx watch --tsconfig ./tsconfig.server.json --env-file-if-exists=./.env ./server/server.ts",
-    "build:client": "vite build --config client/vite.config.ts",
-    "build:server": "tsc -b tsconfig.server.json",
-    "build": "bun run build:server && bun run build:client",
-    "typecheck": "tsc -b tsconfig.server.json && tsc -b tsconfig.client.json",
-    "clean": "rm -rf dist client/dist *.tsbuildinfo"
+    "build": "vite build --config client/vite.config.ts",
+    "clean": "rm -rf dist client/dist"
   },
   "dependencies": {
     "@ai-sdk/react": "^2.0.114",

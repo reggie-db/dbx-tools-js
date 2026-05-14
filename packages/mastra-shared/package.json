@@ -15,8 +15,7 @@
   },
   "files": ["dist", "src"],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.build.json"
   },
   "peerDependencies": {
     "ai": "^5.0.0",

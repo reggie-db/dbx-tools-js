@@ -16,8 +16,7 @@
   },
   "files": ["dist", "src"],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.build.json"
   },
   "keywords": ["databricks", "appkit", "react", "chat", "mastra", "ai-sdk"],
   "peerDependencies": {

@@ -1,4 +1,4 @@
-export { AppkitMastra, appkitMastra } from "./appkit-mastra.js";
+export { MastraPlugin, mastra } from "./mastra.js";
 export {
   buildGenieTools,
   defaultGenieToolName,

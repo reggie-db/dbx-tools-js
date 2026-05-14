@@ -87,7 +87,7 @@ export function pluginInstance<F extends PluginFactory>(
  * import { lakebase } from "@databricks/appkit";
  * import { requirePlugin } from "@dbx-tools/appkit-shared";
  *
- * const pool = requirePlugin(this.context, lakebase, "appkit-mastra")
+ * const pool = requirePlugin(this.context, lakebase, "mastra")
  *   .exports().pool;
  * ```
  */
@@ -199,3 +199,80 @@ export function pluginLogger(plugin: PluginLike): PluginLogger {
   };
 }
 
+/**
+ * Minimal `Cookie` header parser. Avoids pulling in `cookie-parser` for
+ * the two cookies this plugin owns. Decodes percent-encoded values and
+ * returns a flat name -> value map.
+ */
+export function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+  const out: Record<string, string> = {};
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    if (!name) continue;
+    const raw = part.slice(eq + 1).trim();
+    out[name] = decodeURIComponent(raw);
+  }
+  return out;
+}
+
+export function tokenize(
+  distinct = false,
+  ...values: any[]
+): string[] {
+  const parts = values.flatMap(value => {
+    if (value == null) {
+      return [];
+    }
+
+    return String(value)
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean);
+  });
+
+  return distinct ? [...new Set(parts)] : parts;
+}
+
+export function toUnderscoreCase(
+  distinct = false,
+  ...values: any[]
+): string {
+  return tokenize(distinct, ...values)
+    .map(part => part.toLowerCase())
+    .join("_");
+}
+
+export function toKebabCase(
+  distinct = false,
+  ...values: any[]
+): string {
+  return tokenize(distinct, ...values)
+    .map(part => part.toLowerCase())
+    .join("-");
+}
+
+export function toCamelCase(
+  distinct = false,
+  ...values: any[]
+): string {
+  const parts = tokenize(distinct, ...values);
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  return (
+    parts[0].toLowerCase() +
+    parts
+      .slice(1)
+      .map(
+        part =>
+          part.charAt(0).toUpperCase() +
+          part.slice(1).toLowerCase(),
+      )
+      .join("")
+  );
+}

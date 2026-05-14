@@ -7,7 +7,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "bun run --filter '*' build",
-    "typecheck": "bun run --filter '*' typecheck",
+    "typecheck": "bunx tsc --noEmit",
     "dev": "bun --elide-lines=0 run --filter '@dbx-tools/appkit-demo' dev",
     "create": "bun scripts/create-package.ts",
     "changeset": "changeset",
@@ -21,5 +21,10 @@
   },
   "overrides": {
     "zod": "4.3.6"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^4.0.0-canary.125",
+    "@mastra/ai-sdk": "^0.0.0-fix-buildmessagesfromchunks-message-part-ordering-20260507134311",
+    "ai": "^7.0.0-canary.125"
   }
 }

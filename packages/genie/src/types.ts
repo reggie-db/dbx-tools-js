@@ -2,8 +2,8 @@ import type { BasePluginConfig } from "@databricks/appkit";
 import type { Memory } from "mem0ai/oss";
 
 // Public types for the dbx-tools plugin. Wire-format types live in
-// @dbx-tools/appkit-genie-shared so the UI package can consume them
-// without pulling Node-only server deps.
+// @dbx-tools/appkit-genie-shared so the UI package can consume them without
+// pulling Node-only server deps.
 export type {
   ToolProgressEvent,
   ToolProgressPhase,

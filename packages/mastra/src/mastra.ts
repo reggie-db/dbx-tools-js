@@ -3,7 +3,6 @@ import {
   getExecutionContext,
   lakebase,
   Plugin,
-  ResourceType,
   serving,
   toPlugin,
   type BasePluginConfig,
@@ -26,11 +25,13 @@ import {
   PostgresStore,
   PostgresStoreConfig,
 } from "@mastra/pg";
+
 import {
-  mastraChatRequestSchema,
-  type MastraInfoResponse,
-} from "@dbx-tools/appkit-mastra-shared";
-import { pluginLogger, requirePlugin } from "@dbx-tools/appkit-shared";
+  parseCookies,
+  pluginLogger,
+  requirePlugin,
+  toUnderscoreCase,
+} from "@dbx-tools/appkit-shared";
 
 import type { Pool } from "pg";
 import { MastraServer } from "@mastra/express";
@@ -55,12 +56,13 @@ import { fastembed } from "@mastra/fastembed";
 //   `storage` / `memory` are enabled. Disabled by default.
 // - Tools: none in this first pass; the agent is LLM + Mastra Memory
 //   only.
-// - HTTP: routes are auto-mounted at `/api/appkit-mastra/...` by the
-//   server plugin. `injectRoutes` mounts a `MastraServer` (from
+// - HTTP: routes are auto-mounted at `/api/mastra/...` by the server
+//   plugin. `injectRoutes` mounts a `MastraServer` (from
 //   `@mastra/express`) at the plugin root with no extra prefix, exposing
 //   Mastra's REST surface (`/agents/...`, `/memory/...`, etc.) plus our
 //   `chatRoute()` at `/chat`. The full client URL for AI SDK `useChat`
-//   is therefore `/api/appkit-mastra/chat`.
+//   is therefore `/api/mastra/chat`.
+
 
 const SERVING_MANIFEST = serving().plugin.manifest;
 const GENIE_MANIFEST = genie().plugin.manifest;
@@ -90,30 +92,13 @@ interface ServingLike {
   };
 }
 
-type AppkitMastraMemoryConfig = PgVectorConfig & {
+type MastraMemoryConfig = PgVectorConfig & {
   id?: string;
 };
 
-/**
- * Minimal `Cookie` header parser. Avoids pulling in `cookie-parser` for
- * the two cookies this plugin owns. Decodes percent-encoded values and
- * returns a flat name -> value map.
- */
-function parseCookieHeader(header: string | undefined): Record<string, string> {
-  if (!header) return {};
-  const out: Record<string, string> = {};
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq < 0) continue;
-    const name = part.slice(0, eq).trim();
-    if (!name) continue;
-    const raw = part.slice(eq + 1).trim();
-    out[name] = decodeURIComponent(raw);
-  }
-  return out;
-}
 
-interface AppkitMastraConfig extends BasePluginConfig {
+
+interface MastraPluginConfig extends BasePluginConfig {
   /** Optional alias on the sibling `serving` plugin used to resolve the
    *  model endpoint. Defaults to `"default"`. */
   servingAlias?: string;
@@ -125,15 +110,15 @@ interface AppkitMastraConfig extends BasePluginConfig {
   storage?: boolean | PostgresStoreConfig;
   /** PgVector store for Mastra memory recall. `true` reuses the
    *  `lakebase` plugin's pool. */
-  memory?: boolean | AppkitMastraMemoryConfig;
+  memory?: boolean | MastraMemoryConfig;
 }
 
 
 
-export class AppkitMastra extends Plugin<AppkitMastraConfig> {
+export class MastraPlugin extends Plugin<MastraPluginConfig> {
   static manifest = {
-    name: "appkit-mastra",
-    displayName: "Appkit Mastra",
+    name: "mastra",
+    displayName: "Mastra",
     description:
       "Builds a Mastra Agent from AppKit plugins. Resolves the model " +
       "endpoint via the `serving` plugin (user-scoped via asUser) and " +
@@ -146,7 +131,7 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
         ...LAKEBASE_MANIFEST.resources.required,
       ],
     },
-  } satisfies PluginManifest<"appkit-mastra">;
+  } satisfies PluginManifest<"mastra">;
 
   /**
    * Tighten resource requirements based on which features are enabled.
@@ -154,7 +139,7 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
    * features don't surface their resource asks to the host app.
    */
   static getResourceRequirements(
-    config: AppkitMastraConfig,
+    config: MastraPluginConfig,
   ): ResourceRequirement[] {
     const resources: ResourceRequirement[] = [];
     const enabledManifests: PluginManifest<string>[] = [];
@@ -203,7 +188,7 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
 
 
   override injectRoutes(router: IAppRouter): void {
-    router.use(this.cookieIdMiddleware());
+    router.use(this.cookieIdMiddleware())
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       return this.asUser(req).mastraApp!(req, res, next);
@@ -214,54 +199,49 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
    * Issues two cookies on the first request from a browser and reads
    * them back on subsequent ones:
    *
-   * - `appkit_client_id`: long-lived (1 year). Stable across browser
+   * - `mastra_client_id`: long-lived (1 year). Stable across browser
    *   restarts. Useful for analytics, anonymous personalization, and
    *   default `memory.resource` if no authenticated user is present.
-   * - `appkit_session_id`: session-scoped (no Max-Age). The browser
+   * - `mastra_session_id`: session-scoped (no Max-Age). The browser
    *   drops it on close. Used as a default `memory.thread` when the
    *   client doesn't pass one explicitly.
    *
    * Same-origin AI SDK calls (`useChat` -> `fetch` to
-   * `/api/appkit-mastra/chat`) include cookies automatically, so
-   * downstream chat handlers can rely on these IDs without changes
-   * on the frontend.
+   * `/api/mastra/chat`) include cookies automatically, so downstream
+   * chat handlers can rely on these IDs without changes on the
+   * frontend.
    *
    * Both cookies are `HttpOnly` (no JS access, mitigates XSS),
    * `SameSite=Lax`, and `Secure` outside development.
    */
   private cookieIdMiddleware(): express.RequestHandler {
-    const isProd = process.env.NODE_ENV === "production";
-    const cookieFlags = `Path=/; HttpOnly; SameSite=Lax${isProd ? "; Secure" : ""}`;
-    const yearSeconds = 60 * 60 * 24 * 365;
+    const pluginName = this.config?.name!;
     return (req, res, next) => {
-      const cookies = parseCookieHeader(req.headers.cookie);
-      let clientId = cookies.appkit_client_id;
-      let sessionId = cookies.appkit_session_id;
-      const setCookies: string[] = [];
-      if (!clientId) {
-        clientId = randomUUID();
-        setCookies.push(
-          `appkit_client_id=${clientId}; Max-Age=${yearSeconds}; ${cookieFlags}`,
-        );
+
+      const cookies = parseCookies(req.headers.cookie);
+      for (const [name, session_cookie] of Object.entries({
+        clientId: false,
+        sessionId: true,
+      })) {
+        const cookieName = toUnderscoreCase(true, pluginName, name);
+        var cookieValue = cookies[cookieName];
+        if (!cookieValue) {
+          cookieValue = randomUUID();
+          const maxAge = session_cookie ? undefined : 1000 * 60 * 60 * 24 * 365
+          res.cookie(cookieName, cookieValue, {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: req.secure,
+            path: '/',
+            ...(maxAge ? { maxAge } : {}),
+          });
+        }
+        res.locals[name] = cookieValue;
       }
-      if (!sessionId) {
-        sessionId = randomUUID();
-        setCookies.push(`appkit_session_id=${sessionId}; ${cookieFlags}`);
-      }
-      if (setCookies.length > 0) {
-        const existing = res.getHeader("Set-Cookie");
-        const merged = Array.isArray(existing)
-          ? [...existing, ...setCookies]
-          : existing
-            ? [String(existing), ...setCookies]
-            : setCookies;
-        res.setHeader("Set-Cookie", merged);
-      }
-      res.locals.clientId = clientId;
-      res.locals.sessionId = sessionId;
       next();
-    };
+    }
   }
+
 
 
 
@@ -281,15 +261,15 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
     const endpointConfig = endpoints?.[alias];
     if (!endpointConfig) {
       throw new Error(
-        `appkit-mastra: serving alias '${alias}' is not configured. ` +
+        `mastra: serving alias '${alias}' is not configured. ` +
         "Add it to the `serving({ endpoints: { ... } })` plugin or change " +
-        "`servingAlias` on appkitMastra().",
+        "`servingAlias` on mastra().",
       );
     }
     const name = process.env[endpointConfig.env];
     if (!name) {
       throw new Error(
-        `appkit-mastra: env var '${endpointConfig.env}' for serving alias ` +
+        `mastra: env var '${endpointConfig.env}' for serving alias ` +
         `'${alias}' is not set. Cannot resolve the model serving endpoint.`,
       );
     }
@@ -301,27 +281,7 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
     // share it: PostgresStore accepts `{ pool }` natively; PgVector
     // doesn't, so we use the swap-after-construct trick documented on
     // `pgVector`.
-    const pool = this.needsLakebase() ? this.lakebasePool() : undefined;
-    const storage = this.pgStore(pool);
-    const vector = this.pgVector(pool);
-    const embedder = vector ? fastembed : undefined;
-    const memory =
-      storage || vector
-        ? new Memory({
-          ...(storage ? { storage } : {}),
-          ...(vector ? { vector } : {}),
-          ...(embedder ? { embedder } : {}),
-          ...(embedder ? {
-            options: {
-              lastMessages: 10,
-              semanticRecall: {
-                topK: 3,
-                messageRange: 2,
-              },
-            }
-          } : {})
-        })
-        : undefined;
+    const memory = this.buildMemory();
     // Single hardcoded analyst agent. The agent's `model` is a Mastra
     // `DynamicArgument` that resolves the serving endpoint + bearer at
     // call time, so the same Agent instance serves concurrent requests
@@ -358,10 +318,27 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
     await this.mastraServer.init();
   }
 
+  private buildMemory(): Memory | undefined {
+    if (!this.needsLakebase()) return undefined;
+    const pool = this.lakebasePool();
+    return new Memory({
+      storage: this.pgStore(pool),
+      vector: this.pgVector(pool),
+      embedder: fastembed,
+      options: {
+        lastMessages: 10,
+        semanticRecall: {
+          topK: 3,
+          messageRange: 2,
+        }
+      }
+    })
+  }
+
   /**
    * Patches around `@mastra/express`'s custom-route dispatcher so
    * `chatRoute` works when MastraServer is hosted on an express subapp
-   * mounted under a parent path (e.g. `/api/appkit-mastra`).
+   * mounted under a parent path (e.g. `/api/mastra`).
    *
    * Two concerns:
    *
@@ -437,7 +414,7 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
     const endpointName = this.servingEndpointName;
     if (!endpointName) {
       throw new Error(
-        "appkit-mastra: serving endpoint name was not resolved at setup. " +
+        "mastra: serving endpoint name was not resolved at setup. " +
         "Check the `serving` plugin's env var (default " +
         "DATABRICKS_SERVING_ENDPOINT_NAME) and `servingAlias` config.",
       );
@@ -469,13 +446,13 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
     return this.config.storage === true || this.config.memory === true;
   }
 
-  private pgStore(pool: Pool | undefined): PostgresStore | undefined {
+  private pgStore(pool: Pool): PostgresStore | undefined {
     if (!this.config.storage) return undefined;
     if (typeof this.config.storage === "boolean") {
       if (!pool) {
-        throw new Error("appkit-mastra: lakebase pool missing for storage");
+        throw new Error("mastra: lakebase pool missing for storage");
       }
-      return new PostgresStore({ id: "appkit-mastra-store", pool });
+      return new PostgresStore({ id: "mastra-store", pool });
     }
     return new PostgresStore(this.config.storage);
   }
@@ -501,14 +478,14 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
    * placeholder pool is `.end()`'d so its socket book-keeping is
    * released.
    */
-  private pgVector(pool: Pool | undefined): PgVector | undefined {
+  private pgVector(pool: Pool): PgVector | undefined {
     if (!this.config.memory) return undefined;
     if (typeof this.config.memory === "boolean") {
       if (!pool) {
-        throw new Error("appkit-mastra: lakebase pool missing for memory");
+        throw new Error("mastra: lakebase pool missing for memory");
       }
       const vector = new PgVector({
-        id: "appkit-mastra-memory",
+        id: "mastra-memory",
         host: "-1",
         port: -1,
         database: "_",
@@ -530,11 +507,11 @@ export class AppkitMastra extends Plugin<AppkitMastraConfig> {
    * runtime condition we can recover from.
    */
   private lakebasePool(): Pool {
-    return requirePlugin(this.context, lakebase, "appkit-mastra")
+    return requirePlugin(this.context, lakebase, "mastra")
       .exports()
       .pool;
   }
 }
 
-export const appkitMastra = toPlugin(AppkitMastra);
+export const mastra = toPlugin(MastraPlugin);
 

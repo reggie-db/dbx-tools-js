@@ -60,7 +60,7 @@ const AISdkDemo = () => {
   const { messages, sendMessage, status, regenerate } = useChat({
     transport: new DefaultChatTransport({
       // Defined through chatRoute() in src/mastra/index.ts
-      api: `/api/appkit-mastra/route/chat`,
+      api: `/api/mastra/route/chat`,
     }),
   });
 

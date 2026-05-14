@@ -15,8 +15,7 @@
   },
   "files": ["dist", "src"],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.build.json"
   },
   "keywords": ["databricks", "appkit", "appkit-plugin", "genie", "agent"],
   "peerDependencies": {

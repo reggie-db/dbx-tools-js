@@ -1,6 +1,6 @@
 # dbx-tools-appkit
 
-Bun workspace for the `@dbx-tools/appkit-*` plugins and a runnable demo.
+Bun workspace for the `@dbx-tools/*` AppKit plugins and a runnable demo.
 
 | Package | Path | Published |
 | --- | --- | --- |
@@ -9,10 +9,10 @@ Bun workspace for the `@dbx-tools/appkit-*` plugins and a runnable demo.
 | [`@dbx-tools/appkit-genie-ui`](packages/genie-ui) | `packages/genie-ui` | yes |
 | `@dbx-tools/appkit-demo` | `packages/demo` | no (private) |
 
-`appkit-genie-shared` holds the wire-format types. `appkit-genie` is the server plugin
-(Genie streaming tools + optional mem0-backed memory tools). `appkit-genie-ui` is the
-React `<AgentChat>` component. Both the server and UI packages re-export the shared
-types so apps only need to install the one they use.
+`genie-shared` holds the wire-format types. `genie` is the server plugin (Genie
+streaming tools + optional mem0-backed memory tools). `genie-ui` is the React
+`<AgentChat>` component. Both the server and UI packages re-export the shared types
+so apps only need to install the one they use.
 
 ## Develop
 
