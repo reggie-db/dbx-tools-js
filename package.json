@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "demo"],
   "scripts": {
     "build": "bun run --filter '*' build",
     "typecheck": "bunx tsc --noEmit",
