@@ -3,16 +3,16 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-// Scaffolds a new workspace package under `packages/<slug>/`. Two kinds:
+// Scaffolds a new workspace package under `packages/<dirSlug>/`. Two kinds:
 //
 //   - `plugin`: empty AppKit Plugin subclass with inline manifest, modeled
-//     after `appkit-memory`. After files are written, `bun add` is invoked
+//     after `memory`. After files are written, `bun add` is invoked
 //     twice in the new package dir so `@databricks/appkit` lands in both
 //     `peerDependencies` and `devDependencies` at whatever version bun
 //     currently resolves (no hard-coded version that can drift).
 //
 //   - `shared`: pure-types package with a barrel `index.ts` and a
-//     `protocol.ts` seed file, modeled after `appkit-genie-shared`. No
+//     `protocol.ts` seed file, modeled after `genie-shared`. No
 //     `@databricks/appkit` dep is added - shared packages are intentionally
 //     runtime-free so browser bundles can import them.
 //
@@ -22,15 +22,17 @@ import { dirname, resolve } from "node:path";
 //
 // `appkit-` is auto-prepended to the slug if missing, so `example` and
 // `appkit-example` both produce a package named `@dbx-tools/appkit-example`.
-// This keeps the workspace's naming convention consistent without forcing
-// the caller to retype the prefix every time.
+// This keeps the npm-name convention consistent without forcing the caller
+// to retype the prefix every time. The on-disk directory drops the prefix
+// to keep `packages/` short and scannable.
 //
 // Naming derivations from the normalized `<slug>` (kebab-case):
-//   - npm name:        @dbx-tools/<slug>      (appkit-example -> @dbx-tools/appkit-example)
-//   - class name:      PascalCase(<slug>)     (appkit-example -> AppkitExample)  [plugin only]
-//   - export const:    camelCase(<slug>)      (appkit-example -> appkitExample)  [plugin only]
-//   - displayName:     "Title Case <slug>"    (appkit-example -> "Appkit Example") [plugin only]
-//   - manifest name:   <slug> verbatim                                            [plugin only]
+//   - npm name:        @dbx-tools/<slug>            (appkit-example -> @dbx-tools/appkit-example)
+//   - directory:       packages/<slug-without-appkit-> (appkit-example -> packages/example)
+//   - class name:      PascalCase(<slug>)           (appkit-example -> AppkitExample)  [plugin only]
+//   - export const:    camelCase(<slug>)            (appkit-example -> appkitExample)  [plugin only]
+//   - displayName:     "Title Case <slug>"          (appkit-example -> "Appkit Example") [plugin only]
+//   - manifest name:   <slug> verbatim                                                  [plugin only]
 
 const SCOPE = "@dbx-tools";
 const ROOT = resolve(import.meta.dirname, "..");
@@ -75,13 +77,18 @@ if (!rawSlug || !/^[a-z][a-z0-9-]*$/.test(rawSlug)) {
   usage(`Invalid slug "${rawSlug ?? ""}".`);
 }
 
-// Enforce the `appkit-*` naming convention without forcing the caller to
-// type it. `appkit-example` and `example` both normalize to `appkit-example`.
+// Enforce the `appkit-*` npm-name convention without forcing the caller to
+// type it. `appkit-example` and `example` both normalize to `appkit-example`
+// for naming purposes (npm name, class name, manifest name).
 const slug = rawSlug.startsWith("appkit-") ? rawSlug : `appkit-${rawSlug}`;
 
-const pkgDir = resolve(ROOT, "packages", slug);
+// On-disk directory drops the `appkit-` prefix so `packages/` stays short
+// and scannable. `appkit-example` -> `packages/example`.
+const dirSlug = slug.slice("appkit-".length);
+
+const pkgDir = resolve(ROOT, "packages", dirSlug);
 if (existsSync(pkgDir)) {
-  console.error(`packages/${slug} already exists; aborting.`);
+  console.error(`packages/${dirSlug} already exists; aborting.`);
   process.exit(1);
 }
 
@@ -169,7 +176,7 @@ export const ${camel} = toPlugin(${pascal});
   write(resolve(pkgDir, "src", "index.ts"), indexTs);
   write(resolve(pkgDir, "src", `${slug}.ts`), pluginTs);
 
-  console.log(`Scaffolded packages/${slug}/ (plugin)`);
+  console.log(`Scaffolded packages/${dirSlug}/ (plugin, npm name ${pkgName})`);
   console.log("Installing @databricks/appkit as peer + dev dependency...");
 
   // Two passes because `bun add` flips between peer/dev/regular via its
@@ -179,7 +186,7 @@ export const ${camel} = toPlugin(${pascal});
   bunAdd(pkgDir, "--dev", "@databricks/appkit");
 } else {
   // Shared package: barrel re-exports from a single seed protocol module.
-  // Matches `appkit-genie-shared/src/{index,protocol}.ts` exactly.
+  // Matches `genie-shared/src/{index,protocol}.ts` exactly.
   const indexTs = `export type {} from "./protocol.js";\n`;
 
   const protocolTs = `// Wire-format types for @dbx-tools/${slug}. Pure types: no
@@ -191,7 +198,7 @@ export const ${camel} = toPlugin(${pascal});
   write(resolve(pkgDir, "src", "index.ts"), indexTs);
   write(resolve(pkgDir, "src", "protocol.ts"), protocolTs);
 
-  console.log(`Scaffolded packages/${slug}/ (shared)`);
+  console.log(`Scaffolded packages/${dirSlug}/ (shared, npm name ${pkgName})`);
 }
 
 console.log(`Done. ${pkgName} is ready.`);

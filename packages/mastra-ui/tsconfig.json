@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@dbx-tools/appkit-shared": ["../shared/src/index.ts"],
+      "@dbx-tools/appkit-genie": ["../genie/src/index.ts"],
+      "@dbx-tools/appkit-genie-shared": ["../genie-shared/src/index.ts"],
+      "@dbx-tools/appkit-genie-ui": ["../genie-ui/src/index.ts"],
+      "@dbx-tools/appkit-mastra": ["../mastra/src/index.ts"],
+      "@dbx-tools/appkit-mastra-shared": ["../mastra-shared/src/index.ts"],
+      "@dbx-tools/appkit-mastra-ui": ["../mastra-ui/src/index.ts"],
+      "@dbx-tools/appkit-memory": ["../memory/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

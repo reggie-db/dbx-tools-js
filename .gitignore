@@ -3,6 +3,7 @@ dist
 *.tsbuildinfo
 .env
 client/dist
+tmp
 
 # bun.lock is uncommitted because it bakes in the registry URLs of whoever
 # ran `bun install` (e.g. a corporate npm proxy), which we don't want

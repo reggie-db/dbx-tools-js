@@ -4,10 +4,10 @@ Bun workspace for the `@dbx-tools/appkit-*` plugins and a runnable demo.
 
 | Package | Path | Published |
 | --- | --- | --- |
-| [`@dbx-tools/appkit-genie-shared`](packages/appkit-genie-shared) | `packages/appkit-genie-shared` | yes |
-| [`@dbx-tools/appkit-genie`](packages/appkit-genie) | `packages/appkit-genie` | yes |
-| [`@dbx-tools/appkit-genie-ui`](packages/appkit-genie-ui) | `packages/appkit-genie-ui` | yes |
-| `@dbx-tools/appkit-demo` | `packages/appkit-demo` | no (private) |
+| [`@dbx-tools/appkit-genie-shared`](packages/genie-shared) | `packages/genie-shared` | yes |
+| [`@dbx-tools/appkit-genie`](packages/genie) | `packages/genie` | yes |
+| [`@dbx-tools/appkit-genie-ui`](packages/genie-ui) | `packages/genie-ui` | yes |
+| `@dbx-tools/appkit-demo` | `packages/demo` | no (private) |
 
 `appkit-genie-shared` holds the wire-format types. `appkit-genie` is the server plugin
 (Genie streaming tools + optional mem0-backed memory tools). `appkit-genie-ui` is the
@@ -25,7 +25,7 @@ bun run build
 Run the demo against a real workspace:
 
 ```bash
-cd packages/appkit-demo
+cd packages/demo
 cp .env.example .env  # fill in DATABRICKS_HOST + Genie space + serving endpoint
 databricks auth login --host "$DATABRICKS_HOST"
 bun dev               # or `bun dev` from the repo root
