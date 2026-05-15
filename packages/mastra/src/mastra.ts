@@ -35,7 +35,7 @@ import {
 import type { Pool } from "pg";
 import { MastraServer as MastraServerExpress } from "@mastra/express";
 import { fastembed } from "@mastra/fastembed";
-import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from "@mastra/core/request-context";
+import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY, RequestContext } from "@mastra/core/request-context";
 
 // AppKit plugin that builds a single Mastra `Agent` from sibling AppKit
 // plugins and exposes it through the same HTTP surface that backs
@@ -67,7 +67,8 @@ import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from "@mastra/core/reque
 const GENIE_MANIFEST = pluginUtils.pluginData(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = pluginUtils.pluginData(lakebase).plugin.manifest;
 
-const DEFAULT_AGENT_ID = "analyst";
+const DEFAULT_AGENT_ID = "default";
+const MASTRA_USER_KEY = "mastra__user";
 
 const ANALYST_INSTRUCTIONS = `You are a data analyst. The user will ask questions about
 business metrics and may share personal preferences you should remember across turns.
@@ -81,6 +82,11 @@ Rules:
 3. If you don't have enough information to answer, ask a clarifying
    question instead of guessing.`;
 
+
+interface User {
+  id: string;
+  executionContext: ReturnType<typeof getExecutionContext>;
+}
 
 
 type MastraMemoryConfig = PgVectorConfig & {
@@ -107,24 +113,25 @@ interface MastraPluginConfig extends BasePluginConfig {
 
 
 class MastraServer extends MastraServerExpress {
+  private log: logUtils.Logger;
 
   constructor(private config: MastraPluginConfig, ...args: ConstructorParameters<typeof MastraServerExpress>) {
     super(...args);
+    this.log = logUtils.logger(config);
   }
 
   override registerAuthMiddleware(): void {
     super.registerAuthMiddleware();
     this.app.use((req, res, next) => {
       const executionContext = getExecutionContext();
-      const user = {
+      const user: User = {
         id: ("userId" in executionContext ? executionContext.userId : executionContext.serviceUserId),
-        isUserContext: "isUserContext" in executionContext ? executionContext.isUserContext : false,
+        executionContext,
       };
-      console.log(`Request 0: ${JSON.stringify(user)}`);
-      res.locals.user = user;
-      const requestContext = res.locals.requestContext
+      const requestContext = res.locals.requestContext! as RequestContext;
+      requestContext.set(MASTRA_USER_KEY, user);
       if (!requestContext.get(MASTRA_RESOURCE_ID_KEY)) {
-        console.log(`Setting resource id: ${user.id}`);
+        this.log.debug(`Setting resource id: ${user.id}`);
         requestContext.set(MASTRA_RESOURCE_ID_KEY, user.id)
       }
       const cookies = httpUtils.parseCookies(req.headers.cookie);
@@ -141,7 +148,7 @@ class MastraServer extends MastraServerExpress {
       }
       res.locals.sessionId = sessionId;
       if (!requestContext.get(MASTRA_THREAD_ID_KEY)) {
-        console.log(`Setting thread id: ${sessionId}`);
+        this.log.debug(`Setting thread id: ${sessionId}`);
         requestContext.set(MASTRA_THREAD_ID_KEY, sessionId)
       }
       next();
@@ -248,9 +255,9 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // returns the user context.
     this.defaultAgent = new Agent({
       id: DEFAULT_AGENT_ID,
-      name: "Analyst",
+      name: "Default Agent",
       instructions: ANALYST_INSTRUCTIONS,
-      model: this.buildModel(),
+      model: ({ requestContext }) => this.buildModel(requestContext),
       tools: {},
       ...(memory ? { memory } : {}),
     });
@@ -272,6 +279,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       prefix: "",
       customApiRoutes: [
         chatRoute({ path: "/route/chat", agent: DEFAULT_AGENT_ID }),
+        chatRoute({ path: "/route/chat/:agentId" }),
       ],
     });
     await this.mastraServer.init();
@@ -341,28 +349,23 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
    * back to the service principal context, which is still a valid
    * token source.
    */
-  private buildModel(): DynamicArgument<MastraModelConfig> {
-    const providerId = this.config.providerId ?? "databricks";
-    return async (): Promise<OpenAICompatibleConfig> => {
-      const ctx = getExecutionContext();
-      const config = ctx.client.config;
-      const host = await config.getHost();
-      const headers = new Headers();
-      await config.authenticate(headers);
-      const authz = headers.get("Authorization") ?? "";
-      const apiKey = authz.replace(/^Bearer\s+/i, "");
-      // The OpenAI Node SDK appends paths like `/chat/completions` to
-      // whatever URL we hand it. Drop the trailing slash so the
-      // resulting URL stays well-formed
-      // (`/serving-endpoints/chat/completions`).
-      const url = new URL("/serving-endpoints", host).toString().replace(/\/$/, "");
-      console.log(`Model URL: ${url}`);
-      return {
-        providerId,
-        modelId: "databricks-claude-sonnet-4-6",
-        url,
-        apiKey,
-      };
+  private async buildModel(requestContext: RequestContext): Promise<MastraModelConfig> {
+    const user = requestContext.get(MASTRA_USER_KEY) as User
+    const client = user.executionContext.client
+    const config = client.config;
+    const host = await config.getHost();
+    const headers = new Headers();
+    await config.authenticate(headers);
+    // The OpenAI Node SDK appends paths like `/chat/completions` to
+    // whatever URL we hand it. Drop the trailing slash so the
+    // resulting URL stays well-formed
+    // (`/serving-endpoints/chat/completions`).
+    const url = new URL("/serving-endpoints", host).toString().replace(/\/$/, "");
+    return {
+      providerId: this.config.providerId ?? "databricks",
+      modelId: "databricks-claude-sonnet-4-6",
+      url,
+      headers: Object.fromEntries(headers.entries())
     };
   }
 
