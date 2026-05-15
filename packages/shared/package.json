@@ -18,5 +18,11 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json"
+  },
+  "peerDependencies": {
+    "@databricks/appkit": "^0.35"
+  },
+  "devDependencies": {
+    "express": "^5"
   }
 }

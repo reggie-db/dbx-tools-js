@@ -14,7 +14,6 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { chatRoute } from "@mastra/ai-sdk";
 import { Agent } from "@mastra/core/agent";
-import type { AgentMemoryOption } from "@mastra/core/agent";
 import type { MastraModelConfig, OpenAICompatibleConfig } from "@mastra/core/llm";
 import { Mastra } from "@mastra/core/mastra";
 import type { DynamicArgument } from "@mastra/core/types";
@@ -27,15 +26,16 @@ import {
 } from "@mastra/pg";
 
 import {
-  parseCookies,
-  pluginLogger,
-  requirePlugin,
-  toUnderscoreCase,
+  httpUtils,
+  logUtils,
+  stringUtils,
+  pluginUtils,
 } from "@dbx-tools/appkit-shared";
 
 import type { Pool } from "pg";
-import { MastraServer } from "@mastra/express";
+import { MastraServer as MastraServerExpress } from "@mastra/express";
 import { fastembed } from "@mastra/fastembed";
+import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from "@mastra/core/request-context";
 
 // AppKit plugin that builds a single Mastra `Agent` from sibling AppKit
 // plugins and exposes it through the same HTTP surface that backs
@@ -64,11 +64,9 @@ import { fastembed } from "@mastra/fastembed";
 //   is therefore `/api/mastra/chat`.
 
 
-const SERVING_MANIFEST = serving().plugin.manifest;
-const GENIE_MANIFEST = genie().plugin.manifest;
-const LAKEBASE_MANIFEST = lakebase().plugin.manifest;
+const GENIE_MANIFEST = pluginUtils.pluginData(genie).plugin.manifest;
+const LAKEBASE_MANIFEST = pluginUtils.pluginData(lakebase).plugin.manifest;
 
-const DEFAULT_SERVING_ALIAS = "default";
 const DEFAULT_AGENT_ID = "analyst";
 
 const ANALYST_INSTRUCTIONS = `You are a data analyst. The user will ask questions about
@@ -83,14 +81,7 @@ Rules:
 3. If you don't have enough information to answer, ask a clarifying
    question instead of guessing.`;
 
-// Structural view of the `serving` plugin instance we read at setup
-// time. The plugin's `config` is `protected`, so we access `endpoints`
-// via a cast rather than depending on internal types.
-interface ServingLike {
-  config?: {
-    endpoints?: Record<string, { env: string; servedModel?: string }>;
-  };
-}
+
 
 type MastraMemoryConfig = PgVectorConfig & {
   id?: string;
@@ -115,7 +106,53 @@ interface MastraPluginConfig extends BasePluginConfig {
 
 
 
+class MastraServer extends MastraServerExpress {
+
+  constructor(private config: MastraPluginConfig, ...args: ConstructorParameters<typeof MastraServerExpress>) {
+    super(...args);
+  }
+
+  override registerAuthMiddleware(): void {
+    super.registerAuthMiddleware();
+    this.app.use((req, res, next) => {
+      const executionContext = getExecutionContext();
+      const user = {
+        id: ("userId" in executionContext ? executionContext.userId : executionContext.serviceUserId),
+        isUserContext: "isUserContext" in executionContext ? executionContext.isUserContext : false,
+      };
+      console.log(`Request 0: ${JSON.stringify(user)}`);
+      res.locals.user = user;
+      const requestContext = res.locals.requestContext
+      if (!requestContext.get(MASTRA_RESOURCE_ID_KEY)) {
+        console.log(`Setting resource id: ${user.id}`);
+        requestContext.set(MASTRA_RESOURCE_ID_KEY, user.id)
+      }
+      const cookies = httpUtils.parseCookies(req.headers.cookie);
+      const cookieName = stringUtils.toUnderscoreCase(true, "appkit", this.config.name!, "sessionId");
+      var sessionId = cookies[cookieName];
+      if (!sessionId) {
+        sessionId = randomUUID();
+        res.cookie(cookieName, sessionId, {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: req.secure,
+          path: '/',
+        });
+      }
+      res.locals.sessionId = sessionId;
+      if (!requestContext.get(MASTRA_THREAD_ID_KEY)) {
+        console.log(`Setting thread id: ${sessionId}`);
+        requestContext.set(MASTRA_THREAD_ID_KEY, sessionId)
+      }
+      next();
+    })
+  }
+
+}
+
+
 export class MastraPlugin extends Plugin<MastraPluginConfig> {
+  //static override phase = "deferred" as const;
   static manifest = {
     name: "mastra",
     displayName: "Mastra",
@@ -125,7 +162,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       "wires Postgres-backed Mastra Memory via the `lakebase` plugin.",
     stability: "beta",
     resources: {
-      required: [...SERVING_MANIFEST.resources.required],
+      required: [],
       optional: [
         ...GENIE_MANIFEST.resources.required,
         ...LAKEBASE_MANIFEST.resources.required,
@@ -154,12 +191,11 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     }
     return resources;
   }
-  private log = pluginLogger(this);
+  private log = logUtils.logger(this);
   private defaultAgent: Agent | null = null;
   private mastra: Mastra | null = null;
   private mastraApp: express.Express | null = null;
   private mastraServer: MastraServer | null = null;
-  private servingEndpointName?: string;
 
   override async setup(): Promise<void> {
     // The serving + lakebase plugins both finish their own `setup()`
@@ -168,7 +204,6 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // future awaitable setup (the current synchronous body is fine).
     this.context?.onLifecycle("setup:complete", async () => {
       this.log.info("setup:complete");
-      this.servingEndpointName = this.resolveServingEndpointName();
       await this.setupMastra();
     });
   }
@@ -188,93 +223,16 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
 
   override injectRoutes(router: IAppRouter): void {
-    router.use(this.cookieIdMiddleware())
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       return this.asUser(req).mastraApp!(req, res, next);
     });
   }
 
-  /**
-   * Issues two cookies on the first request from a browser and reads
-   * them back on subsequent ones:
-   *
-   * - `mastra_client_id`: long-lived (1 year). Stable across browser
-   *   restarts. Useful for analytics, anonymous personalization, and
-   *   default `memory.resource` if no authenticated user is present.
-   * - `mastra_session_id`: session-scoped (no Max-Age). The browser
-   *   drops it on close. Used as a default `memory.thread` when the
-   *   client doesn't pass one explicitly.
-   *
-   * Same-origin AI SDK calls (`useChat` -> `fetch` to
-   * `/api/mastra/chat`) include cookies automatically, so downstream
-   * chat handlers can rely on these IDs without changes on the
-   * frontend.
-   *
-   * Both cookies are `HttpOnly` (no JS access, mitigates XSS),
-   * `SameSite=Lax`, and `Secure` outside development.
-   */
-  private cookieIdMiddleware(): express.RequestHandler {
-    const pluginName = this.config?.name!;
-    return (req, res, next) => {
-
-      const cookies = parseCookies(req.headers.cookie);
-      for (const [name, session_cookie] of Object.entries({
-        clientId: false,
-        sessionId: true,
-      })) {
-        const cookieName = toUnderscoreCase(true, pluginName, name);
-        var cookieValue = cookies[cookieName];
-        if (!cookieValue) {
-          cookieValue = randomUUID();
-          const maxAge = session_cookie ? undefined : 1000 * 60 * 60 * 24 * 365
-          res.cookie(cookieName, cookieValue, {
-            httpOnly: true,
-            sameSite: "lax",
-            secure: req.secure,
-            path: '/',
-            ...(maxAge ? { maxAge } : {}),
-          });
-        }
-        res.locals[name] = cookieValue;
-      }
-      next();
-    }
-  }
 
 
 
 
-  /**
-   * Reads the sibling `serving` plugin's endpoints config and resolves
-   * the env var bound to `servingAlias`. Returns the endpoint name
-   * string (e.g. `"databricks-claude-sonnet-4-6"`) so we can plumb it
-   * into the Mastra model factory as the `modelId`.
-   */
-  private resolveServingEndpointName(): string | undefined {
-    const alias = this.config.servingAlias ?? DEFAULT_SERVING_ALIAS;
-    const ctx = this.context;
-    const servingPlugin = ctx?.getPlugins().get("serving") as
-      | (ServingLike & Plugin)
-      | undefined;
-    const endpoints = servingPlugin?.config?.endpoints;
-    const endpointConfig = endpoints?.[alias];
-    if (!endpointConfig) {
-      throw new Error(
-        `mastra: serving alias '${alias}' is not configured. ` +
-        "Add it to the `serving({ endpoints: { ... } })` plugin or change " +
-        "`servingAlias` on mastra().",
-      );
-    }
-    const name = process.env[endpointConfig.env];
-    if (!name) {
-      throw new Error(
-        `mastra: env var '${endpointConfig.env}' for serving alias ` +
-        `'${alias}' is not set. Cannot resolve the model serving endpoint.`,
-      );
-    }
-    return name;
-  }
 
   private async setupMastra(): Promise<void> {
     // Resolve the Lakebase pool once. Both PostgresStore and PgVector
@@ -302,12 +260,13 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // we're hosting Mastra inside our own Express app via the
     // `@mastra/express` adapter, custom routes must be passed to the
     // `MastraServer` constructor directly via `customApiRoutes` below.
+
     this.mastra = new Mastra({
       agents: { [DEFAULT_AGENT_ID]: this.defaultAgent },
     });
     this.mastraApp = express();
     this.attachRoutePatchMiddleware(this.mastraApp);
-    this.mastraServer = new MastraServer({
+    this.mastraServer = new MastraServer(this.config, {
       app: this.mastraApp,
       mastra: this.mastra!,
       prefix: "",
@@ -358,38 +317,10 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
    *    `express.json()` runs first so `req.body` is parsed.
    */
   private attachRoutePatchMiddleware(app: express.Express): void {
-    app.use(express.json());
     app.use((req, res, next) => {
       const isChat = req.path === "/route" || req.path.startsWith("/route/");
       if (!isChat) return next();
       req.originalUrl = req.path;
-
-      // Default memory wiring: `resource` is always the authenticated
-      // user (server controls identity). `thread` defaults to the
-      // session cookie when the client didn't send one, so a fresh tab
-      // gets a fresh conversation without any client-side bookkeeping.
-      const body = (req.body ?? {}) as Record<string, unknown>;
-      const clientMemory =
-        (body.memory ?? {}) as Partial<AgentMemoryOption>;
-      var thread = clientMemory.thread
-      if (!thread) {
-        thread = res.locals.sessionId as string | undefined;
-        if (thread) {
-          this.log.info(`No thread provided, using sessionId: ${thread}`);
-        }
-      }
-      var resource = clientMemory.resource
-      if (!resource) {
-        resource = this.resolveUserId(req);
-        this.log.info(`No resource provided, using user id: ${resource}`);
-      }
-      body.memory = {
-        ...clientMemory,
-        thread: thread,
-        resource: resource
-      };
-      this.log.info(`Request body: ${JSON.stringify(body)}`);
-      req.body = body;
       next();
     });
   }
@@ -411,14 +342,6 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
    * token source.
    */
   private buildModel(): DynamicArgument<MastraModelConfig> {
-    const endpointName = this.servingEndpointName;
-    if (!endpointName) {
-      throw new Error(
-        "mastra: serving endpoint name was not resolved at setup. " +
-        "Check the `serving` plugin's env var (default " +
-        "DATABRICKS_SERVING_ENDPOINT_NAME) and `servingAlias` config.",
-      );
-    }
     const providerId = this.config.providerId ?? "databricks";
     return async (): Promise<OpenAICompatibleConfig> => {
       const ctx = getExecutionContext();
@@ -433,9 +356,10 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       // resulting URL stays well-formed
       // (`/serving-endpoints/chat/completions`).
       const url = new URL("/serving-endpoints", host).toString().replace(/\/$/, "");
+      console.log(`Model URL: ${url}`);
       return {
         providerId,
-        modelId: endpointName,
+        modelId: "databricks-claude-sonnet-4-6",
         url,
         apiKey,
       };
@@ -507,7 +431,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
    * runtime condition we can recover from.
    */
   private lakebasePool(): Pool {
-    return requirePlugin(this.context, lakebase, "mastra")
+    return pluginUtils.requirePlugin(this.context, lakebase, "mastra")
       .exports()
       .pool;
   }

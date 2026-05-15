@@ -1,265 +1,55 @@
-import {
-  Conversation,
-  ConversationContent,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation";
-import { Message, MessageContent } from "@/components/ai-elements/message";
-import {
-  PromptInput,
-  PromptInputActionAddAttachments,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuTrigger,
-  PromptInputAttachment,
-  PromptInputAttachments,
-  PromptInputBody,
-  PromptInputButton,
-  type PromptInputMessage,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputFooter,
-  PromptInputTools,
-} from "@/components/ai-elements/prompt-input";
-import { Action, Actions } from "@/components/ai-elements/actions";
-import { Fragment, useState } from "react";
-import { useChat } from "@ai-sdk/react";
-import { Response } from "@/components/ai-elements/response";
-import { CopyIcon, GlobeIcon, RefreshCcwIcon } from "lucide-react";
-import {
-  Source,
-  Sources,
-  SourcesContent,
-  SourcesTrigger,
-} from "@/components/ai-elements/sources";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
-import { Loader } from "@/components/ai-elements/loader";
-import { DefaultChatTransport } from "ai";
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
+import { useState } from "react";
+import Chat from "@/pages/Chat";
+import Stream from "@/pages/Stream";
 
+type Page = "chat" | "stream";
 
-
-
-const suggestions = [
-  "Tell me about Spirited Away",
-  "Who are the main characters in Princess Mononoke?",
-  "Summarize the plot of Howl's Moving Castle",
+const PAGES: { id: Page; label: string; description: string }[] = [
+  {
+    id: "chat",
+    label: "Chat",
+    description: "useChat against the chatRoute()",
+  },
+  {
+    id: "stream",
+    label: "Stream",
+    description: "@mastra/client-js agent.stream()",
+  },
 ];
 
-const AISdkDemo = () => {
-  const [input, setInput] = useState("");
-  const [webSearch, setWebSearch] = useState(false);
-  const { messages, sendMessage, status, regenerate } = useChat({
-    transport: new DefaultChatTransport({
-      // Defined through chatRoute() in src/mastra/index.ts
-      api: `/api/mastra/route/chat`,
-    }),
-  });
-
-  const handleSubmit = (message: PromptInputMessage) => {
-    const hasText = Boolean(message.text);
-    const hasAttachments = Boolean(message.files?.length);
-
-    if (!(hasText || hasAttachments)) {
-      return;
-    }
-
-    sendMessage(
-      {
-        text: message.text || "Sent with attachments",
-        files: message.files,
-      },
-      {
-        body: {
-          webSearch: webSearch,
-        },
-      },
-    );
-    setInput("");
-  };
-
-  const handleSuggestionClick = (suggestion: string) => {
-    sendMessage({ text: suggestion });
-  };
-
-  type MessagePartWithReasoningText = {
-    type: string;
-    text?: string;
-  };
-
-
-  const getVisibleReasoningText = (
-    parts: MessagePartWithReasoningText[],
-  ) =>
-    parts
-      .filter((part) => part.type === "reasoning")
-      .map((part) => part.text ?? "")
-      .join("\n\n");
+const App = () => {
+  const [page, setPage] = useState<Page>("chat");
 
   return (
-    <div className="max-w-4xl mx-auto p-0 md:p-6 relative size-full">
-      <div className="flex flex-col h-full">
-        <Conversation className="h-full">
-          <ConversationContent>
-            {messages.map((message, messageIndex) => {
-              const isLastAssistantMessage =
-                message.role === "assistant" &&
-                messageIndex === messages.length - 1;
-              const reasoningText = getVisibleReasoningText(message.parts);
-              const isReasoningStreaming =
-                isLastAssistantMessage &&
-                status === "streaming" &&
-                message.parts.at(-1)?.type === "reasoning";
-
-              return (
-                <div key={message.id}>
-                  {message.role === "assistant" &&
-                    message.parts.filter((part) => part.type === "source-url")
-                      .length > 0 && (
-                      <Sources>
-                        <SourcesTrigger
-                          count={
-                            message.parts.filter(
-                              (part) => part.type === "source-url",
-                            ).length
-                          }
-                        />
-                        {message.parts
-                          .filter((part) => part.type === "source-url")
-                          .map((part, i) => (
-                            <SourcesContent key={`${message.id}-${i}`}>
-                              <Source
-                                key={`${message.id}-${i}`}
-                                href={part.url}
-                                title={part.url}
-                              />
-                            </SourcesContent>
-                          ))}
-                      </Sources>
-                    )}
-                  {reasoningText && (
-                    <Reasoning
-                      className="w-full"
-                      isStreaming={isReasoningStreaming}
-                    >
-                      <ReasoningTrigger />
-                      <ReasoningContent>{reasoningText}</ReasoningContent>
-                    </Reasoning>
-                  )}
-                  {message.parts.map((part, i) => {
-                    switch (part.type) {
-                      case "text":
-                        return (
-                          <Fragment key={`${message.id}-${i}`}>
-                            <Message from={message.role}>
-                              <MessageContent>
-                                <Response>{part.text}</Response>
-                              </MessageContent>
-                            </Message>
-                            {isLastAssistantMessage && (
-                              <Actions className="mt-2">
-                                <Action
-                                  onClick={() => regenerate()}
-                                  label="Retry"
-                                >
-                                  <RefreshCcwIcon className="size-3" />
-                                </Action>
-                                <Action
-                                  onClick={() =>
-                                    navigator.clipboard.writeText(part.text)
-                                  }
-                                  label="Copy"
-                                >
-                                  <CopyIcon className="size-3" />
-                                </Action>
-                              </Actions>
-                            )}
-                          </Fragment>
-                        );
-                      case "reasoning":
-                        return null;
-                      default:
-                        return null;
-                    }
-                  })}
-                </div>
-              );
-            })}
-            {status === "submitted" && <Loader />}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
-
-        <Suggestions>
-          {suggestions.map((suggestion) => (
-            <Suggestion
-              key={suggestion}
-              onClick={handleSuggestionClick}
-              suggestion={suggestion}
-            />
-          ))}
-        </Suggestions>
-
-        <PromptInput
-          onSubmit={handleSubmit}
-          className="mt-4"
-          globalDrop
-          multiple
-        >
-          <PromptInputBody>
-            <PromptInputAttachments>
-              {(attachment) => <PromptInputAttachment data={attachment} />}
-            </PromptInputAttachments>
-            <PromptInputTextarea
-              onChange={(e) => setInput(e.target.value)}
-              value={input}
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools>
-              <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger />
-                <PromptInputActionMenuContent>
-                  <PromptInputActionAddAttachments />
-                </PromptInputActionMenuContent>
-              </PromptInputActionMenu>
-              <PromptInputButton
-                variant={webSearch ? "default" : "ghost"}
-                onClick={() => setWebSearch(!webSearch)}
+    <div className="flex flex-col h-screen">
+      <header className="border-b">
+        <nav className="max-w-4xl mx-auto flex items-center gap-1 px-4 md:px-6 py-2">
+          {PAGES.map((p) => {
+            const active = p.id === page;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPage(p.id)}
+                title={p.description}
+                className={
+                  "px-3 py-1.5 rounded-md text-sm transition-colors " +
+                  (active
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted")
+                }
               >
-                <GlobeIcon size={16} />
-                <span>Search</span>
-              </PromptInputButton>
-              {/* <PromptInputModelSelect
-                onValueChange={(value) => {
-                  setModel(value);
-                }}
-                value={model}
-              >
-                <PromptInputModelSelectTrigger>
-                  <PromptInputModelSelectValue />
-                </PromptInputModelSelectTrigger>
-                <PromptInputModelSelectContent>
-                  {models.map((model) => (
-                    <PromptInputModelSelectItem
-                      key={model.value}
-                      value={model.value}
-                    >
-                      {model.name}
-                    </PromptInputModelSelectItem>
-                  ))}
-                </PromptInputModelSelectContent>
-              </PromptInputModelSelect> */}
-            </PromptInputTools>
-            <PromptInputSubmit disabled={!input && !status} status={status} />
-          </PromptInputFooter>
-        </PromptInput>
-      </div>
+                {p.label}
+              </button>
+            );
+          })}
+        </nav>
+      </header>
+      <main className="flex-1 min-h-0">
+        {page === "chat" ? <Chat /> : <Stream />}
+      </main>
     </div>
   );
 };
 
-export default AISdkDemo;
+export default App;

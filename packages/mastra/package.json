@@ -19,24 +19,17 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json"
   },
-  "peerDependencies": {
-    "@databricks/appkit": "^0.33.0"
-  },
   "dependencies": {
-    "@dbx-tools/appkit-mastra-shared": "workspace:*",
     "@dbx-tools/appkit-shared": "workspace:*",
-    "@mastra/ai-sdk": "^1.3.3",
-    "@mastra/core": "^1.32.1",
-    "@mastra/express": "^0.0.0-explore-new-metrics-update-20260507081418",
-    "@mastra/fastembed": "^1.0.1",
-    "@mastra/memory": "^1.17.5",
-    "@mastra/pg": "^1.10.0",
-    "ai": "^5.0.0",
-    "pg": "^8.20.0",
-    "zod": "^4.3.6"
+    "@mastra/ai-sdk": "^1.3",
+    "@mastra/core": "^1.32",
+    "@mastra/express": "^1.3",
+    "@mastra/fastembed": "^1.0",
+    "@mastra/memory": "^1.17",
+    "@mastra/pg": "^1.10"
   },
   "devDependencies": {
-    "@databricks/appkit": "^0.33.0",
+    "@databricks/appkit": "^0.35.0",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.0",

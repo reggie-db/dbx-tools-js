@@ -22,11 +22,6 @@ import { mastra } from "@dbx-tools/appkit-mastra";
 await createApp({
   plugins: [
     server(),
-    serving({
-      endpoints: {
-        default: { env: "DATABRICKS_SERVING_ENDPOINT_NAME" },
-      },
-    }),
     lakebase(),
     mastra({
       servingAlias: "default",
