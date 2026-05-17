@@ -28,10 +28,7 @@ export const SourcesTrigger = ({
   children,
   ...props
 }: SourcesTriggerProps) => (
-  <CollapsibleTrigger
-    className={cn("flex items-center gap-2", className)}
-    {...props}
-  >
+  <CollapsibleTrigger className={cn("flex items-center gap-2", className)} {...props}>
     {children ?? (
       <>
         <p className="font-medium">Used {count} sources</p>
@@ -43,10 +40,7 @@ export const SourcesTrigger = ({
 
 export type SourcesContentProps = ComponentProps<typeof CollapsibleContent>;
 
-export const SourcesContent = ({
-  className,
-  ...props
-}: SourcesContentProps) => (
+export const SourcesContent = ({ className, ...props }: SourcesContentProps) => (
   <CollapsibleContent
     className={cn(
       "mt-3 flex w-fit flex-col gap-2",

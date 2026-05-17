@@ -1,0 +1,31 @@
+{
+  "name": "@dbx-tools/appkit-autopg",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@dbx-tools/appkit-shared": "workspace:*"
+  },
+  "peerDependencies": {
+    "@databricks/appkit": "^0.35"
+  },
+  "devDependencies": {
+    "@databricks/appkit": "^0.35.0"
+  }
+}

@@ -91,9 +91,7 @@
             "fields": {
               "branch": {
                 "description": "Full Lakebase Postgres branch resource name. Obtain by running `databricks postgres list-branches projects/{project-id}`, select the desired item from the output array and use its .name value.",
-                "examples": [
-                  "projects/{project-id}/branches/{branch-id}"
-                ]
+                "examples": ["projects/{project-id}/branches/{branch-id}"]
               },
               "database": {
                 "description": "Full Lakebase Postgres database resource name. Obtain by running `databricks postgres list-databases {branch-name}`, select the desired item from the output array and use its .name value. Requires the branch resource name.",

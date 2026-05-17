@@ -65,10 +65,7 @@ export const WebPreview = ({
   return (
     <WebPreviewContext.Provider value={contextValue}>
       <div
-        className={cn(
-          "flex size-full flex-col rounded-lg border bg-card",
-          className,
-        )}
+        className={cn("flex size-full flex-col rounded-lg border bg-card", className)}
         {...props}
       >
         {children}
@@ -84,10 +81,7 @@ export const WebPreviewNavigation = ({
   children,
   ...props
 }: WebPreviewNavigationProps) => (
-  <div
-    className={cn("flex items-center gap-1 border-b p-2", className)}
-    {...props}
-  >
+  <div className={cn("flex items-center gap-1 border-b p-2", className)} {...props}>
     {children}
   </div>
 );

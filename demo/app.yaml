@@ -1,4 +1,4 @@
-command: ['npm', 'run', 'start']
+command: ["npm", "run", "start"]
 env:
   - name: DATABRICKS_GENIE_SPACE_ID
     valueFrom: genie-space

@@ -67,10 +67,7 @@ export const ToolHeader = ({
   ...props
 }: ToolHeaderProps) => (
   <CollapsibleTrigger
-    className={cn(
-      "flex w-full items-center justify-between gap-4 p-3",
-      className,
-    )}
+    className={cn("flex w-full items-center justify-between gap-4 p-3", className)}
     {...props}
   >
     <div className="flex items-center gap-2">
@@ -131,9 +128,7 @@ export const ToolOutput = ({
   let Output = <div>{output as ReactNode}</div>;
 
   if (typeof output === "object" && !isValidElement(output)) {
-    Output = (
-      <CodeBlock code={JSON.stringify(output, null, 2)} language={language} />
-    );
+    Output = <CodeBlock code={JSON.stringify(output, null, 2)} language={language} />;
   } else if (typeof output === "string") {
     Output = <CodeBlock code={output} language={language} />;
   }

@@ -7,21 +7,12 @@ import type { ComponentProps } from "react";
 
 export type SuggestionsProps = ComponentProps<typeof ScrollArea>;
 
-export const Suggestions = ({
-  className,
-  children,
-  ...props
-}: SuggestionsProps) => (
+export const Suggestions = ({ className, children, ...props }: SuggestionsProps) => (
   <ScrollArea
     className="w-full contain-inline-size overflow-x-auto whitespace-nowrap"
     {...props}
   >
-    <div
-      className={cn(
-        "flex w-max flex-nowrap items-center gap-2 pb-3",
-        className,
-      )}
-    >
+    <div className={cn("flex w-max flex-nowrap items-center gap-2 pb-3", className)}>
       {children}
     </div>
     <ScrollBar orientation="horizontal" />

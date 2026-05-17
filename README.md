@@ -1,20 +1,26 @@
 # dbx-tools-appkit
 
-Bun workspace for the `@dbx-tools/*` AppKit plugins and a runnable demo.
+Bun monorepo for `@dbx-tools` AppKit add-ons: shared helpers plus a Mastra
+plugin, with a runnable Databricks App demo.
 
-| Package | Path | Published |
-| --- | --- | --- |
-| [`@dbx-tools/appkit-genie-shared`](packages/genie-shared) | `packages/genie-shared` | yes |
-| [`@dbx-tools/appkit-genie`](packages/genie) | `packages/genie` | yes |
-| [`@dbx-tools/appkit-genie-ui`](packages/genie-ui) | `packages/genie-ui` | yes |
-| `@dbx-tools/appkit-demo` | `demo` | no (private) |
+| Package                                       | Path              | Published            |
+| --------------------------------------------- | ----------------- | -------------------- |
+| [`@dbx-tools/appkit-shared`](packages/shared) | `packages/shared` | yes                  |
+| [`@dbx-tools/appkit-mastra`](packages/mastra) | `packages/mastra` | yes                  |
+| [`@dbx-tools/appkit-demo`](demo)              | `demo`            | no (`private: true`) |
 
-`genie-shared` holds the wire-format types. `genie` is the server plugin (Genie
-streaming tools + optional mem0-backed memory tools). `genie-ui` is the React
-`<AgentChat>` component. Both the server and UI packages re-export the shared types
-so apps only need to install the one they use.
+`appkit-shared` provides small utilities (typed plugin lookup, cookie parsing,
+string case helpers, console log prefixes) without pulling AppKit types into
+every consumer. `appkit-mastra` is a beta AppKit plugin that mounts Mastra
+(`@mastra/express` + `@mastra/ai-sdk` `chatRoute`), resolves the model from the
+workspace host and `/serving-endpoints` with per-request user auth, and can
+reuse the `lakebase` plugin pool for Mastra Memory when `storage` / `memory`
+are enabled. It also exports `buildGenieTools` for wiring the AppKit `genie`
+plugin into custom Mastra agents.
 
 ## Develop
+
+From the repo root:
 
 ```bash
 bun install
@@ -26,16 +32,26 @@ Run the demo against a real workspace:
 
 ```bash
 cd demo
-cp .env.example .env  # fill in DATABRICKS_HOST + Genie space + serving endpoint
+cp .env.example .env   # DATABRICKS_HOST, serving / Lakebase vars as documented there
 databricks auth login --host "$DATABRICKS_HOST"
-bun dev               # or `bun dev` from the repo root
+bun dev                # or `bun dev` from the repo root (`--filter` demo)
+```
+
+See [demo/README.md](demo/README.md) for layout, scripts, bundle deploy notes,
+and how the client targets `/api/mastra/route/chat/<agentId>`.
+
+## Scaffold a new package
+
+```bash
+bun run create plugin <slug>   # AppKit plugin stub under packages/<slug>
+bun run create shared <slug>   # types-only package stub
 ```
 
 ## Release
 
-The three publishable packages are configured as `fixed` in
-[`.changeset/config.json`](.changeset/config.json) so they always version
-together. Adding a change:
+Publishable packages use Changesets. Workspace members under `@dbx-tools/*` are
+configured as `fixed` in [`.changeset/config.json`](.changeset/config.json) so
+they version together. Add a change:
 
 ```bash
 bun changeset

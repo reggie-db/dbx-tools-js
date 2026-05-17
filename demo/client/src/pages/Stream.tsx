@@ -66,9 +66,7 @@ const Stream = () => {
         const agent = mastraClient.getAgent(DEFAULT_AGENT_ID);
         const messagesForAgent = history.flatMap((m) =>
           m.parts
-            .filter(
-              (p): p is { type: "text"; text: string } => p.type === "text",
-            )
+            .filter((p): p is { type: "text"; text: string } => p.type === "text")
             .map((p) => ({ role: m.role, content: p.text })),
         );
 
@@ -106,9 +104,7 @@ const Stream = () => {
     [writeMessages],
   );
 
-  const sendMessage = useCallback<
-    React.ComponentProps<typeof ChatView>["sendMessage"]
-  >(
+  const sendMessage = useCallback<React.ComponentProps<typeof ChatView>["sendMessage"]>(
     (message) => {
       const text = message.text ?? "";
       if (!text) return;
@@ -126,9 +122,7 @@ const Stream = () => {
     // stream replaces it instead of appending alongside.
     const prev = messagesRef.current;
     const trimmed =
-      prev.length > 0 && prev.at(-1)?.role === "assistant"
-        ? prev.slice(0, -1)
-        : prev;
+      prev.length > 0 && prev.at(-1)?.role === "assistant" ? prev.slice(0, -1) : prev;
     writeMessages(trimmed);
     void runStream(trimmed);
   }, [runStream, writeMessages]);

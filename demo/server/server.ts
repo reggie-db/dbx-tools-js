@@ -1,23 +1,32 @@
-import { createApp, lakebase, server, serving } from "@databricks/appkit";
+import { createApp, lakebase, server } from "@databricks/appkit";
+import { autopg } from "@dbx-tools/appkit-autopg";
 import { mastra } from "@dbx-tools/appkit-mastra";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
 //
+// `autopg()` runs BEFORE `createApp(...)` because AppKit's plugin
+// phases only order `setup()` invocation, not async completion - if
+// autopg were a plugin it would race lakebase's sync env validation.
+// As a top-level helper it resolves LAKEBASE_ENDPOINT / PGHOST /
+// PGDATABASE via the Databricks Postgres REST API and writes them to
+// `process.env` so the lakebase plugin sees a fully-populated env.
+//
 // Plugin order:
-// 1. `server()` + `serving()` + `lakebase()` must register before
-//    `mastra()` so its `setup:complete` lifecycle hook can read the
-//    resolved serving endpoint name and lakebase `pg.Pool`.
-// 2. `serving()` exposes the model endpoint that mastra resolves via
-//    `servingAlias`. The Mastra agent calls the workspace via the
-//    OpenAI-compatible base URL (`/serving-endpoints`) using a fresh
-//    user-scoped bearer minted via `asUser(req)` per request.
-// 3. `lakebase()` backs Mastra's `Memory` (`PostgresStore` + `PgVector`)
-//    with the workspace's Lakebase Postgres pool, so threads and recall
-//    vectors live in the user's Lakebase instance.
+// 1. `server()` and `lakebase()` register before `mastra()` so the
+//    `setup:complete` lifecycle hook can open the Lakebase pool when
+//    Mastra storage/memory are enabled.
+// 2. The Mastra agent resolves the model from the workspace host plus
+//    `/serving-endpoints` and user-scoped auth (`asUser(req)`). Add the
+//    AppKit `serving()` plugin separately if you want bundle-driven
+//    serving-endpoint resources or future `servingAlias` wiring.
+// 3. `lakebase()` backs Mastra Memory (`PostgresStore` + `PgVector`) when
+//    `storage` / `memory` are true on the mastra plugin.
 //
 // Required env vars (see .env.example):
 // - DATABRICKS_SERVING_ENDPOINT_NAME=databricks-claude-sonnet-4-6
-// - LAKEBASE_* (instance + database names, etc.)
+// - LAKEBASE_PROJECT (or LAKEBASE_ENDPOINT) - autopg fills in the rest
+
+await autopg();
 
 await createApp({
   plugins: [

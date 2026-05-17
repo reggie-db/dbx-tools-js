@@ -62,10 +62,7 @@ export const PlanHeader = ({ className, ...props }: PlanHeaderProps) => (
   />
 );
 
-export type PlanTitleProps = Omit<
-  ComponentProps<typeof CardTitle>,
-  "children"
-> & {
+export type PlanTitleProps = Omit<ComponentProps<typeof CardTitle>, "children"> & {
   children: string;
 };
 

@@ -7,8 +7,7 @@ import { MastraClient } from "@mastra/client-js";
 // `/api/mastra/route/chat/:agentId` and is not reached through this client.
 export const mastraClient = new MastraClient({
   apiPrefix: "/api/mastra",
-  baseUrl:
-    (typeof window !== "undefined" ? window.location.origin : "http://localhost") ,
+  baseUrl: typeof window !== "undefined" ? window.location.origin : "http://localhost",
 });
 
 export const DEFAULT_AGENT_ID = "default";

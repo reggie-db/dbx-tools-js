@@ -105,8 +105,7 @@ export const ChatView = ({
           <ConversationContent>
             {messages.map((message, messageIndex) => {
               const isLastAssistantMessage =
-                message.role === "assistant" &&
-                messageIndex === messages.length - 1;
+                message.role === "assistant" && messageIndex === messages.length - 1;
               const reasoningText = getVisibleReasoningText(message.parts);
               const isReasoningStreaming =
                 isLastAssistantMessage &&
@@ -116,14 +115,13 @@ export const ChatView = ({
               return (
                 <div key={message.id}>
                   {message.role === "assistant" &&
-                    message.parts.filter((part) => part.type === "source-url")
-                      .length > 0 && (
+                    message.parts.filter((part) => part.type === "source-url").length >
+                      0 && (
                       <Sources>
                         <SourcesTrigger
                           count={
-                            message.parts.filter(
-                              (part) => part.type === "source-url",
-                            ).length
+                            message.parts.filter((part) => part.type === "source-url")
+                              .length
                           }
                         />
                         {message.parts
@@ -140,10 +138,7 @@ export const ChatView = ({
                       </Sources>
                     )}
                   {reasoningText && (
-                    <Reasoning
-                      className="w-full"
-                      isStreaming={isReasoningStreaming}
-                    >
+                    <Reasoning className="w-full" isStreaming={isReasoningStreaming}>
                       <ReasoningTrigger />
                       <ReasoningContent>{reasoningText}</ReasoningContent>
                     </Reasoning>
@@ -161,10 +156,7 @@ export const ChatView = ({
                             {isLastAssistantMessage && (
                               <Actions className="mt-2">
                                 {regenerate && (
-                                  <Action
-                                    onClick={() => regenerate()}
-                                    label="Retry"
-                                  >
+                                  <Action onClick={() => regenerate()} label="Retry">
                                     <RefreshCcwIcon className="size-3" />
                                   </Action>
                                 )}
@@ -204,12 +196,7 @@ export const ChatView = ({
           ))}
         </Suggestions>
 
-        <PromptInput
-          onSubmit={handleSubmit}
-          className="mt-4"
-          globalDrop
-          multiple
-        >
+        <PromptInput onSubmit={handleSubmit} className="mt-4" globalDrop multiple>
           <PromptInputBody>
             <PromptInputAttachments>
               {(attachment) => <PromptInputAttachment data={attachment} />}

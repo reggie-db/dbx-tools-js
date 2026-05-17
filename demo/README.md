@@ -62,18 +62,18 @@ live server.
 
 ## Scripts
 
-| Command                      | What it does                                                       |
-| ---------------------------- | ------------------------------------------------------------------ |
-| `bun dev`                    | `tsx watch` over `server/server.ts` (also serves the client).      |
-| `bun run build`              | `tsdown` bundles the server, then Vite builds the client.          |
-| `bun run build:server`       | Bundles `server/server.ts` -> `dist/server.js`.                    |
-| `bun run build:client`       | Vite production build into `client/dist/`.                         |
-| `bun run start`              | Production entry: `node dist/server.js` against `.env`.            |
-| `bun run typecheck`          | Type-check both `server/` and `client/`.                           |
-| `bun run sync`               | `appkit plugin sync --write` to keep `app.yaml` in sync.           |
-| `bun run typegen`            | `appkit generate-types` based on `appkit.plugins.json`.            |
-| `bun run setup`              | `appkit setup --write` to scaffold any missing AppKit resources.   |
-| `bun run clean`              | Remove build output.                                               |
+| Command                | What it does                                                     |
+| ---------------------- | ---------------------------------------------------------------- |
+| `bun dev`              | `tsx watch` over `server/server.ts` (also serves the client).    |
+| `bun run build`        | `tsdown` bundles the server, then Vite builds the client.        |
+| `bun run build:server` | Bundles `server/server.ts` -> `dist/server.js`.                  |
+| `bun run build:client` | Vite production build into `client/dist/`.                       |
+| `bun run start`        | Production entry: `node dist/server.js` against `.env`.          |
+| `bun run typecheck`    | Type-check both `server/` and `client/`.                         |
+| `bun run sync`         | `appkit plugin sync --write` to keep `app.yaml` in sync.         |
+| `bun run typegen`      | `appkit generate-types` based on `appkit.plugins.json`.          |
+| `bun run setup`        | `appkit setup --write` to scaffold any missing AppKit resources. |
+| `bun run clean`        | Remove build output.                                             |
 
 ## Deploy
 

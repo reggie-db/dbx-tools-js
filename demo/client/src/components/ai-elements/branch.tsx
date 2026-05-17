@@ -48,14 +48,12 @@ export const Branch = ({
   };
 
   const goToPrevious = () => {
-    const newBranch =
-      currentBranch > 0 ? currentBranch - 1 : branches.length - 1;
+    const newBranch = currentBranch > 0 ? currentBranch - 1 : branches.length - 1;
     handleBranchChange(newBranch);
   };
 
   const goToNext = () => {
-    const newBranch =
-      currentBranch < branches.length - 1 ? currentBranch + 1 : 0;
+    const newBranch = currentBranch < branches.length - 1 ? currentBranch + 1 : 0;
     handleBranchChange(newBranch);
   };
 
@@ -70,10 +68,7 @@ export const Branch = ({
 
   return (
     <BranchContext.Provider value={contextValue}>
-      <div
-        className={cn("grid w-full gap-2 [&>div]:pb-0", className)}
-        {...props}
-      />
+      <div className={cn("grid w-full gap-2 [&>div]:pb-0", className)} {...props} />
     </BranchContext.Provider>
   );
 };
@@ -112,11 +107,7 @@ export type BranchSelectorProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
 };
 
-export const BranchSelector = ({
-  className,
-  from,
-  ...props
-}: BranchSelectorProps) => {
+export const BranchSelector = ({ className, from, ...props }: BranchSelectorProps) => {
   const { totalBranches } = useBranch();
 
   // Don't render if there's only one branch
@@ -168,11 +159,7 @@ export const BranchPrevious = ({
 
 export type BranchNextProps = ComponentProps<typeof Button>;
 
-export const BranchNext = ({
-  className,
-  children,
-  ...props
-}: BranchNextProps) => {
+export const BranchNext = ({ className, children, ...props }: BranchNextProps) => {
   const { goToNext, totalBranches } = useBranch();
 
   return (

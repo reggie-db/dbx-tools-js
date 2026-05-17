@@ -12,7 +12,7 @@ import { dirname, resolve } from "node:path";
 //     currently resolves (no hard-coded version that can drift).
 //
 //   - `shared`: pure-types package with a barrel `index.ts` and a
-//     `protocol.ts` seed file, modeled after `genie-shared`. No
+//     `protocol.ts` seed file, modeled after `appkit-shared`. No
 //     `@databricks/appkit` dep is added - shared packages are intentionally
 //     runtime-free so browser bundles can import them.
 //
@@ -108,10 +108,7 @@ const packageJson = {
 
 const tsconfigBuild = { extends: "../../tsconfig.build.json" };
 
-write(
-  resolve(pkgDir, "package.json"),
-  JSON.stringify(packageJson, null, 2) + "\n",
-);
+write(resolve(pkgDir, "package.json"), JSON.stringify(packageJson, null, 2) + "\n");
 write(
   resolve(pkgDir, "tsconfig.build.json"),
   JSON.stringify(tsconfigBuild, null, 2) + "\n",
@@ -170,7 +167,7 @@ export const ${camel} = toPlugin(${className});
   bunAdd(pkgDir, "--dev", "@databricks/appkit");
 } else {
   // Shared package: barrel re-exports from a single seed protocol module.
-  // Matches `genie-shared/src/{index,protocol}.ts` exactly.
+  // Matches `appkit-shared`-style `src/{index,protocol}.ts` layout.
   const indexTs = `export type {} from "./protocol.js";\n`;
 
   const protocolTs = `// Wire-format types for ${pkgName}. Pure types: no

@@ -83,10 +83,7 @@ const getHandleCoordsByPosition = (
   return [x, y];
 };
 
-const getEdgeParams = (
-  source: InternalNode<Node>,
-  target: InternalNode<Node>,
-) => {
+const getEdgeParams = (source: InternalNode<Node>, target: InternalNode<Node>) => {
   const sourcePos = Position.Right;
   const [sx, sy] = getHandleCoordsByPosition(source, sourcePos);
   const targetPos = Position.Left;

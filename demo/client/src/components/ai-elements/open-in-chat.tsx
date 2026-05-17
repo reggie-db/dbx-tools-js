@@ -8,11 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import {
-  ChevronDownIcon,
-  ExternalLinkIcon,
-  MessageCircleIcon,
-} from "lucide-react";
+import { ChevronDownIcon, ExternalLinkIcon, MessageCircleIcon } from "lucide-react";
 import { type ComponentProps, createContext, useContext } from "react";
 
 const providers = {
@@ -147,11 +143,7 @@ const providers = {
         q,
       })}`,
     icon: (
-      <svg
-        fill="currentColor"
-        viewBox="0 0 147 70"
-        xmlns="http://www.w3.org/2000/svg"
-      >
+      <svg fill="currentColor" viewBox="0 0 147 70" xmlns="http://www.w3.org/2000/svg">
         <title>v0</title>
         <path d="M56 50.2031V14H70V60.1562C70 65.5928 65.5928 70 60.1562 70C57.5605 70 54.9982 68.9992 53.1562 67.1573L0 14H19.7969L56 50.2031Z" />
         <path d="M147 56H133V23.9531L100.953 56H133V70H96.6875C85.8144 70 77 61.1856 77 50.3125V14H91V46.1562L123.156 14H91V0H127.312C138.186 0 147 8.81439 147 19.6875V56Z" />
@@ -166,11 +158,7 @@ const providers = {
       return url.toString();
     },
     icon: (
-      <svg
-        version="1.1"
-        viewBox="0 0 466.73 532.09"
-        xmlns="http://www.w3.org/2000/svg"
-      >
+      <svg version="1.1" viewBox="0 0 466.73 532.09" xmlns="http://www.w3.org/2000/svg">
         <title>Cursor</title>
         <path
           d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z"
@@ -213,9 +201,7 @@ export const OpenInContent = ({ className, ...props }: OpenInContentProps) => (
 
 export type OpenInItemProps = ComponentProps<typeof DropdownMenuItem>;
 
-export const OpenInItem = (props: OpenInItemProps) => (
-  <DropdownMenuItem {...props} />
-);
+export const OpenInItem = (props: OpenInItemProps) => <DropdownMenuItem {...props} />;
 
 export type OpenInLabelProps = ComponentProps<typeof DropdownMenuLabel>;
 

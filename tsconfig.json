@@ -19,5 +19,5 @@
     "allowImportingTsExtensions": true,
     "customConditions": ["source"]
   },
-  "include": ["packages/*/src"]
+  "include": ["packages/*/src", "packages/*/tests"]
 }
