@@ -1,12 +1,16 @@
-name: Release
+name: Release (disabled)
 
-# Triggered on every push to main. On the first run after one or more
-# changesets land, `changesets/action` opens a "Version Packages" PR that
-# applies the version bumps and regenerates changelogs. Merging that PR
-# triggers this workflow again, this time with no pending changesets, and
-# `publish: bun run release` pushes the bumped packages to npm.
+# DISABLED: npm publishing is intentionally turned off. The workflow is
+# kept on disk (with `workflow_dispatch` as the only trigger) so it can
+# when packages are ready to ship.
 #
-# Required repository secrets:
+# On the first run after one or more changesets land, `changesets/action`
+# opens a "Version Packages" PR that applies the version bumps and
+# regenerates changelogs. Merging that PR triggers this workflow again,
+# this time with no pending changesets, and `publish: bun run release`
+# pushes the bumped packages to npm.
+#
+# Required repository secrets (when re-enabled):
 #   NPM_TOKEN  - npm automation token with publish access to @dbx-tools.
 #                Create at https://www.npmjs.com/settings/<your-user>/tokens
 #                with type "Automation" and "Read and Publish" scope.
@@ -15,8 +19,7 @@ name: Release
 # a PAT for that side.
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}

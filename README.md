@@ -18,6 +18,16 @@ reuse the `lakebase` plugin pool for Mastra Memory when `storage` / `memory`
 are enabled. It also exports `buildGenieTools` for wiring the AppKit `genie`
 plugin into custom Mastra agents.
 
+### Memory in action
+
+With `storage: true, memory: true`, Mastra persists conversation history into
+the `lakebase` Postgres pool and surfaces recent turns as input suggestions on
+the next visit:
+
+<p align="center">
+  <img src="docs/memory.gif" alt="Demo chat input showing remembered prompts" width="420">
+</p>
+
 ## Develop
 
 From the repo root:
