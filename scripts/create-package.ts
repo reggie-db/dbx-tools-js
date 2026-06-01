@@ -1,7 +1,4 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-
 // Scaffolds a new workspace package under `packages/<slug>/`, matching
 // the minimal shape `mastra-shared` settled on:
 //
@@ -40,14 +37,21 @@ import { dirname, resolve } from "node:path";
 //   - displayName:     "Title Case <slug>"            (example -> "Example")       [plugin only]
 //   - manifest name:   <slug> verbatim                                              [plugin only]
 
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { PACKAGES_DIR, writeJson } from "./util.js";
+
 const SCOPE = "@dbx-tools";
 const NPM_PREFIX = "appkit-";
-const APPKIT_PEER_RANGE = "^0.35";
+// AppKit's version range lives in the root `catalog` (see root
+// package.json). Scaffolded plugins reference it via `catalog:` so
+// bumping happens in one place.
+const APPKIT_PEER_RANGE = "catalog:";
 const SHARED_PKG = `${SCOPE}/${NPM_PREFIX}shared`;
-const ROOT = resolve(import.meta.dirname, "..");
 
 type Kind = "plugin" | "shared";
 
+/** Print usage and exit. */
 function usage(message?: string): never {
   if (message) console.error(message);
   console.error("Usage:");
@@ -58,6 +62,7 @@ function usage(message?: string): never {
   process.exit(1);
 }
 
+/** Create a file (and any missing parent dirs) with the given content. */
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
@@ -76,7 +81,7 @@ if (!rawSlug || !/^[a-z][a-z0-9-]*$/.test(rawSlug)) {
 }
 
 const slug = rawSlug;
-const pkgDir = resolve(ROOT, "packages", slug);
+const pkgDir = resolve(PACKAGES_DIR, slug);
 if (existsSync(pkgDir)) {
   console.error(`packages/${slug} already exists; aborting.`);
   process.exit(1);
@@ -113,11 +118,12 @@ const pluginPackageJson = {
 const packageJson = kind === "plugin" ? pluginPackageJson : basePackageJson;
 const tsconfigBuild = { extends: "../../tsconfig.build.json" };
 
-write(resolve(pkgDir, "package.json"), JSON.stringify(packageJson, null, 2) + "\n");
-write(
-  resolve(pkgDir, "tsconfig.build.json"),
-  JSON.stringify(tsconfigBuild, null, 2) + "\n",
-);
+// `writeJson` also creates the parent dir via `mkdirSync({ recursive: true })`
+// implicitly because we touch it through `write()` for the other files; do
+// it explicitly here so the package.json write isn't order-dependent.
+mkdirSync(pkgDir, { recursive: true });
+writeJson(resolve(pkgDir, "package.json"), packageJson);
+writeJson(resolve(pkgDir, "tsconfig.build.json"), tsconfigBuild);
 
 if (kind === "plugin") {
   // Root barrel: one line that re-exports the plugin and its factory

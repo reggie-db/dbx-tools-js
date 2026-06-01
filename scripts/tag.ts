@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-// Bump the version on every publishable workspace, commit the bump,
-// then tag HEAD with `v<version>` and push both the commit and the tag
-// to origin. The tag push fires `.github/workflows/release.yml`, which
-// builds every publishable workspace and runs `bunx changeset publish`.
+// Bump every publishable workspace to the next version, commit the
+// bump, then tag HEAD with `v<version>` and push both the commit and
+// the tag to origin. The tag push fires
+// `.github/workflows/release.yml`, which builds every publishable
+// workspace and runs `bunx changeset publish`.
 //
 // Usage:
 //   bun run tag                # patch bump (default)
@@ -12,71 +13,45 @@
 //   bun run tag --dry-run      # print everything, write nothing
 //
 // All `@dbx-tools/*` packages are version-fixed via
-// `.changeset/config.json`, so they always share one version - we
-// read it from the first publishable package, sanity-check that the
-// rest agree, then bump the shared version everywhere.
+// `.changeset/config.json`, so they always share one version. The
+// script reads the shared version from the first publishable package,
+// sanity-checks that every other package agrees, then bumps that one
+// number with `semver.inc()` and writes it back to every package.
 //
 // Local state policy:
 //   - Dirty files are auto-staged (`git add -A`) and folded into the
 //     release commit. If you don't want something shipped, stash it.
 //   - Unpushed commits are pushed along with the release commit.
 //   - Branch must have an upstream (otherwise we can't push).
-//   - New tag must not already exist locally or on the remote
-//     (pick a different bump).
+//   - New tag must not already exist locally or on the remote (pick
+//     a different bump).
 //
 // Tag message:
-//   The script collects commit log + diff stat since the previous tag
-//   and builds a ready-to-send prompt, then hands the whole context to
-//   `releaseNotes()`. That function is a stub - plug in whatever model
-//   you want (cursor, openai, claude, local, ...). If it returns a
-//   string, it becomes the annotated tag's message body. If it returns
-//   null (the default), the script falls back to a bare
-//   `Release v<version>` message - no prompt, no failure.
+//   The script collects commit log + diff stat since the previous
+//   tag, hands them to `releaseNotes()`, and uses the returned text
+//   as the annotated tag's message body. The default
+//   `releaseNotes()` asks a Databricks model-serving endpoint via
+//   `aiQuery()` from `util.ts`. If it returns null (no AI available,
+//   no Databricks profile, etc.) the script falls back to a bare
+//   `Release v<version>` message - no failure.
 
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { aiQuery } from "./util.js";
+import semver from "semver";
+import { aiQuery, discoverPackages, fail, readJson, run, writeJson } from "./util.js";
+
 type Bump = "major" | "minor" | "patch";
 
-const ROOT = resolve(import.meta.dirname, "..");
-const PACKAGES_DIR = resolve(ROOT, "packages");
-
-interface PackageJson {
-  name?: string;
-  version?: string;
-  private?: boolean;
+/** Parsed CLI arguments. */
+interface CliArgs {
+  bump: Bump;
+  dryRun: boolean;
 }
 
-interface PublishablePackage {
-  name: string;
-  version: string;
-  path: string;
+/** Wraps a git invocation with our standard subprocess defaults. */
+function git(args: string[], opts: { capture?: boolean; check?: boolean } = {}): string {
+  return run("git", args, opts);
 }
 
-function fail(message: string): never {
-  console.error(`✗ ${message}`);
-  process.exit(1);
-}
-
-function run(
-  args: string[],
-  opts: { capture?: boolean; check?: boolean } = {},
-): string {
-  const result = spawnSync("git", args, {
-    cwd: ROOT,
-    encoding: "utf8",
-    stdio: opts.capture ? ["ignore", "pipe", "pipe"] : "inherit",
-  });
-  if (opts.check !== false && result.status !== 0) {
-    fail(
-      `git ${args.join(" ")} failed (exit ${result.status}): ${result.stderr ?? ""}`,
-    );
-  }
-  return (result.stdout ?? "").trim();
-}
-
-function parseArgs(argv: string[]): { bump: Bump; dryRun: boolean } {
+function parseArgs(argv: string[]): CliArgs {
   let bump: Bump = "patch";
   let dryRun = false;
   let bumpSeen = false;
@@ -91,57 +66,42 @@ function parseArgs(argv: string[]): { bump: Bump; dryRun: boolean } {
       bumpSeen = true;
       continue;
     }
-    fail(
-      `Unknown argument: ${arg}. Expected one of: patch | minor | major | --dry-run`,
-    );
+    fail(`Unknown argument: ${arg}. Expected one of: patch | minor | major | --dry-run`);
   }
   return { bump, dryRun };
 }
 
-function findPublishablePackages(): PublishablePackage[] {
-  const pkgs: PublishablePackage[] = [];
-  for (const entry of readdirSync(PACKAGES_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const jsonPath = resolve(PACKAGES_DIR, entry.name, "package.json");
-    if (!existsSync(jsonPath)) continue;
-    const meta = JSON.parse(readFileSync(jsonPath, "utf8")) as PackageJson;
-    if (meta.private === true) continue;
-    if (!meta.name || !meta.version) continue;
-    pkgs.push({ name: meta.name, version: meta.version, path: jsonPath });
-  }
-  if (pkgs.length === 0) {
-    fail("No publishable packages found under packages/");
-  }
-  const unique = new Set(pkgs.map((p) => p.version));
-  if (unique.size > 1) {
+/**
+ * Find every publishable workspace and assert they all share the same
+ * version (the changesets `fixed` policy). Returns the shared version
+ * and the package list.
+ */
+function findPublishables(): { version: string; pkgs: { name: string; jsonPath: string }[] } {
+  const all = discoverPackages().filter((pkg) => pkg.meta.name && pkg.meta.version);
+  if (all.length === 0) fail("No publishable packages found under packages/");
+
+  const versions = new Set(all.map((p) => p.meta.version!));
+  if (versions.size > 1) {
     fail(
       `Publishable packages disagree on version (expected one fixed version):\n` +
-        pkgs.map((p) => `  ${p.name}@${p.version}`).join("\n"),
+        all.map((p) => `  ${p.meta.name}@${p.meta.version}`).join("\n"),
     );
   }
-  return pkgs;
+
+  return {
+    version: all[0]!.meta.version!,
+    pkgs: all.map((p) => ({ name: p.meta.name!, jsonPath: p.jsonPath })),
+  };
 }
 
-function bumpVersion(current: string, bump: Bump): string {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(current);
-  if (!match) fail(`Cannot parse version: ${current}`);
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  const patch = Number(match[3]);
-  if (bump === "major") return `${major + 1}.0.0`;
-  if (bump === "minor") return `${major}.${minor + 1}.0`;
-  return `${major}.${minor}.${patch + 1}`;
-}
-
+/** Mutate just the `version` field of a package.json on disk. */
 function writeVersion(jsonPath: string, nextVersion: string): void {
-  const raw = readFileSync(jsonPath, "utf8");
-  const trailingNewline = raw.endsWith("\n");
-  const meta = JSON.parse(raw) as PackageJson;
+  const meta = readJson<Record<string, unknown>>(jsonPath);
   meta.version = nextVersion;
-  const next = JSON.stringify(meta, null, 2) + (trailingNewline ? "\n" : "");
-  writeFileSync(jsonPath, next);
+  writeJson(jsonPath, meta);
 }
 
+/** Context passed to the `releaseNotes()` hook. */
 interface ReleaseNotesContext {
   /** Previous tag to diff against, or null if this is the first tag. */
   prevTag: string | null;
@@ -149,56 +109,43 @@ interface ReleaseNotesContext {
   nextTag: string;
   /** Git rev range used for log/diff (e.g. `v0.1.0..HEAD`), or null if no prev tag. */
   range: string | null;
-  /** One-line commit subjects since `prevTag`, no merges. Empty if nothing to summarize. */
+  /** One-line commit subjects since `prevTag`, no merges. */
   commits: string[];
-  /** Raw `git diff --stat <range>` output. Empty if no range. */
+  /** Raw `git diff --stat <range>` output. */
   diffStat: string;
   /** Ready-to-send prompt assembled from the fields above. */
   prompt: string;
 }
 
-/**
- * Hook for an AI-generated release summary. Receives the prepared
- * commit log, diff stat, and a pre-built prompt; returns the body to
- * append to the annotated tag message, or null to skip and use the
- * default `Release v<version>` message.
- *
- * Implementation is intentionally left out so this script doesn't pull
- * in any particular model SDK. Plug in your model of choice (cursor
- * CLI, OpenAI, Claude, local llama, ...) and return the raw markdown.
- * If anything goes wrong, catch internally and return null.
- */
-async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
-  const prompt = `
-  Generate markdown release notes for the following tag.
-  
-  Requirements:
-  - Be terse
-  - No preamble
-  - No closing remarks
-  - No emojis
-  - No em dashes
-  
-  Output the release notes only.`;
-  return aiQuery(prompt, ctx);
-}
+const NOTES_INSTRUCTIONS = `
+Generate markdown release notes for the following tag.
 
-function buildReleaseNotesContext(
-  prevTag: string | null,
-  nextTag: string,
-): ReleaseNotesContext {
+Requirements:
+- Be terse
+- Group by theme (Features, Fixes, Internals); skip empty sections
+- No preamble
+- No closing remarks
+- No emojis
+- No em dashes
+
+Output the release notes only.`.trim();
+
+/**
+ * Build the release-notes prompt from git history. Pure function so
+ * it's easy to preview in dry-run without involving git side effects.
+ */
+function buildReleaseNotesContext(prevTag: string | null, nextTag: string): ReleaseNotesContext {
   const range = prevTag ? `${prevTag}..HEAD` : null;
   const commits = range
-    ? run(["log", "--no-merges", "--pretty=- %s", range], { capture: true })
+    ? git(["log", "--no-merges", "--pretty=- %s", range], { capture: true })
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
-  const diffStat = range ? run(["diff", "--stat", range], { capture: true }) : "";
+  const diffStat = range ? git(["diff", "--stat", range], { capture: true }) : "";
 
   const prompt = [
-    `Write concise release notes for ${nextTag} as a short markdown bulleted list grouped by theme (Features, Fixes, Internals). Skip any section with no entries.`,
-    `Be terse. No preamble, no closing remarks, no emojis, no em dashes. Output the notes only.`,
+    `Write release notes for ${nextTag}.`,
     ``,
     `Commits since ${prevTag ?? "(no previous tag)"}:`,
     commits.length ? commits.join("\n") : "(none)",
@@ -210,58 +157,60 @@ function buildReleaseNotesContext(
   return { prevTag, nextTag, range, commits, diffStat, prompt };
 }
 
+/**
+ * Hook for an AI-generated release summary. Defaults to a Databricks
+ * model-serving call via `aiQuery()`. Returns null on any failure so
+ * the caller can fall back to a default tag message.
+ */
+async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
+  try {
+    return await aiQuery(NOTES_INSTRUCTIONS, ctx);
+  } catch (error) {
+    console.warn("Release notes hook failed, falling back:", error);
+    return null;
+  }
+}
+
 const { bump, dryRun } = parseArgs(process.argv.slice(2));
 
-const pkgs = findPublishablePackages();
-const currentVersion = pkgs[0]!.version;
-const nextVersion = bumpVersion(currentVersion, bump);
+const { version: currentVersion, pkgs } = findPublishables();
+const nextVersion = semver.inc(currentVersion, bump);
+if (!nextVersion) fail(`Cannot ${bump}-bump version "${currentVersion}" (semver.inc returned null)`);
 const tag = `v${nextVersion}`;
 
 // The script is permissive about local state: dirty files get folded
 // into the release commit and unpushed commits get pushed along with
 // it. Dry-run still skips everything that touches disk or the remote.
-const branch = run(["rev-parse", "--abbrev-ref", "HEAD"], { capture: true });
-const dirty = run(["status", "--porcelain"], { capture: true });
+const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], { capture: true });
+const dirty = git(["status", "--porcelain"], { capture: true });
 let ahead = "0";
 if (!dryRun) {
-  const upstream = run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
+  const upstream = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
     capture: true,
     check: false,
   });
   if (!upstream) {
-    fail(
-      `Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`,
-    );
+    fail(`Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`);
   }
-  ahead = run(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
+  ahead = git(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
 }
 
-const localTag = spawnSync("git", ["rev-parse", "--verify", `refs/tags/${tag}`], {
-  cwd: ROOT,
-  stdio: "ignore",
-});
-if (localTag.status === 0) {
+if (git(["rev-parse", "--verify", `refs/tags/${tag}`], { capture: true, check: false })) {
   fail(`Tag ${tag} already exists locally. Pick a different bump.`);
 }
 
-const remoteTag = run(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], {
-  capture: true,
-});
-if (remoteTag) {
+if (git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { capture: true })) {
   fail(`Tag ${tag} already exists on origin. Pick a different bump.`);
 }
 
-const prevTag =
-  run(["describe", "--tags", "--abbrev=0"], { capture: true, check: false }) || null;
+const prevTag = git(["describe", "--tags", "--abbrev=0"], { capture: true, check: false }) || null;
 
 console.log(`Bump:    ${bump}`);
 console.log(`Current: ${currentVersion}`);
 console.log(`Next:    ${nextVersion}`);
 console.log(`Tag:     ${tag}`);
 console.log(`Prev:    ${prevTag ?? "(none)"}`);
-console.log(
-  `HEAD:    ${run(["rev-parse", "--short", "HEAD"], { capture: true })} (${branch})`,
-);
+console.log(`HEAD:    ${git(["rev-parse", "--short", "HEAD"], { capture: true })} (${branch})`);
 console.log(`Packages:`);
 for (const p of pkgs) console.log(`  ${p.name}`);
 if (dirty) {
@@ -294,24 +243,22 @@ if (dryRun) {
 }
 
 console.log(`Writing ${nextVersion} to ${pkgs.length} package.json file(s)...`);
-for (const p of pkgs) writeVersion(p.path, nextVersion);
+for (const p of pkgs) writeVersion(p.jsonPath, nextVersion);
 
 console.log(`Committing release ${tag}...`);
-run(["add", "-A"]);
-run(["commit", "-m", `chore: release ${tag}`]);
+git(["add", "-A"]);
+git(["commit", "-m", `chore: release ${tag}`]);
 
 console.log(`Pushing ${branch}...`);
-run(["push", "origin", branch]);
+git(["push", "origin", branch]);
 
 console.log(`Tagging HEAD as ${tag}...`);
-run(["tag", "-a", tag, "-m", tagMessage]);
+git(["tag", "-a", tag, "-m", tagMessage]);
 
 console.log(`Pushing ${tag} to origin...`);
-run(["push", "origin", tag]);
+git(["push", "origin", tag]);
 
 console.log();
 console.log(`✓ Released ${tag}.`);
 console.log("  The Release workflow will fire on the tag push:");
-console.log(
-  `  https://github.com/reggie-db/dbx-tools-appkit/actions/workflows/release.yml`,
-);
+console.log("  https://github.com/reggie-db/dbx-tools-appkit/actions/workflows/release.yml");

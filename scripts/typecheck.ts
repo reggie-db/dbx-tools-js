@@ -1,124 +1,66 @@
-// scripts/typecheck.ts
+#!/usr/bin/env bun
+// Typecheck every workspace by running `tsc --noEmit` against each
+// `tsconfig*.json` file found inside a workspace directory. Walks the
+// `workspaces` glob patterns from the root `package.json`, expands them
+// with tinyglobby, then runs one `tsc` invocation per tsconfig.
+//
+// Stops on first failure of an individual config but still reports a
+// summary at the end with which ones passed and failed.
 
-import fs from "node:fs";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { globSync } from "tinyglobby";
+import { bunx, readJson, ROOT } from "./util.js";
 
-interface PackageJson {
+interface RootPackageJson {
   workspaces?: string[];
 }
 
-const packageJson = JSON.parse(
-  fs.readFileSync(path.resolve("package.json"), "utf8"),
-) as PackageJson;
+const { workspaces = [] } = readJson<RootPackageJson>(resolve(ROOT, "package.json"));
 
-const workspaces: string[] = packageJson.workspaces ?? [];
+console.log(`Found ${workspaces.length} workspace pattern(s):`);
+for (const pattern of workspaces) console.log(`  ${pattern}`);
+console.log();
 
-console.log(`Found ${workspaces.length} workspace patterns`);
-console.log(workspaces);
-
-function findTsconfigs(dir: string): string[] {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        entry.name.startsWith("tsconfig") &&
-        entry.name.endsWith(".json"),
-    )
-    .map((entry) => path.join(dir, entry.name))
-    .sort();
-}
-
-function expandWorkspace(pattern: string): string[] {
-  if (!pattern.includes("*")) {
-    const tsconfigs = findTsconfigs(pattern);
-
-    console.log(
-      `[workspace] ${pattern} ${
-        tsconfigs.length ? `(${tsconfigs.length} tsconfig(s))` : "(no tsconfigs)"
-      }`,
-    );
-
-    return tsconfigs;
-  }
-
-  const starIndex = pattern.indexOf("*");
-  const base = pattern.substring(0, starIndex - 1);
-
-  console.log(`[workspace] Expanding ${pattern}`);
-
-  if (!fs.existsSync(base)) {
-    console.warn(`[workspace] Directory not found: ${base}`);
-    return [];
-  }
-
-  return fs
-    .readdirSync(base, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const dir = path.join(base, entry.name);
-      const tsconfigs = findTsconfigs(dir);
-
-      console.log(
-        `  ${dir} ${
-          tsconfigs.length ? `(${tsconfigs.length} tsconfig(s))` : "(skipped)"
-        }`,
-      );
-
-      return tsconfigs;
-    });
-}
-
-const configs: string[] = workspaces.flatMap(expandWorkspace);
-
-console.log("\nConfigs to typecheck:");
-
-for (const config of configs) {
-  console.log(`  - ${config}`);
-}
+// For each workspace dir, find every `tsconfig*.json` at its top level.
+// `tinyglobby` handles both `packages/*` (glob) and `demo` (literal).
+const configs = workspaces
+  .flatMap((pattern) =>
+    globSync(`${pattern}/tsconfig*.json`, {
+      cwd: ROOT,
+      absolute: true,
+      // Don't dive into nested tsconfigs from node_modules or dist.
+      ignore: ["**/node_modules/**", "**/dist/**"],
+    }),
+  )
+  .sort();
 
 if (configs.length === 0) {
-  console.warn("\nNo tsconfig files found.");
+  console.warn("No tsconfig files found.");
   process.exit(0);
 }
 
+console.log(`Typechecking ${configs.length} config(s):`);
+for (const config of configs) console.log(`  - ${config}`);
+console.log();
+
 const failures: string[] = [];
-
 for (const config of configs) {
-  console.log(`\n=== Typechecking ${config} ===`);
-
-  const result = spawnSync(
-    process.platform === "win32" ? "bunx.cmd" : "bunx",
-    ["tsc", "--noEmit", "-p", config],
-    {
-      stdio: "inherit",
-    },
-  );
-
-  if (result.status !== 0) {
+  console.log(`=== ${config} ===`);
+  try {
+    bunx(["tsc", "--noEmit", "-p", config]);
+    console.log(`✓ Passed: ${config}\n`);
+  } catch {
     failures.push(config);
-    console.error(`✗ Failed: ${config}`);
-  } else {
-    console.log(`✓ Passed: ${config}`);
+    console.error(`✗ Failed: ${config}\n`);
   }
 }
 
-console.log("\n=== Summary ===");
-
+console.log("=== Summary ===");
 if (failures.length === 0) {
   console.log(`✓ All ${configs.length} tsconfig(s) passed`);
   process.exit(0);
 }
 
-console.error(`✗ ${failures.length} of ${configs.length} failed:\n`);
-
-for (const config of failures) {
-  console.error(`  - ${config}`);
-}
-
+console.error(`✗ ${failures.length} of ${configs.length} failed:`);
+for (const config of failures) console.error(`  - ${config}`);
 process.exit(1);
