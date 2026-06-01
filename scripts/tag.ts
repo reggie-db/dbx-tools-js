@@ -38,14 +38,11 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pMemoize from "p-memoize";
 import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
+import { aiQuery } from "./util.js";
 type Bump = "major" | "minor" | "patch";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = resolve(ROOT, "packages");
-
-const getWorkspaceClient = pMemoize(async () => {
-  return new WorkspaceClient({});
-});
 
 interface PackageJson {
   name?: string;
@@ -173,10 +170,7 @@ interface ReleaseNotesContext {
  * CLI, OpenAI, Claude, local llama, ...) and return the raw markdown.
  * If anything goes wrong, catch internally and return null.
  */
-async function releaseNotes(
-  ctx: ReleaseNotesContext,
-  model?: string,
-): Promise<string | null> {
+async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
   const prompt = `
   Generate markdown release notes for the following tag.
   
@@ -187,26 +181,8 @@ async function releaseNotes(
   - No emojis
   - No em dashes
   
-  Output the release notes only.
-
-  Context:
-  ${JSON.stringify(ctx)}`.trim();
-  const client = await getWorkspaceClient();
-  const response = await client.servingEndpoints.query({
-    name: model ?? "databricks-claude-opus-4-6",
-    messages: [
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-  });
-  return parseResponse(response);
-}
-
-function parseResponse(response: serving.QueryEndpointResponse): string | null {
-  const content = response?.choices?.[0]?.message?.content;
-  return content || null;
+  Output the release notes only.`;
+  return aiQuery(prompt, ctx);
 }
 
 function buildReleaseNotesContext(
@@ -304,12 +280,7 @@ let aiSummary: string | null = null;
 if (notesContext.commits.length === 0) {
   console.log("(skipping release notes: no commits between previous tag and HEAD)");
 } else {
-  try {
-    aiSummary = (await releaseNotes(notesContext))?.trim() || null;
-  } catch (error) {
-    console.warn("Error generating release notes:", error);
-    aiSummary = null;
-  }
+  aiSummary = (await releaseNotes(notesContext))?.trim() || null;
 }
 const tagMessage = aiSummary ? `Release ${tag}\n\n${aiSummary}\n` : `Release ${tag}`;
 
