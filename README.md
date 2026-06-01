@@ -1,22 +1,30 @@
 # dbx-tools-appkit
 
-Bun monorepo for `@dbx-tools` AppKit add-ons: shared helpers plus a Mastra
-plugin, with a runnable Databricks App demo.
+Bun monorepo for `@dbx-tools` AppKit add-ons: shared helpers, a Lakebase
+auto-discovery helper, a Mastra plugin, and the pure-types client surface
+for the Mastra plugin, plus a runnable Databricks App demo.
 
-| Package                                       | Path              | Published            |
-| --------------------------------------------- | ----------------- | -------------------- |
-| [`@dbx-tools/appkit-shared`](packages/shared) | `packages/shared` | yes                  |
-| [`@dbx-tools/appkit-mastra`](packages/mastra) | `packages/mastra` | yes                  |
-| [`@dbx-tools/appkit-demo`](demo)              | `demo`            | no (`private: true`) |
+| Package                                                             | Path                     | Published            |
+| ------------------------------------------------------------------- | ------------------------ | -------------------- |
+| [`@dbx-tools/appkit-shared`](packages/shared)                       | `packages/shared`        | yes                  |
+| [`@dbx-tools/appkit-autopg`](packages/autopg)                       | `packages/autopg`        | yes                  |
+| [`@dbx-tools/appkit-mastra`](packages/mastra)                       | `packages/mastra`        | yes                  |
+| [`@dbx-tools/appkit-mastra-shared`](packages/mastra-shared)         | `packages/mastra-shared` | yes                  |
+| [`@dbx-tools/appkit-demo`](demo)                                    | `demo`                   | no (`private: true`) |
 
 `appkit-shared` provides small utilities (typed plugin lookup, cookie parsing,
-string case helpers, console log prefixes) without pulling AppKit types into
-every consumer. `appkit-mastra` is a beta AppKit plugin that mounts Mastra
+string case helpers, console log prefixes, memoization) without pulling AppKit
+types into every consumer. `appkit-autopg` is a one-line `autopg()` helper that
+fills in every Lakebase Postgres env var the AppKit `lakebase` plugin needs
+from whatever fragments your deployment carries (resource paths, bare hostnames,
+Postgres URIs). `appkit-mastra` is a beta AppKit plugin that mounts Mastra
 (`@mastra/express` + `@mastra/ai-sdk` `chatRoute`), resolves the model from the
-workspace host and `/serving-endpoints` with per-request user auth, and can
-reuse the `lakebase` plugin pool for Mastra Memory when `storage` / `memory`
-are enabled. It also exports `buildGenieTools` for wiring the AppKit `genie`
-plugin into custom Mastra agents.
+workspace host and `/serving-endpoints` with per-request user auth, reuses the
+`lakebase` plugin pool for Mastra Memory when `storage` / `memory` are enabled,
+and forwards Genie streaming events through `ToolStream` for live UI feedback.
+`appkit-mastra-shared` is the dependency-free wire-format contract (types +
+`chatUrl` helper) that the React client imports without dragging in `pg`,
+`fastembed`, or Mastra itself.
 
 ### Memory in action
 
@@ -68,11 +76,28 @@ bun changeset
 # pick packages + bump level, write a one-liner summary
 ```
 
-On push to `main`, the [release workflow](.github/workflows/release.yml)
-opens (and on subsequent pushes merges + publishes) a "Version Packages" PR
-that applies the bumps and runs `changeset publish` against npm. To enable
-publishes, add an `NPM_TOKEN` repo secret with publish access to the
-`@dbx-tools` scope.
+The [release workflow](.github/workflows/release.yml) is **disabled by default**
+(trigger is `workflow_dispatch` only) until packages are ready to ship. To
+enable real publishes:
+
+1. Add an `NPM_TOKEN` repo secret with publish access to the `@dbx-tools`
+   scope (npm automation token, `Read and Publish` scope).
+2. Flip the workflow trigger from `workflow_dispatch:` to
+   `push: { branches: [main] }`.
+
+Once enabled, every push to `main` either opens a "Version Packages" PR that
+applies pending changesets and regenerates changelogs, or - if no pending
+changesets remain - publishes the bumped packages via `bun run release`. The
+`release` script (`scripts/publish.ts`) snapshots each package's minimal
+`package.json`, mutates it in place with the npm-ready `main` / `types` /
+`exports` / `files` fields, runs `changeset publish`, then restores the
+originals so the workspace shape on disk stays clean.
+
+To publish manually from a developer machine (after `bun changeset version`):
+
+```bash
+bun run release            # bun scripts/build.ts && bun scripts/publish.ts
+```
 
 ## License
 

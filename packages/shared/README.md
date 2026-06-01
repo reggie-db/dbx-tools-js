@@ -46,22 +46,32 @@ need the registered name for a manifest dependency.
 
 ## `httpUtils` - framework-neutral request helpers
 
-`parseCookies` / `getHeader` / `parseAuthorization` work against any of:
+Public surface: `toURL`, `forEachHeaderValue`, `parseCookies`. All three
+work uniformly against any of:
 
 - Express `req` (Node-style `req.headers`)
 - Web Fetch `Request` (`Headers` instance)
-- Hono `Context.req` (`req.header()`)
+- Hono `Context.req` (`c.req.raw.headers`)
 - `node:http` `IncomingMessage`
-- Plain `Record<string, string | string[]>`
+- Plain `Record<string, string | string[] | undefined>`
 
 ```ts
 import { httpUtils } from "@dbx-tools/appkit-shared";
 
 app.use((req, res, next) => {
   const session = httpUtils.parseCookies(req).session;
-  const bearer = httpUtils.parseAuthorization(req)?.bearer;
-  // ...
+
+  // Walk every value of a (possibly repeated) header without committing
+  // to a specific framework's accessor shape.
+  let bearer: string | undefined;
+  httpUtils.forEachHeaderValue(req, "authorization", (value) => {
+    if (value.startsWith("Bearer ")) bearer = value.slice(7);
+  });
 });
+
+// Tolerant URL coercion - bare hostnames, partial inputs, or
+// objects with a `.url` field all round-trip through:
+const url = httpUtils.toURL("example.com");  // https://example.com/
 ```
 
 ## `stringUtils` - identifier + slug helpers

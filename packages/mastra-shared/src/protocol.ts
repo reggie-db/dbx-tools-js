@@ -12,7 +12,7 @@
  * @example
  * ```tsx
  * import { usePluginClientConfig } from "@databricks/appkit-ui/react";
- * import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra/client";
+ * import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
  *
  * const config = usePluginClientConfig<MastraClientConfig>("mastra");
  * const transport = new DefaultChatTransport({

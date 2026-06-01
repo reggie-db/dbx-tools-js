@@ -5,12 +5,26 @@ Runnable Databricks App that wires up the AppKit plugins in this repo plus
 
 Generated from the AppKit `app init` template, then adapted to:
 
-- Mount the Mastra plugin alongside `server`, `genie`, and `lakebase`.
+- Mount the Mastra plugin alongside `server`, `genie`, and `lakebase`,
+  with `autopg()` discovery for Lakebase env vars.
 - Spread the AppKit `genie` toolkit into the agent so the LLM can ask
   the configured Genie space (`DATABRICKS_GENIE_SPACE_ID`) for SQL-
-  backed answers without any hand-written tool code.
-- Use the AI Elements chat UI on the client, hitting the Mastra-mounted
-  `/api/mastra/route/chat` SSE endpoint via `@ai-sdk/react`'s `useChat`.
+  backed answers without any hand-written tool code. Genie streaming
+  events (status pills, SQL, row counts) are forwarded through Mastra's
+  `ToolStream` so the UI shows live progress while the model is still
+  waiting on the final result.
+- Render the chat UI exclusively with `@databricks/appkit-ui`
+  primitives (no `ai-elements`, no vendored shadcn) plus
+  `react-markdown` + `remark-gfm` for GitHub-flavored markdown
+  rendering (tables, task lists, strikethrough).
+- Ship two pages backed by one shared `ChatView` component: a
+  vanilla AI SDK `useChat` flow (`/chat`) and a Mastra `MastraClient`
+  streaming flow (`/stream`). Both include a model-picker dropdown
+  driven by `GET /api/mastra/models` (the live serving-endpoint
+  catalogue) and pass the selection through an `X-Mastra-Model` header.
+- Bind to `127.0.0.1` locally for the friendliest dev URL; falls back
+  to `0.0.0.0` automatically when `DATABRICKS_APP_PORT` is set (i.e.
+  inside a deployed Databricks App).
 
 ## Layout
 
@@ -20,24 +34,27 @@ demo/
   app.yaml                # Databricks App runtime config (env wiring)
   databricks.yml          # Databricks Asset Bundle: Lakebase autoscaling project
   tsconfig.json           # Solution: references client + server
-  tsconfig.shared.json    # Common compiler options (strict, source condition)
   tsconfig.server.json    # Server-only typecheck
   tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # createApp({ plugins: [server(), genie(), lakebase(), mastra()] })
+    server.ts             # autopg() then createApp({ plugins: [server(), genie(), lakebase(), mastra()] })
   client/
     index.html
     vite.config.ts        # React + Tailwind v4 + workspace `source` condition
-    components.json       # shadcn registry config
     src/
-      main.tsx
-      App.tsx             # AI SDK chat UI hitting /api/mastra/route/chat
+      main.tsx            # TanStack Router shell + ErrorBoundary
+      App.tsx             # router root
       ErrorBoundary.tsx
-      index.css           # @import "@databricks/appkit-ui/styles.css" + tailwindcss
-      lib/utils.ts        # cn() helper
-      components/ui/      # shadcn primitives
-      components/ai-elements/  # AI Elements chat components (vendored)
+      index.css           # @import "@databricks/appkit-ui/styles.css" + tailwindcss + tw-animate-css
+      lib/
+        mastra-client.ts  # useMastraClient + useMastraModels (X-Mastra-Model header wiring)
+        utils.ts          # cn() helper
+      components/
+        chat-view.tsx     # shared chat surface (appkit-ui primitives + react-markdown)
+      pages/
+        Chat.tsx          # /chat - @ai-sdk/react useChat against /api/mastra/route/chat
+        Stream.tsx        # /stream - MastraClient.stream() with live tool-output events
 ```
 
 All sibling deps (`@dbx-tools/appkit-*`) are wired through `workspace:*`, so

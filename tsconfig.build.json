@@ -5,11 +5,15 @@
     "declaration": true,
     "emitDeclarationOnly": false,
     "outDir": "${configDir}/dist",
-    "rootDir": "${configDir}/src",
+    "rootDir": "${configDir}",
     "allowImportingTsExtensions": false,
     "module": "NodeNext",
     "moduleResolution": "NodeNext"
   },
-  "include": ["${configDir}/src"],
-  "exclude": ["${configDir}/tests", "${configDir}/**/*.test.ts"]
+  "include": ["${configDir}/index.ts", "${configDir}/src"],
+  "exclude": [
+    "${configDir}/dist",
+    "${configDir}/tests",
+    "${configDir}/**/*.test.ts"
+  ]
 }

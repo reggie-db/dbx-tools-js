@@ -4,12 +4,13 @@
  * builders, and dynamic Model Serving endpoint resolution.
  *
  * Client-side consumers should import URL helpers and the
- * {@link MastraClientConfig} type from `@dbx-tools/appkit-mastra/client`
- * instead - that subpath is pure (no pg / fastembed / Mastra deps) and
- * is the right surface for `usePluginClientConfig` consumers.
+ * {@link MastraClientConfig} type from `@dbx-tools/appkit-mastra-shared`
+ * instead - that package is pure (no pg / fastembed / Mastra deps) and
+ * is the right surface for browser bundles and `usePluginClientConfig`
+ * consumers.
  */
 export * from "./src/plugin.js";
-export * from "../mastra-shared/src/protocol.js";
+export * from "@dbx-tools/appkit-mastra-shared";
 export * from "./src/config.js";
 export * from "./src/agents.js";
 export * from "./src/genie.js";

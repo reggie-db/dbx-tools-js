@@ -65,17 +65,19 @@ auto-turn on. Each agent gets its own `PostgresStore` schema; every
 agent shares one `PgVector` recall index.
 - **Per-agent opt-out** ▸ `createAgent({ ..., memory: false, storage: false })`
 for routing / one-shot agents that don't need history.
-- **Per-agent override** ▸ pass a `PgVectorConfig` / `PostgresStoreConfig` object on the agent for a private index or a shared external schema.spe
+- **Per-agent override** ▸ pass a `PgVectorConfig` / `PostgresStoreConfig` object on the agent for a private index or a shared external schema.
 
 See [Memory + storage](#memory--storage) for the full cascade and worked
 examples.
 
 On the React side, never hardcode `/api/mastra/...`. Pull the published
-paths from `usePluginClientConfig` and use the `chatUrl` helper:
+paths from `usePluginClientConfig` and use the `chatUrl` helper. Import
+them from the dependency-free `@dbx-tools/appkit-mastra-shared` package
+so your browser bundle doesn't pull in `pg`, `fastembed`, or Mastra:
 
 ```tsx
 import { usePluginClientConfig } from "@databricks/appkit-ui/react";
-import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra/client";
+import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useMemo } from "react";
@@ -531,14 +533,15 @@ m.clearModelsCache(); // force the next listModels() to re-fetch
 `clientConfig()` publishes the mount paths, default agent id, and the
 full registry to `usePluginClientConfig("mastra")` so the React client
 never has to hardcode `/api/mastra` or rely on `DEFAULT_AGENT_ID`
-constants. A tiny URL helper (`chatUrl`) ships from the
-`@dbx-tools/appkit-mastra/client` subpath; that entry point is pure
-(no `pg` / `fastembed` / Mastra dependencies) so it imports cleanly
-into Vite / Webpack / esbuild builds.
+constants. A tiny URL helper (`chatUrl`) and the `MastraClientConfig`
+type ship from the standalone `@dbx-tools/appkit-mastra-shared`
+package; that package is pure (no `pg` / `fastembed` / Mastra
+dependencies) so it imports cleanly into Vite / Webpack / esbuild
+builds.
 
 ```tsx
 import { usePluginClientConfig } from "@databricks/appkit-ui/react";
-import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra/client";
+import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useMemo, useState } from "react";

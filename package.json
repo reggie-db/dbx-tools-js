@@ -7,8 +7,12 @@
     "demo"
   ],
   "scripts": {
-    "typecheck": "bun scripts/typecheck.js",
+    "typecheck": "bun scripts/typecheck.ts",
     "clean": "bun scripts/clean.ts",
+    "build": "bun scripts/build.ts",
+    "create": "bun scripts/create-package.ts",
+    "version": "bunx changeset version",
+    "release": "bun scripts/build.ts && bun scripts/publish.ts",
     "dev": "bun --elide-lines=0 run --filter '@dbx-tools/appkit-demo' dev"
   },
   "devDependencies": {
