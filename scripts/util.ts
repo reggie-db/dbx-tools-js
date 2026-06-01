@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 import { execaSync, type SyncOptions, type SyncResult } from "execa";
 import pMemoize from "p-memoize";
 import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
+import which from "which";
 
 export const ROOT = resolve(import.meta.dirname, "..");
 export const PACKAGES_DIR = resolve(ROOT, "packages");
@@ -77,7 +78,9 @@ export function readJson<T = unknown>(path: string): T {
  * formatter churn against `prettier --write`.
  */
 export function writeJson(path: string, value: unknown): void {
-  const trailingNewline = existsSync(path) ? readFileSync(path, "utf8").endsWith("\n") : true;
+  const trailingNewline = existsSync(path)
+    ? readFileSync(path, "utf8").endsWith("\n")
+    : true;
   writeFileSync(path, JSON.stringify(value, null, 2) + (trailingNewline ? "\n" : ""));
 }
 
@@ -120,7 +123,10 @@ export function bunx(
   args: readonly string[],
   opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
 ): string {
-  const bin = process.platform === "win32" ? "bunx.cmd" : "bunx";
+  let bin = which.sync("bunx", { nothrow: true });
+  if (!bin) {
+    bin = process.platform === "win32" ? "bunx.cmd" : "bunx";
+  }
   return run(bin, args, opts);
 }
 
@@ -136,14 +142,16 @@ export function fail(message: string): never {
  * when no Databricks profile is available (so callers can degrade
  * gracefully instead of throwing in scripts where AI is optional).
  */
-export const getWorkspaceClient = pMemoize(async (): Promise<WorkspaceClient | null> => {
-  try {
-    return new WorkspaceClient({});
-  } catch (error) {
-    console.error("Error creating workspace client:", error);
-    return null;
-  }
-});
+export const getWorkspaceClient = pMemoize(
+  async (): Promise<WorkspaceClient | null> => {
+    try {
+      return new WorkspaceClient({});
+    } catch (error) {
+      console.error("Error creating workspace client:", error);
+      return null;
+    }
+  },
+);
 
 const DEFAULT_AI_MODEL = "databricks-claude-opus-4-6";
 
@@ -166,7 +174,11 @@ export async function aiQuery(
 ): Promise<string | null> {
   const parts = [prompt];
   if (ctx !== undefined && ctx !== null) parts.push("Context:", JSON.stringify(ctx));
-  const content = parts.map((part) => part?.trim?.() ?? part).filter(Boolean).join("\n\n").trim();
+  const content = parts
+    .map((part) => part?.trim?.() ?? part)
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
   if (!content) return null;
 
   const client = await getWorkspaceClient();

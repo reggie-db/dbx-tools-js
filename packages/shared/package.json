@@ -1,6 +1,34 @@
 {
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "index.ts",
+    "src"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/reggie-db/dbx-tools-appkit#readme",
+  "bugs": {
+    "url": "https://github.com/reggie-db/dbx-tools-appkit/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reggie-db/dbx-tools-appkit.git",
+    "directory": "packages/shared"
+  },
   "name": "@dbx-tools/appkit-shared",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "module": "index.ts",
   "type": "module"
 }
