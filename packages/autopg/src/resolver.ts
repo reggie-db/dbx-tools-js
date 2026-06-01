@@ -20,7 +20,7 @@
  *      `databricks_postgres`) and fall back to "the only one" when a
  *      listing returns a single result.
  *   3. Auto-create: when no projects exist at all, create one whose
- *      id defaults to `commonUtils.projectName()` slugified (override
+ *      id defaults to `projectUtils.name()` slugified (override
  *      with `config.autoCreate: "my-id"` or disable with
  *      `config.autoCreate: false`). The create call is idempotent - an
  *      `ALREADY_EXISTS` response from a concurrent boot is treated as
@@ -34,7 +34,7 @@
  */
 
 import { getWorkspaceClient } from "@databricks/appkit";
-import { commonUtils, stringUtils, type logUtils } from "@dbx-tools/appkit-shared";
+import { projectUtils, stringUtils, type logUtils } from "@dbx-tools/appkit-shared";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { parseAddress } from "./address.js";
@@ -87,7 +87,7 @@ export interface ResolverInputs {
   /**
    * What to do when no project exists in the workspace at all.
    * - `undefined` (default): derive a project id from
-   *   {@link commonUtils.projectName} (the host repo's `package.json`
+   *   {@link projectUtils.name} (the host repo's `package.json`
    *   name) slugified to Lakebase id constraints, then create it.
    * - `string`: create a new project with this exact id.
    * - `false`: skip creation and throw with a clear error message.
@@ -516,7 +516,7 @@ async function pickOrCreateProject(
 
 /**
  * Derive a Lakebase project id from the host repo's `package.json`
- * name (via {@link commonUtils.projectName}) slugified to satisfy the
+ * name (via {@link projectUtils.name}) slugified to satisfy the
  * Lakebase id constraint (`^[a-z][a-z0-9-]{0,61}[a-z0-9]$`).
  *
  * Throws when the slug ends up empty or starts with a digit, since the
@@ -524,7 +524,7 @@ async function pickOrCreateProject(
  * `autoCreate` id in that case.
  */
 async function defaultProjectId(): Promise<string> {
-  const name = await commonUtils.projectName();
+  const name = await projectUtils.name();
   const slug = stringUtils.toSlugWithOptions({ maxLength: PROJECT_ID_MAX_LEN }, name);
   if (!slug || !/^[a-z]/.test(slug)) {
     throw new Error(

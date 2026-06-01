@@ -61,7 +61,7 @@ After parsing, the resolver fills gaps in this order:
    `ENDPOINT_TYPE_READ_WRITE`, `databricks_postgres`) and fall back to
    "the only one" when a listing returns a single result.
 3. **Auto-create** - when no projects exist at all, create one whose id
-   defaults to a slugified `commonUtils.projectName()` (override with
+   defaults to a slugified `projectUtils.name()` (override with
    `autoCreate: "my-id"` or disable with `autoCreate: false`). The
    create call is idempotent: an `ALREADY_EXISTS` response from a
    concurrent boot is treated as success. Then poll the default

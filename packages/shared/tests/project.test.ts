@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { parseGitRemoteRepoName, projectName } from "../src/project-name.js";
+import * as projectUtils from "../src/project.js";
 
 const tempDirs: string[] = [];
 
 function makeTempProject(layout: (root: string) => void): string {
-  const root = mkdtempSync(join(tmpdir(), "appkit-shared-project-name-"));
+  const root = mkdtempSync(join(tmpdir(), "appkit-shared-project-"));
   tempDirs.push(root);
   layout(root);
   return root;
@@ -20,24 +20,26 @@ afterEach(() => {
   }
 });
 
-describe("parseGitRemoteRepoName", () => {
+describe("parseGitRemote", () => {
   it("parses https GitHub URLs", () => {
-    expect(parseGitRemoteRepoName("https://github.com/databricks/appkit.git")).toBe(
-      "appkit",
-    );
+    expect(
+      projectUtils.parseGitRemote("https://github.com/databricks/appkit.git"),
+    ).toBe("appkit");
   });
 
   it("parses scp-style Git URLs", () => {
-    expect(parseGitRemoteRepoName("git@github.com:org/my-repo.git")).toBe("my-repo");
+    expect(projectUtils.parseGitRemote("git@github.com:org/my-repo.git")).toBe(
+      "my-repo",
+    );
   });
 
   it("returns undefined for empty input", () => {
-    expect(parseGitRemoteRepoName("")).toBeUndefined();
-    expect(parseGitRemoteRepoName("   ")).toBeUndefined();
+    expect(projectUtils.parseGitRemote("")).toBeUndefined();
+    expect(projectUtils.parseGitRemote("   ")).toBeUndefined();
   });
 });
 
-describe("projectName", () => {
+describe("name", () => {
   it("uses the root package.json name in a workspace monorepo", async () => {
     const root = makeTempProject((dir) => {
       writeFileSync(
@@ -52,7 +54,7 @@ describe("projectName", () => {
       );
     });
 
-    const name = await projectName({ cwd: join(root, "packages", "child") });
+    const name = await projectUtils.name({ cwd: join(root, "packages", "child") });
     expect(name).toBe("root-app");
   });
 
@@ -64,7 +66,7 @@ describe("projectName", () => {
       );
     });
 
-    expect(await projectName({ cwd: root })).toBe("solo-package");
+    expect(await projectUtils.name({ cwd: root })).toBe("solo-package");
   });
 
   it("falls back to the root directory basename when package.json has no name", async () => {
@@ -75,7 +77,7 @@ describe("projectName", () => {
     });
 
     const nested = join(root, "my-app-dir");
-    expect(await projectName({ cwd: nested })).toBe("my-app-dir");
+    expect(await projectUtils.name({ cwd: nested })).toBe("my-app-dir");
   });
 
   it("memoizes by resolved cwd", async () => {
@@ -87,14 +89,14 @@ describe("projectName", () => {
     });
 
     const cwd = resolve(root);
-    const a = await projectName({ cwd });
-    const b = await projectName({ cwd: root });
+    const a = await projectUtils.name({ cwd });
+    const b = await projectUtils.name({ cwd: root });
     expect(a).toBe("memoized-name");
     expect(b).toBe(a);
   });
 
   it("resolves this repository from the workspace root", async () => {
     const repoRoot = resolve(import.meta.dirname, "../../..");
-    expect(await projectName({ cwd: repoRoot })).toBe("dbx-tools-appkit");
+    expect(await projectUtils.name({ cwd: repoRoot })).toBe("dbx-tools-appkit");
   });
 });

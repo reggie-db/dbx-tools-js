@@ -13,8 +13,7 @@
  * - Model: each agent call resolves a `MastraModelConfig` via
  *   {@link buildModel} from `./model.js`. Per-agent `model` overrides
  *   (`AgentConfig["model"]` or a `modelId` string) flow through
- *   {@link buildAgents}. Optional `servingAlias` on the plugin config
- *   is reserved for future wiring to the AppKit `serving` plugin.
+ *   {@link buildAgents}.
  * - Memory / storage: when `storage` or `memory` is enabled, uses the
  *   sibling `lakebase` plugin pool through {@link buildMemory} from
  *   `./memory.js`. Both default to off.

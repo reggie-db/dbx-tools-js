@@ -31,11 +31,6 @@ export type MastraMemoryConfig = PgVectorConfig & {
 
 /** Configuration accepted by the Mastra AppKit plugin. */
 export interface MastraPluginConfig extends BasePluginConfig {
-  /**
-   * Reserved for aligning model resolution with the AppKit `serving`
-   * plugin. Not read by the current implementation.
-   */
-  servingAlias?: string;
   /** Mastra OpenAI-compatible provider id. Defaults to `"databricks"`. */
   providerId?: string;
   /**

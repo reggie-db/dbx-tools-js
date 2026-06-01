@@ -103,8 +103,3 @@ function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
   );
 }
 
-export {
-  projectName,
-  parseGitRemoteRepoName,
-  type ProjectNameOptions,
-} from "./project-name.js";

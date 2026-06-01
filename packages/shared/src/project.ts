@@ -1,3 +1,12 @@
+/**
+ * Project introspection helpers shared across AppKit plugins.
+ *
+ * Resolve a human-friendly project name and parse git remote URLs into
+ * repo names. Exposed as `projectUtils.*` from the shared barrel so
+ * naming inside this module drops the redundant `project` prefix:
+ * `projectUtils.name()` instead of `projectName()`, etc.
+ */
+
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
@@ -5,9 +14,9 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const projectNameByCwd = new Map<string, Promise<string>>();
+const nameByCwd = new Map<string, Promise<string>>();
 
-export interface ProjectNameOptions {
+export interface NameOptions {
   /** Directory to start from. Defaults to `process.cwd()`. */
   cwd?: string;
 }
@@ -26,18 +35,22 @@ interface PackageJson {
  * 2. Repository name from `git remote get-url origin`.
  * 3. Basename of the project root directory.
  */
-export function projectName(options?: ProjectNameOptions): Promise<string> {
+export function name(options?: NameOptions): Promise<string> {
   const cwd = resolve(options?.cwd ?? process.cwd());
-  let pending = projectNameByCwd.get(cwd);
+  let pending = nameByCwd.get(cwd);
   if (pending === undefined) {
     pending = resolveProjectName(cwd);
-    projectNameByCwd.set(cwd, pending);
+    nameByCwd.set(cwd, pending);
   }
   return pending;
 }
 
-/** @internal Exported for tests. */
-export function parseGitRemoteRepoName(url: string): string | undefined {
+/**
+ * Parse a git remote URL (`https://...`, `git@host:owner/repo.git`, etc.)
+ * and return the repo segment, stripping any `.git` suffix. Returns
+ * `undefined` for empty or unparsable input.
+ */
+export function parseGitRemote(url: string): string | undefined {
   const trimmed = url.trim();
   if (!trimmed) {
     return undefined;
@@ -194,8 +207,8 @@ function readNameFromPackageJson(root: string): string | undefined {
     return undefined;
   }
   const pkg = readPackageJson(pkgPath);
-  const name = pkg?.name?.trim();
-  return name || undefined;
+  const pkgName = pkg?.name?.trim();
+  return pkgName || undefined;
 }
 
 function readPackageJson(path: string): PackageJson | undefined {
@@ -211,7 +224,7 @@ async function readNameFromGitRemote(root: string): Promise<string | undefined> 
   if (!url) {
     return undefined;
   }
-  return parseGitRemoteRepoName(url);
+  return parseGitRemote(url);
 }
 
 async function gitRemoteOriginUrl(root: string): Promise<string | undefined> {

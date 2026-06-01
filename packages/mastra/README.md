@@ -59,7 +59,7 @@ below can be overridden, but the bare path works:
 | `mastra({ agents: [def1, def2] })`      | Array shorthand - keys come from each `def.name` (or `agent_<i>`); first one is default                                                                                                                         |
 | `mastra({ agents: { x: def, y: def }})` | Record - keys are the registered ids; first key is the default                                                                                                                                                  |
 | No `defaultAgent` set                   | First registered agent wins                                                                                                                                                                                     |
-| No `model` on an agent                  | Falls back to `config.defaultModel`, then `DATABRICKS_SERVING_ENDPOINT_NAME`, then walks `defaultModelFallbacks` (Claude ↔ GPT-5 interleaved, then open-weights) and picks the first endpoint actually present in the workspace |
+| No `model` on an agent                  | Falls back to `config.defaultModel`, then `DATABRICKS_SERVING_ENDPOINT_NAME`, then walks `defaultModelFallbacks` (Thinking → Balanced → Fast tiers, Claude ↔ GPT ↔ Gemini interleaved within each, then open-weights) and picks the first endpoint actually present in the workspace |
 | No `name` on a definition               | Uses the registry key as `Agent.name`                                                                                                                                                                           |
 | No `tools` on an agent                  | Inherits plugin-level `config.tools` ambient set (if any)                                                                                                                                                       |
 | `memory` field on an agent              | Defaults `true` - reuses the plugin-level Mastra `Memory` when configured                                                                                                                                       |
@@ -82,7 +82,7 @@ Plugin-level fields:
 | `agents`                | The registry. Omit for a built-in `default` analyst.                                                                                                                                  |
 | `defaultAgent`          | Id that `chatRoute` binds to when no `:agentId` is supplied. Defaults to first registered.                                                                                            |
 | `defaultModel`          | Fallback for any agent that omits `model`. Same shape (string sugar or `DynamicArgument`).                                                                                            |
-| `defaultModelFallbacks` | Priority-ordered list walked when no `model` / env / override is set. First entry whose endpoint exists in the workspace wins. Default interleaves Claude ↔ GPT-5 by tier, then appends an open-weights tail (see `FALLBACK_MODELS_BY_PROVIDER`). |
+| `defaultModelFallbacks` | Priority-ordered list walked when no `model` / env / override is set. First entry whose endpoint exists in the workspace wins. Default chains the three `ModelTier`s (Thinking → Balanced → Fast); within each tier providers are interleaved Claude ↔ GPT ↔ Gemini with open-weights appended. Compose your own with `modelsForTier(ModelTier.Fast)` or read straight from `MODEL_CATALOG`. |
 | `tools`                 | Ambient tools merged into every agent (per-agent tools win on collisions).                                                                                                            |
 | `storage`               | `true` reuses the `lakebase` pool; an object opens a dedicated Postgres store.                                                                                                        |
 | `memory`                | Same as `storage` but for the PgVector recall store.                                                                                                                                  |
@@ -217,41 +217,74 @@ loose tokens like `"claude sonnet"` snap to
 `modelFuzzyThreshold` (default `0.4`) the input is returned verbatim
 and Databricks surfaces the canonical 404.
 
-### No explicit ask (priority-ordered fallback list)
+### No explicit ask (tier-aware fallback list)
 
 When nothing is set, the resolver walks an opinionated
 priority-ordered list and returns **the first id that is actually
 present in the workspace's endpoint listing**. This is how a workspace
 without Claude Opus still gets a sensible default automatically -
-the resolver skips ahead to whichever Sonnet / GPT-5 / Llama variant
-is wired up.
+the resolver skips ahead to whichever Sonnet / GPT-5 / Gemini / Llama
+variant is wired up.
 
-The defaults live in `FALLBACK_MODELS_BY_PROVIDER` (one bucket per
-vendor, most powerful first) and `FALLBACK_MODEL_IDS` (the walked
-order). Closed-source vendors are **interleaved by tier** so a
-workspace missing Claude Opus still lands on a flagship GPT-5 on the
-*second* probe instead of having to descend the entire Claude ladder
-before another vendor is tried. The open-weights bucket is appended
-verbatim as the universal floor.
+The catalogue is grouped two ways:
 
-| Provider bucket                            | Models (most powerful first)                                                                |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `FALLBACK_MODELS_BY_PROVIDER.claude`       | Opus 4.8 → 4.7 → 4.6 → 4.5 → 4.1, Sonnet 4.6 → 4.5 → 4, Haiku 4.5                           |
-| `FALLBACK_MODELS_BY_PROVIDER.gpt`          | 5.5 Pro → 5.5 → 5.4 → 5                                                                     |
-| `FALLBACK_MODELS_BY_PROVIDER.openSource`   | Llama 4 Maverick → Llama 3.3 70B → GPT-OSS 120B → GPT-OSS 20B → Qwen-35 122B → Llama 3.1 8B |
+- By **capability tier** via the `ModelTier` enum:
+  `ModelTier.Thinking` (deepest reasoning), `ModelTier.Balanced`
+  (cost/latency sweet spot), `ModelTier.Fast` (cheap & quick for
+  classification / routing / simple summarisation).
+- By **provider** within each tier: `claude`, `gpt`, `gemini`,
+  `openSource`.
 
-Resulting `FALLBACK_MODEL_IDS` walk order:
+Both views live on `MODEL_CATALOG[tier][provider]`. The walked
+`FALLBACK_MODEL_IDS` chains the three tiers in descending power
+(Thinking → Balanced → Fast); within each tier providers are
+round-robin-zipped (Claude ↔ GPT ↔ Gemini) before the open-weights
+tail is appended as the universal floor.
 
-1. Claude Opus 4.8, GPT-5.5 Pro,
-2. Claude Opus 4.7, GPT-5.5,
-3. Claude Opus 4.6, GPT-5.4,
-4. Claude Opus 4.5, GPT-5,
-5. Claude Opus 4.1, Sonnet 4.6 → 4.5 → 4, Haiku 4.5 _(Claude continues solo once the GPT-5 list runs out)_,
-6. Open-weights tail (Llama 4 → Llama 3.3 → GPT-OSS → Qwen → Llama 3.1).
+| Tier (most powerful first) | Claude | GPT | Gemini | Open weights |
+| --- | --- | --- | --- | --- |
+| `ModelTier.Thinking` | Opus 4.8 → 4.7 → 4.6 → 4.5 → 4.1 | 5.5 Pro | 3.1 Pro → 3 Pro → 2.5 Pro | Llama 4 Maverick, GPT-OSS 120B, Llama 3.1 405B |
+| `ModelTier.Balanced` | Sonnet 4.6 → 4.5 → 4 | 5.5 → 5.4 → 5.2 → 5.1 → 5 | 3.5 Flash → 3 Flash → 2.5 Flash | Llama 3.3 70B, Qwen3-Next 80B, Qwen35 122B |
+| `ModelTier.Fast` | Haiku 4.5 | 5.4 mini → 5.4 nano → 5 mini → 5 nano | 3.1 Flash Lite | GPT-OSS 20B, Gemma 3 12B, Llama 3.1 8B |
 
-Pin a regulated workspace to an approved subset (or insert custom
-endpoints in front of the catalogue) via
-`config.defaultModelFallbacks`:
+#### Pick a tier-appropriate model for one agent
+
+Use `modelForTier(tier)` to grab the top of a tier as a string; the
+agent-step resolver fuzzy-matches it against the live catalogue at
+call time so it still works when the literal top pick isn't deployed.
+
+```ts
+import { createAgent, ModelTier, modelForTier } from "@dbx-tools/appkit-mastra";
+
+const classifier = createAgent({
+  instructions: "Classify this email into one of: billing, support, spam.",
+  model: modelForTier(ModelTier.Fast),
+});
+
+const planner = createAgent({
+  instructions: "Plan a multi-step data migration.",
+  model: modelForTier(ModelTier.Thinking),
+});
+```
+
+#### Bias the plugin-level fallback toward a tier
+
+`modelsForTier(tier)` returns the priority-ordered list for one tier;
+pass it to `defaultModelFallbacks` to scope the auto-resolver:
+
+```ts
+import { mastra, ModelTier, modelsForTier } from "@dbx-tools/appkit-mastra";
+
+mastra({
+  // All agents that omit `model` will land on a Fast-tier endpoint.
+  defaultModelFallbacks: modelsForTier(ModelTier.Fast),
+});
+```
+
+#### Pin a custom approved subset
+
+Mix in your own endpoint names (internal fine-tunes, regulated
+allowlists, etc) in front of the catalogue:
 
 ```ts
 mastra({

@@ -14,6 +14,7 @@ import {
   httpUtils,
   logUtils,
   pluginUtils,
+  projectUtils,
   stringUtils,
 } from "@dbx-tools/appkit-shared";
 ```
@@ -79,16 +80,25 @@ stringUtils.toIdentifierWithOptions({ maxLength: 12 }, "very long project name")
 // "very_long_43c1"  <- hash suffix when truncated
 ```
 
-## `commonUtils` - project name + memoize
+## `projectUtils` - project name + git-remote parsing
+
+```ts
+import { projectUtils } from "@dbx-tools/appkit-shared";
+
+// Discovers a stable name for the current project. Order:
+// 1. `package.json` name (root of an npm/bun workspace if applicable)
+// 2. Closest `git remote origin` repo name
+// 3. Process `cwd` basename
+const name = await projectUtils.name();
+
+// Strip "owner/" + ".git" from a remote URL.
+projectUtils.parseGitRemote("git@github.com:org/my-repo.git"); // "my-repo"
+```
+
+## `commonUtils` - memoize
 
 ```ts
 import { commonUtils } from "@dbx-tools/appkit-shared";
-
-// Discovers a stable name for the current project. Order:
-// 1. `package.json` name
-// 2. Closest `git remote origin` repo name
-// 3. Process `cwd` basename
-const name = await commonUtils.projectName();
 
 // Memoize by all-args; sync results cache forever, async failures bust.
 const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));

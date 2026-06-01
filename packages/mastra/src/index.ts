@@ -20,4 +20,10 @@ export {
   type ResolveModelOptions,
   type ServingEndpointSummary,
 } from "./serving.js";
-export { FALLBACK_MODEL_IDS, FALLBACK_MODELS_BY_PROVIDER } from "./model.js";
+export {
+  FALLBACK_MODEL_IDS,
+  MODEL_CATALOG,
+  modelForTier,
+  modelsForTier,
+  ModelTier,
+} from "./model.js";

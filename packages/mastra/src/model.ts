@@ -38,48 +38,110 @@ import {
 } from "./serving.js";
 
 /**
- * Provider-bucketed Foundation Model API endpoints in descending
- * power order within each bucket. The resolver doesn't walk these
- * directly - it walks the interleaved {@link FALLBACK_MODEL_IDS}
- * below - but they're exported so callers can compose their own
- * priority lists on top of `MastraPluginConfig.defaultModelFallbacks`.
+ * Capability tiers for Databricks Foundation Model API endpoints.
+ *
+ * - {@link ModelTier.Thinking}: deepest reasoning / "thinking" models
+ *   (Claude Opus, GPT-5.5 Pro, Gemini Pro, Llama 4 Maverick, etc).
+ *   Highest cost and latency; reserve for hard multi-step reasoning.
+ * - {@link ModelTier.Balanced}: cost/latency sweet spot for general
+ *   agent work (Claude Sonnet, GPT-5.x, Gemini Flash, Llama 3.3 70B).
+ *   The right default for most agents.
+ * - {@link ModelTier.Fast}: cheap and quick; classification, routing,
+ *   tool-arg extraction, simple summarisation (Claude Haiku, GPT-5
+ *   mini/nano, Gemini Flash Lite, GPT-OSS 20B, Llama 3.1 8B).
+ *
+ * String enum so the value is the slug we use in cache keys, logs,
+ * and as the value users see in serialized configs.
  */
-export const FALLBACK_MODELS_BY_PROVIDER = {
-  /** Anthropic Claude family (closed; flagship reasoning). */
-  claude: [
-    "databricks-claude-opus-4-8",
-    "databricks-claude-opus-4-7",
-    "databricks-claude-opus-4-6",
-    "databricks-claude-opus-4-5",
-    "databricks-claude-opus-4-1",
-    "databricks-claude-sonnet-4-6",
-    "databricks-claude-sonnet-4-5",
-    "databricks-claude-sonnet-4",
-    "databricks-claude-haiku-4-5",
-  ],
-  /** OpenAI GPT-5 family (closed; "ChatGPT" on Databricks FMAPI). */
-  gpt: [
-    "databricks-gpt-5-5-pro",
-    "databricks-gpt-5-5",
-    "databricks-gpt-5-4",
-    "databricks-gpt-5",
-  ],
-  /** Open weights (widest regional / SKU availability). */
-  openSource: [
-    "databricks-llama-4-maverick",
-    "databricks-meta-llama-3-3-70b-instruct",
-    "databricks-gpt-oss-120b",
-    "databricks-gpt-oss-20b",
-    "databricks-qwen35-122b-a10b",
-    "databricks-meta-llama-3-1-8b-instruct",
-  ],
-} as const satisfies Record<string, readonly string[]>;
+export enum ModelTier {
+  Thinking = "thinking",
+  Balanced = "balanced",
+  Fast = "fast",
+}
+
+/**
+ * Catalogue of Databricks-hosted Foundation Model API endpoints,
+ * grouped by capability {@link ModelTier} and then by provider. Each
+ * inner array is priority-ordered (most powerful first within the
+ * same provider+tier).
+ *
+ * Provider buckets:
+ *
+ * - `claude`: Anthropic Claude family (closed; flagship reasoning).
+ * - `gpt`: OpenAI GPT-5 family (closed; "ChatGPT" on Databricks FMAPI).
+ * - `gemini`: Google Gemini family (closed; multimodal + web-search).
+ * - `openSource`: open-weights models (widest regional / SKU availability).
+ *
+ * The list is curated by hand; refresh from the Databricks "supported
+ * foundation models" doc when new endpoints land.
+ */
+export const MODEL_CATALOG = {
+  [ModelTier.Thinking]: {
+    claude: [
+      "databricks-claude-opus-4-8",
+      "databricks-claude-opus-4-7",
+      "databricks-claude-opus-4-6",
+      "databricks-claude-opus-4-5",
+      "databricks-claude-opus-4-1",
+    ],
+    gpt: ["databricks-gpt-5-5-pro"],
+    gemini: [
+      "databricks-gemini-3-1-pro",
+      "databricks-gemini-3-pro",
+      "databricks-gemini-2-5-pro",
+    ],
+    openSource: [
+      "databricks-llama-4-maverick",
+      "databricks-gpt-oss-120b",
+      "databricks-meta-llama-3-1-405b-instruct",
+    ],
+  },
+  [ModelTier.Balanced]: {
+    claude: [
+      "databricks-claude-sonnet-4-6",
+      "databricks-claude-sonnet-4-5",
+      "databricks-claude-sonnet-4",
+    ],
+    gpt: [
+      "databricks-gpt-5-5",
+      "databricks-gpt-5-4",
+      "databricks-gpt-5-2",
+      "databricks-gpt-5-1",
+      "databricks-gpt-5",
+    ],
+    gemini: [
+      "databricks-gemini-3-5-flash",
+      "databricks-gemini-3-flash",
+      "databricks-gemini-2-5-flash",
+    ],
+    openSource: [
+      "databricks-meta-llama-3-3-70b-instruct",
+      "databricks-qwen3-next-80b-a3b-instruct",
+      "databricks-qwen35-122b-a10b",
+    ],
+  },
+  [ModelTier.Fast]: {
+    claude: ["databricks-claude-haiku-4-5"],
+    gpt: [
+      "databricks-gpt-5-4-mini",
+      "databricks-gpt-5-4-nano",
+      "databricks-gpt-5-mini",
+      "databricks-gpt-5-nano",
+    ],
+    gemini: ["databricks-gemini-3-1-flash-lite"],
+    openSource: [
+      "databricks-gpt-oss-20b",
+      "databricks-gemma-3-12b",
+      "databricks-meta-llama-3-1-8b-instruct",
+    ],
+  },
+} as const satisfies Record<ModelTier, Record<string, readonly string[]>>;
 
 /**
  * Round-robin zip: take one from each input list in order, skipping
- * lists that have already been exhausted. Used to interleave the
- * closed-source provider buckets so the resolver alternates between
- * vendors instead of draining one before trying the next.
+ * lists that have already been exhausted. Used to interleave provider
+ * buckets within a tier so the resolver alternates between vendors
+ * instead of draining one before trying the next.
  *
  * Example: `interleave(["a1","a2","a3"], ["b1","b2"])` ->
  * `["a1","b1","a2","b2","a3"]`.
@@ -96,6 +158,54 @@ function interleave<T>(...lists: readonly (readonly T[])[]): T[] {
 }
 
 /**
+ * Priority-ordered model ids for a single capability {@link ModelTier},
+ * interleaved across providers so a workspace missing the top Claude
+ * still lands on a flagship GPT / Gemini on the next probe.
+ *
+ * Provider order within the interleave: Claude, GPT, Gemini, then the
+ * open-weights tail appended verbatim as the universal floor (widest
+ * regional availability).
+ *
+ * @example
+ * ```ts
+ * mastra({
+ *   defaultModelFallbacks: modelsForTier(ModelTier.Fast),
+ * });
+ * ```
+ */
+export function modelsForTier(tier: ModelTier): readonly string[] {
+  const bucket = MODEL_CATALOG[tier];
+  return [
+    ...interleave(bucket.claude, bucket.gpt, bucket.gemini),
+    ...bucket.openSource,
+  ];
+}
+
+/**
+ * Top model id at the given {@link ModelTier}. Sync; the agent-step
+ * resolver fuzzy-matches it against the workspace catalogue at call
+ * time, so this works even when the literal top pick isn't deployed.
+ *
+ * Use when wiring a tier-appropriate model into an agent definition:
+ *
+ * @example
+ * ```ts
+ * const classifier = createAgent({
+ *   instructions: "Classify this email",
+ *   model: modelForTier(ModelTier.Fast),  // cheap, quick
+ * });
+ *
+ * const planner = createAgent({
+ *   instructions: "Plan a multi-step migration",
+ *   model: modelForTier(ModelTier.Thinking),  // deep reasoning
+ * });
+ * ```
+ */
+export function modelForTier(tier: ModelTier): string {
+  return modelsForTier(tier)[0]!;
+}
+
+/**
  * Last-resort model ids used when neither `config.defaultModel`,
  * per-agent `model`, nor `DATABRICKS_SERVING_ENDPOINT_NAME` is set.
  *
@@ -103,39 +213,20 @@ function interleave<T>(...lists: readonly (readonly T[])[]): T[] {
  * actually present in the workspace's `/serving-endpoints` listing
  * wins. Workspaces vary - not every region / SKU has every model,
  * and the list of Foundation Model APIs evolves quickly - so the
- * resolver degrades all the way down to a small commodity Llama
- * before giving up.
+ * resolver degrades all the way from "best thinking model" down to
+ * "smallest commodity Llama" before giving up.
  *
- * Closed-source tiers are **interleaved** (Claude -> GPT -> Claude
- * -> GPT -> ...) so a workspace missing Claude Opus still gets a
- * top-shelf model on the *second* probe (GPT-5.5 Pro) instead of
- * having to descend the entire Claude ladder before another vendor
- * is tried. Open-weights models are appended verbatim at the end as
- * the universal floor.
- *
- * Concretely:
- *
- * 1. claude-opus-4-8, gpt-5-5-pro,
- *    claude-opus-4-7, gpt-5-5,
- *    claude-opus-4-6, gpt-5-4,
- *    claude-opus-4-5, gpt-5,
- *    claude-opus-4-1,
- *    claude-sonnet-4-6,
- *    claude-sonnet-4-5,
- *    claude-sonnet-4,
- *    claude-haiku-4-5,    (Claude continues solo after GPT-5 list runs out)
- * 2. llama-4-maverick, llama-3.3-70b, gpt-oss-120b, gpt-oss-20b,
- *    qwen35-122b, llama-3.1-8b   (open-weights tail in raw order)
- *
- * Override the entire list via `MastraPluginConfig.defaultModelFallbacks`
- * (e.g. to pin a regulated workspace to a specific approved subset).
+ * Built by chaining the per-tier interleaves (Thinking -> Balanced
+ * -> Fast); within each tier the providers are round-robin-zipped
+ * (Claude, GPT, Gemini, then open-weights tail). Override the entire
+ * list via `MastraPluginConfig.defaultModelFallbacks` (e.g. to pin a
+ * regulated workspace to a specific approved subset, or to bias the
+ * priority toward a particular tier).
  */
 export const FALLBACK_MODEL_IDS: readonly string[] = [
-  ...interleave(
-    FALLBACK_MODELS_BY_PROVIDER.claude,
-    FALLBACK_MODELS_BY_PROVIDER.gpt,
-  ),
-  ...FALLBACK_MODELS_BY_PROVIDER.openSource,
+  ...modelsForTier(ModelTier.Thinking),
+  ...modelsForTier(ModelTier.Balanced),
+  ...modelsForTier(ModelTier.Fast),
 ];
 
 /** Optional overrides accepted by {@link buildModel}. */
