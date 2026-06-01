@@ -24,7 +24,7 @@ import { CacheManager, type getExecutionContext } from "@databricks/appkit";
 import { stringUtils } from "@dbx-tools/appkit-shared";
 import Fuse from "fuse.js";
 
-import type { ServingEndpointSummary } from "../../mastra-shared/src/protocol.js";
+import type { ServingEndpointSummary } from "@dbx-tools/appkit-mastra-shared";
 import type { MastraPluginConfig } from "./config.js";
 
 export type { ServingEndpointSummary };

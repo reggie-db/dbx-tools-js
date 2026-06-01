@@ -44,7 +44,7 @@ import { Mastra } from "@mastra/core/mastra";
 import express from "express";
 
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
-import type { MastraClientConfig } from "../../mastra-shared/src/protocol.js";
+import type { MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 import type { MastraPluginConfig } from "./config.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";

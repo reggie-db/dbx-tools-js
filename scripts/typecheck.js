@@ -11,14 +11,38 @@ const workspaces = packageJson.workspaces ?? [];
 console.log(`Found ${workspaces.length} workspace patterns`);
 console.log(workspaces);
 
-function expandWorkspace(pattern) {
-  if (!pattern.includes("*")) {
-    const exists = fs.existsSync(pattern);
-    console.log(`[workspace] ${pattern} ${exists ? "(found)" : "(missing)"}`);
-    return exists ? [pattern] : [];
+function findTsconfigs(dir) {
+  if (!fs.existsSync(dir)) {
+    return [];
   }
 
-  const base = pattern.slice(0, pattern.indexOf("*") - 1);
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.startsWith("tsconfig") &&
+        entry.name.endsWith(".json"),
+    )
+    .map((entry) => path.join(dir, entry.name))
+    .sort();
+}
+
+function expandWorkspace(pattern) {
+  if (!pattern.includes("*")) {
+    const tsconfigs = findTsconfigs(pattern);
+
+    console.log(
+      `[workspace] ${pattern} ${
+        tsconfigs.length ? `(${tsconfigs.length} tsconfig(s))` : "(no tsconfigs)"
+      }`,
+    );
+
+    return tsconfigs;
+  }
+
+  const starIndex = pattern.indexOf("*");
+  const base = pattern.substring(0, starIndex - 1);
 
   console.log(`[workspace] Expanding ${pattern}`);
 
@@ -29,41 +53,66 @@ function expandWorkspace(pattern) {
 
   return fs
     .readdirSync(base, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => path.join(base, d.name))
-    .filter((dir) => {
-      const hasTsconfig = fs.existsSync(path.join(dir, "tsconfig.json"));
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const dir = path.join(base, entry.name);
+      const tsconfigs = findTsconfigs(dir);
 
-      console.log(`  ${dir} ${hasTsconfig ? "(tsconfig found)" : "(skipped)"}`);
+      console.log(
+        `  ${dir} ${
+          tsconfigs.length ? `(${tsconfigs.length} tsconfig(s))` : "(skipped)"
+        }`,
+      );
 
-      return hasTsconfig;
+      return tsconfigs;
     });
 }
 
-const projects = workspaces.flatMap(expandWorkspace);
+const configs = workspaces.flatMap(expandWorkspace);
 
-console.log("\nProjects to typecheck:");
-for (const project of projects) {
-  console.log(`  - ${project}`);
+console.log("\nConfigs to typecheck:");
+
+for (const config of configs) {
+  console.log(`  - ${config}`);
 }
 
-console.log("");
+if (configs.length === 0) {
+  console.warn("\nNo tsconfig files found.");
+  process.exit(0);
+}
 
-for (const project of projects) {
-  console.log(`\n=== Typechecking ${project} ===`);
+const failures = [];
+
+for (const config of configs) {
+  console.log(`\n=== Typechecking ${config} ===`);
 
   const result = spawnSync(
     process.platform === "win32" ? "bunx.cmd" : "bunx",
-    ["tsc", "--noEmit", "-p", project],
-    { stdio: "inherit" },
+    ["tsc", "--noEmit", "-p", config],
+    {
+      stdio: "inherit",
+    },
   );
 
   if (result.status !== 0) {
-    console.error(`\n✗ Typecheck failed: ${project}`);
-    process.exit(result.status ?? 1);
+    failures.push(config);
+    console.error(`✗ Failed: ${config}`);
+  } else {
+    console.log(`✓ Passed: ${config}`);
   }
-
-  console.log(`✓ Passed: ${project}`);
 }
 
-console.log(`\n✓ All ${projects.length} projects passed`);
+console.log("\n=== Summary ===");
+
+if (failures.length === 0) {
+  console.log(`✓ All ${configs.length} tsconfig(s) passed`);
+  process.exit(0);
+}
+
+console.error(`✗ ${failures.length} of ${configs.length} failed:\n`);
+
+for (const config of failures) {
+  console.error(`  - ${config}`);
+}
+
+process.exit(1);

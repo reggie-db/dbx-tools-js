@@ -18,5 +18,10 @@
   "peerDependencies": {
     "@databricks/appkit": "^0.35",
     "express": "^5"
+  },
+  "devDependencies": {
+    "@types/express": "^5",
+    "@types/pg": "^8",
+    "express": "^5"
   }
 }
