@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import type { UIMessage } from "ai";
 import { ChatView, type ChatStatus } from "@/components/chat-view";
-import { DEFAULT_AGENT_ID, mastraClient } from "@/lib/mastra-client";
+import { useMastraClient, useMastraConfig } from "@/lib/mastra-client";
 
 // Same chat UI as pages/Chat.tsx, but instead of pointing useChat at the
 // chatRoute() endpoint, we drive messages by hand using @mastra/client-js.
@@ -18,6 +18,8 @@ const makeUserMessage = (text: string): UIMessage => ({
 });
 
 const Stream = () => {
+  const mastraClient = useMastraClient();
+  const { defaultAgent } = useMastraConfig();
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("ready");
   // We mirror `messages` into a ref so sendMessage / regenerate can read
@@ -63,7 +65,7 @@ const Stream = () => {
       };
 
       try {
-        const agent = mastraClient.getAgent(DEFAULT_AGENT_ID);
+        const agent = mastraClient.getAgent(defaultAgent);
         const messagesForAgent = history.flatMap((m) =>
           m.parts
             .filter((p): p is { type: "text"; text: string } => p.type === "text")
@@ -101,7 +103,7 @@ const Stream = () => {
         setStatus("error");
       }
     },
-    [writeMessages],
+    [writeMessages, mastraClient, defaultAgent],
   );
 
   const sendMessage = useCallback<React.ComponentProps<typeof ChatView>["sendMessage"]>(

@@ -1,22 +1,18 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
+import { useMemo } from "react";
 import { ChatView } from "@/components/chat-view";
-import { DEFAULT_AGENT_ID } from "@/lib/mastra-client";
-
-// One transport instance for the lifetime of the module. A fresh
-// `DefaultChatTransport` on every render would change `useChat`'s
-// options identity and can re-trigger the stream request (duplicate
-// POSTs and duplicate `buildModel()` logs on the server).
-const mastraChatTransport = new DefaultChatTransport({
-  // chatRoute path is `/route/chat/:agentId`; plugin is mounted at
-  // `/api/mastra`. Agent id must match a key in `Mastra({ agents })`.
-  api: `/api/mastra/route/chat/${DEFAULT_AGENT_ID}`,
-});
+import { useChatUrl } from "@/lib/mastra-client";
 
 const Chat = () => {
-  const { messages, sendMessage, status, regenerate } = useChat({
-    transport: mastraChatTransport,
-  });
+  const api = useChatUrl();
+  // One transport instance per resolved URL. A fresh
+  // `DefaultChatTransport` on every render would change `useChat`'s
+  // options identity and can re-trigger the stream request (duplicate
+  // POSTs and duplicate `buildModel()` logs on the server).
+  const transport = useMemo(() => new DefaultChatTransport({ api }), [api]);
+
+  const { messages, sendMessage, status, regenerate } = useChat({ transport });
 
   return (
     <ChatView

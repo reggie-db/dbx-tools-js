@@ -18,9 +18,10 @@ import { Agent } from "@mastra/core/agent";
 import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
 import type { Tool } from "@mastra/core/tools";
-import type { Memory } from "@mastra/memory";
+import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import type { MastraPluginConfig } from "./config.js";
+import type { MemoryBuilder } from "./memory.js";
 import { buildModel } from "./model.js";
 
 /**
@@ -252,12 +253,63 @@ export interface MastraAgentDefinition {
    */
   tools?: MastraTools | MastraToolsFn;
   /**
-   * Per-agent memory override. Defaults to `true` (use the plugin-level
-   * Mastra `Memory` when configured). Set `false` for a stateless
-   * agent; ignored when the plugin has no memory configured.
+   * Per-agent semantic recall (PgVector) override. Cascades from
+   * `config.memory`; the agent value wins when set.
+   *
+   * - `undefined` (default): inherit `config.memory`. When that's
+   *   enabled, the agent **shares the plugin-level singleton `PgVector`
+   *   instance** (cross-agent semantic recall across the same index).
+   * - `false`: disable semantic recall for this agent only.
+   * - `true`: enable using the shared singleton (same as default when
+   *   plugin memory is enabled; useful to opt in when plugin disabled).
+   * - {@link MastraMemoryConfig} object: dedicated `PgVector` for this
+   *   agent (private recall index). Bypasses the shared singleton.
    */
-  memory?: boolean;
+  memory?: boolean | MastraMemoryConfigOverride;
+  /**
+   * Per-agent thread/message storage (`PostgresStore`) override.
+   * Cascades from `config.storage`; the agent value wins when set.
+   *
+   * - `undefined` (default): inherit `config.storage`. When that's
+   *   enabled, the agent gets its **own per-agent `PostgresStore`**
+   *   keyed by `schemaName: "mastra_<agentId>"` so threads and
+   *   messages stay isolated between agents in the same database.
+   * - `false`: disable storage for this agent only (purely in-memory).
+   * - `true`: enable with the per-agent default schema.
+   * - {@link MastraStorageConfigOverride} object: dedicated
+   *   `PostgresStore` config (custom schema, connection, etc.).
+   */
+  storage?: boolean | MastraStorageConfigOverride;
 }
+
+/**
+ * Distributive `Omit` so unions in `PostgresStoreConfig` /
+ * `PgVectorConfig` keep their discriminants after the override types
+ * strip `id`. The built-in `Omit` collapses unions to one shape with
+ * common fields only, which loses the connection-style discriminants.
+ */
+type DistributiveOmit<T, K extends keyof never> = T extends unknown
+  ? Omit<T, K>
+  : never;
+
+/**
+ * `PostgresStoreConfig` minus `id` - per-agent overrides accept any
+ * Mastra-supported storage shape. `id` is filled in automatically
+ * from the agent registry key so traces stay stable.
+ */
+export type MastraStorageConfigOverride = DistributiveOmit<
+  PostgresStoreConfig,
+  "id"
+> & { id?: string };
+
+/**
+ * `PgVectorConfig` minus `id` - per-agent overrides accept any
+ * Mastra-supported vector shape. `id` is filled in automatically
+ * from the agent registry key.
+ */
+export type MastraMemoryConfigOverride = DistributiveOmit<PgVectorConfig, "id"> & {
+  id?: string;
+};
 
 /** Output of {@link buildAgents}: resolved agents plus the default id. */
 export interface BuiltAgents {
@@ -296,10 +348,10 @@ Rules:
 export async function buildAgents(opts: {
   config: MastraPluginConfig;
   context: pluginUtils.PluginContextLike | undefined;
-  memory?: Memory;
+  memoryBuilder?: MemoryBuilder;
   log: logUtils.Logger;
 }): Promise<BuiltAgents> {
-  const { config, context, memory, log } = opts;
+  const { config, context, memoryBuilder, log } = opts;
   const definitions = resolveDefinitions(config);
   const ids = Object.keys(definitions);
   const defaultAgentId = config.defaultAgent ?? ids[0] ?? FALLBACK_AGENT_ID;
@@ -310,7 +362,7 @@ export async function buildAgents(opts: {
 
   for (const [id, def] of Object.entries(definitions)) {
     const tools = await resolveTools(def.tools, plugins, ambientTools);
-    const useMemory = def.memory ?? true;
+    const memory = memoryBuilder?.forAgent(id, def);
     agents[id] = new Agent({
       id,
       name: def.name ?? id,
@@ -318,7 +370,7 @@ export async function buildAgents(opts: {
       instructions: def.instructions,
       model: resolveModel(config, def.model),
       tools,
-      ...(useMemory && memory ? { memory } : {}),
+      ...(memory ? { memory } : {}),
     });
   }
 

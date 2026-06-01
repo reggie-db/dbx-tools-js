@@ -14,9 +14,12 @@
  *   {@link buildModel} from `./model.js`. Per-agent `model` overrides
  *   (`AgentConfig["model"]` or a `modelId` string) flow through
  *   {@link buildAgents}.
- * - Memory / storage: when `storage` or `memory` is enabled, uses the
- *   sibling `lakebase` plugin pool through {@link buildMemory} from
- *   `./memory.js`. Both default to off.
+ * - Memory / storage: per-agent, built by {@link createMemoryBuilder}
+ *   from `./memory.js`. Both auto-default to `true` when the
+ *   `lakebase` plugin is registered (unless the caller passed
+ *   `false` or a custom config). Storage namespaces per agent via
+ *   `schemaName: "mastra_<agentId>"`; the vector store is a single
+ *   shared singleton across every agent.
  * - Server: the Express subapp wiring lives in `./server.js`.
  * - HTTP: AppKit mounts this plugin under `/api/mastra`. `chatRoute`
  *   is registered at `/route/chat` (bound to `config.defaultAgent` or
@@ -41,8 +44,9 @@ import { Mastra } from "@mastra/core/mastra";
 import express from "express";
 
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
+import type { MastraClientConfig } from "./client.js";
 import type { MastraPluginConfig } from "./config.js";
-import { buildMemory, needsLakebase, resolveLakebasePool } from "./memory.js";
+import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import {
   clearServingEndpointsCache,
@@ -106,9 +110,24 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // Wait until sibling plugins (e.g. `lakebase`) finish `setup()` so
     // the lakebase pool is valid when storage/memory are enabled.
     this.context?.onLifecycle("setup:complete", async () => {
+      this.applyLakebaseAutoDefaults();
       this.log.info("setup:complete");
       await this.buildAgentAndServer();
     });
+  }
+
+  /**
+   * When the `lakebase` plugin is registered, auto-enable `storage`
+   * and `memory` unless the caller opted out explicitly (`false` or a
+   * custom config object). Run after `setup:complete` so the lookup
+   * is reliable: any plugin that registers itself synchronously is
+   * already in the registry by the time this fires.
+   */
+  private applyLakebaseAutoDefaults(): void {
+    const hasLakebase = pluginUtils.instance(this.context, lakebase) !== undefined;
+    if (!hasLakebase) return;
+    if (this.config.storage === undefined) this.config.storage = true;
+    if (this.config.memory === undefined) this.config.memory = true;
   }
 
   override exports() {
@@ -156,10 +175,22 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   }
 
   override clientConfig(): Record<string, unknown> {
-    return {
+    // AppKit mounts every plugin at `/api/<plugin.name>`. `this.name`
+    // honors `config.name` overrides, so the published paths stay
+    // accurate if someone remounts the plugin under a custom id.
+    // Return widens to `Record<string, unknown>` to satisfy the
+    // base-class signature; consumers read it through the typed
+    // `MastraClientConfig` shape via `usePluginClientConfig<...>(...)`.
+    const basePath = `/api/${this.name}`;
+    const config: MastraClientConfig = {
+      basePath,
+      chatPath: `${basePath}/route/chat`,
+      chatPathTemplate: `${basePath}/route/chat/:agentId`,
+      modelsPath: `${basePath}/models`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
     };
+    return config as unknown as Record<string, unknown>;
   }
 
   override injectRoutes(router: IAppRouter): void {
@@ -194,10 +225,12 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   }
 
   private async buildAgentAndServer(): Promise<void> {
-    // Resolve the Lakebase pool once. Both PostgresStore and PgVector
-    // share it; see `./memory.js` for the build details.
-    const memory = needsLakebase(this.config)
-      ? buildMemory(this.config, resolveLakebasePool(this.context, this.config))
+    // Per-agent memory factory. The builder resolves the Lakebase pool
+    // lazily (on first agent that actually needs storage / vector) and
+    // caches both the pool and the shared `PgVector` singleton so
+    // registering N agents stays cheap. See `./memory.js`.
+    const memoryBuilder = needsLakebase(this.config)
+      ? createMemoryBuilder(this.config, this.context)
       : undefined;
 
     // Build every agent declared in `config.agents` (or the built-in
@@ -209,7 +242,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     this.built = await buildAgents({
       config: this.config,
       context: this.context,
-      memory,
+      memoryBuilder,
       log: this.log,
     });
 
