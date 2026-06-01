@@ -67,33 +67,35 @@ bun run create shared <slug>   # types-only package stub
 
 ## Release
 
-Publishable packages use Changesets. Workspace members under `@dbx-tools/*` are
-configured as `fixed` in [`.changeset/config.json`](.changeset/config.json) so
-they version together. Releases are **tag-driven**: pushing a `v<version>` tag
-to `origin` fires the [release workflow](.github/workflows/release.yml), which
-builds every publishable workspace and runs `bunx changeset publish` against
-npm. No PR-based versioning bot, no auto-publish on push to `main` - the tag
-push is the deliberate signal that this commit ships.
+Publishable packages under `@dbx-tools/*` are configured as `fixed` in
+[`.changeset/config.json`](.changeset/config.json), so they version together.
+Releases are **tag-driven**: pushing a `v<version>` tag to `origin` fires the
+[release workflow](.github/workflows/release.yml), which builds every
+publishable workspace and runs `bunx changeset publish` against npm. No
+PR-based versioning bot, no auto-publish on push to `main` - the tag push is
+the deliberate signal that this commit ships.
 
 ### Per-release flow
 
 ```bash
-# 1. Record what's changing.
-bun changeset
-#    pick packages + bump level, write a one-liner summary
-
-# 2. Apply the changeset: bumps every fixed @dbx-tools/* package's version
-#    and regenerates CHANGELOG.md entries. Commit the result.
-bun run version
-git commit -am "chore: version packages"
-git push origin main
-
-# 3. Tag the version-bump commit and push the tag. The script reads the
-#    bumped version from the workspace, refuses to tag on a dirty tree or
-#    when HEAD is ahead of origin, then creates and pushes v<version>.
-bun run tag
-#    optionally: bun run tag --dry-run   to preview
+# Working tree must be clean and HEAD pushed to origin. Then:
+bun run tag                # patch bump (default)
+bun run tag minor          # minor bump
+bun run tag major          # major bump
+bun run tag --dry-run      # preview without writing or pushing
 ```
+
+`scripts/tag.ts` bumps the version in every publishable `packages/*/package.json`
+(they're fixed, so they always bump together), commits the bump as
+`chore: release v<version>`, pushes the commit, then creates and pushes the
+`v<version>` tag.
+
+The script also prepares an AI-ready prompt (commit log + diff stat since the
+previous tag) and hands the whole context to a `releaseNotes()` hook inside
+`scripts/tag.ts`. Plug in whatever model you want (Cursor CLI, OpenAI, Claude,
+local, ...). Return a string to use as the annotated tag's message body, or
+`null` to fall back to a bare `Release v<version>` message. The hook is a no-op
+stub by default; if it throws, the script logs the error and falls back.
 
 The tag push triggers the workflow. Build + publish typically takes ~2 minutes
 on `ubuntu-latest`.
