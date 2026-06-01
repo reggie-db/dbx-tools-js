@@ -36,22 +36,14 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pMemoize from "p-memoize";
-import { Agent, AgentConfig } from "@mastra/core/agent";
-
+import { Config, serving, WorkspaceClient } from "@databricks/sdk-experimental";
 type Bump = "major" | "minor" | "patch";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = resolve(ROOT, "packages");
 
-const getAgent = pMemoize(async (agentConfig?: AgentConfig) => {
-  const id = crypto.randomUUID();
-  return new Agent({
-    id: id,
-    name: `Agent ${id}`,
-    instructions: "You are a code assistant.",
-    model: "databricks-qwen3-embedding-0-6b",
-    ...agentConfig,
-  });
+const getWorkspaceClient = pMemoize(async () => {
+  return new WorkspaceClient({});
 });
 
 interface PackageJson {
@@ -180,8 +172,10 @@ interface ReleaseNotesContext {
  * CLI, OpenAI, Claude, local llama, ...) and return the raw markdown.
  * If anything goes wrong, catch internally and return null.
  */
-async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
-  const agent = await getAgent();
+async function releaseNotes(
+  ctx: ReleaseNotesContext,
+  model?: string,
+): Promise<string | null> {
   const prompt = `
   Generate markdown release notes for the following tag.
   
@@ -193,9 +187,25 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
   - No em dashes
   
   Output the release notes only.
-          `.trim();
-  const response = await agent.generate([prompt, ctx]);
-  return response.text;
+
+  Context:
+  ${JSON.stringify(ctx)}`.trim();
+  const client = await getWorkspaceClient();
+  const response = await client.servingEndpoints.query({
+    name: model ?? "databricks-claude-opus-4-6",
+    messages: [
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+  });
+  return parseResponse(response);
+}
+
+function parseResponse(response: serving.QueryEndpointResponse): string | null {
+  const content = response?.choices?.[0]?.message?.content;
+  return content || null;
 }
 
 function buildReleaseNotesContext(
@@ -297,13 +307,7 @@ let aiSummary: string | null = null;
 if (notesContext.commits.length === 0) {
   console.log("(skipping release notes: no commits between previous tag and HEAD)");
 } else {
-  try {
-    aiSummary = await releaseNotes(notesContext);
-  } catch (err) {
-    console.log(
-      `(release notes hook threw, falling back: ${err instanceof Error ? err.message : err})`,
-    );
-  }
+  aiSummary = await releaseNotes(notesContext);
 }
 const tagMessage = aiSummary?.trim()
   ? `Release ${tag}\n\n${aiSummary.trim()}\n`
