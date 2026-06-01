@@ -1,13 +1,13 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+  cn,
+} from "@databricks/appkit-ui/react";
 import type { ComponentProps } from "react";
 
 export type ActionsProps = ComponentProps<"div">;

@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@databricks/appkit-ui/react";
 import { motion } from "motion/react";
 import { type CSSProperties, type ElementType, type JSX, memo, useMemo } from "react";
 

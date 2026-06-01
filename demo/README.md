@@ -5,7 +5,10 @@ Runnable Databricks App that wires up the AppKit plugins in this repo plus
 
 Generated from the AppKit `app init` template, then adapted to:
 
-- Mount the Mastra plugin alongside `server`, `serving`, and `lakebase`.
+- Mount the Mastra plugin alongside `server`, `genie`, and `lakebase`.
+- Spread the AppKit `genie` toolkit into the agent so the LLM can ask
+  the configured Genie space (`DATABRICKS_GENIE_SPACE_ID`) for SQL-
+  backed answers without any hand-written tool code.
 - Use the AI Elements chat UI on the client, hitting the Mastra-mounted
   `/api/mastra/route/chat` SSE endpoint via `@ai-sdk/react`'s `useChat`.
 
@@ -22,7 +25,7 @@ demo/
   tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # createApp({ plugins: [server(), serving(), lakebase(), mastra()] })
+    server.ts             # createApp({ plugins: [server(), genie(), lakebase(), mastra()] })
   client/
     index.html
     vite.config.ts        # React + Tailwind v4 + workspace `source` condition
@@ -46,8 +49,9 @@ without a publish or rebuild.
 
 ```bash
 cp .env.example .env
-# Fill in DATABRICKS_HOST, DATABRICKS_SERVING_ENDPOINT_NAME, and the
-# LAKEBASE_* / PG* values, then:
+# Fill in DATABRICKS_HOST, DATABRICKS_SERVING_ENDPOINT_NAME,
+# DATABRICKS_GENIE_SPACE_ID (genie() registers it as the `default`
+# alias automatically), and the LAKEBASE_* / PG* values, then:
 databricks auth login --host "$DATABRICKS_HOST"
 
 bun install                                 # from the repo root

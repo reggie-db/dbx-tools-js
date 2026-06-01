@@ -35,7 +35,7 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
-import { Loader } from "@/components/ai-elements/loader";
+import { Spinner } from "@databricks/appkit-ui/react";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import type { UIMessage } from "ai";
 
@@ -78,6 +78,22 @@ export const ChatView = ({
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const [webSearch, setWebSearch] = useState(false);
+
+  // Show the loader whenever the request is in flight but the assistant
+  // hasn't produced any visible text/reasoning yet. Without this the
+  // indicator disappears as soon as the status flips to "streaming",
+  // which can happen before the first text-delta or reasoning-delta
+  // chunk lands and leaves an empty gap on screen.
+  const lastMessage = messages.at(-1);
+  const lastIsAssistantWithContent =
+    lastMessage?.role === "assistant" &&
+    lastMessage.parts.some(
+      (part) =>
+        (part.type === "text" || part.type === "reasoning") &&
+        Boolean((part as { text?: string }).text),
+    );
+  const isWaiting =
+    (status === "submitted" || status === "streaming") && !lastIsAssistantWithContent;
 
   const handleSubmit = (message: PromptInputMessage) => {
     const hasText = Boolean(message.text);
@@ -181,7 +197,7 @@ export const ChatView = ({
                 </div>
               );
             })}
-            {status === "submitted" && <Loader />}
+            {isWaiting && <Spinner className="size-5 text-muted-foreground" />}
           </ConversationContent>
           <ConversationScrollButton />
         </Conversation>

@@ -53,6 +53,7 @@
     "radix-ui": "^1.4.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-router-dom": "^7",
     "react-syntax-highlighter": "^16.1.1",
     "shared": "^0.2.0",
     "shiki": "^4.0.2",

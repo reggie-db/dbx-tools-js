@@ -74,20 +74,24 @@ const Stream = () => {
 
         const stream = await agent.stream(messagesForAgent);
 
+        const markStreaming = () => {
+          if (started) return;
+          started = true;
+          setStatus("streaming");
+        };
+
         await stream.processDataStream({
           onChunk: async (chunk) => {
-            if (!started) {
-              started = true;
-              setStatus("streaming");
-            }
             switch (chunk.type) {
               case "text-delta":
                 assistantText += chunk.payload.text ?? "";
                 upsertAssistant();
+                markStreaming();
                 break;
               case "reasoning-delta":
                 assistantReasoning += chunk.payload.text ?? "";
                 upsertAssistant();
+                markStreaming();
                 break;
               case "error":
                 setStatus("error");

@@ -1,4 +1,4 @@
-import { createApp, lakebase, server } from "@databricks/appkit";
+import { createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
 import { createAgent, mastra, tool } from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
@@ -26,6 +26,8 @@ import { z } from "zod";
 // Required env vars (see .env.example):
 // - DATABRICKS_SERVING_ENDPOINT_NAME=databricks-claude-sonnet-4-6
 // - LAKEBASE_PROJECT (or LAKEBASE_ENDPOINT) - autopg fills in the rest
+// - DATABRICKS_GENIE_SPACE_ID - registered automatically as the
+//   `default` space by `genie()` when no `spaces` config is passed
 
 await autopg();
 
@@ -52,11 +54,21 @@ await autopg();
 // `GET /api/mastra/models` lists the cached catalogue.
 const support = createAgent({
   name: "support",
-  instructions: "You help customers with data and files.",
+  instructions:
+    "You help customers with data and files. When the user asks about " +
+    "business metrics or anything that would need a SQL query, call the " +
+    "Genie toolkit (`genie.sendMessage`) to query the configured Genie " +
+    "space; quote returned numbers exactly.",
   tools(plugins) {
     return {
-      // Spread sibling plugin toolkits (uncomment once `analytics()` /
-      // `files()` are added to the plugin list below):
+      // Auto-discovered AppKit `ToolProvider` plugins. `plugins.<name>`
+      // is `undefined` when the plugin isn't registered, so the `?.`
+      // guard keeps this safe to copy into other apps. Spread the
+      // built-in Genie toolkit so the agent can ask the Genie space
+      // (`DATABRICKS_GENIE_SPACE_ID`) for SQL-backed answers.
+      ...(plugins.genie?.toolkit() ?? {}),
+      // Spread other toolkits once registered (uncomment alongside
+      // adding `analytics()` / `files()` to the plugin list below):
       // ...plugins.analytics.toolkit(),
       // ...plugins.files.toolkit({ only: ["uploads.read"] }),
       get_weather: tool({
@@ -68,9 +80,23 @@ const support = createAgent({
   },
 });
 
+// Bind to loopback (`127.0.0.1`) locally so a dev server isn't
+// exposed on the LAN, but fall back to `0.0.0.0` when the Databricks
+// Apps platform is running us (it sets `DATABRICKS_APP_PORT` and
+// reaches the container over the LAN-bound interface, so anything
+// else won't accept traffic). Override with `FLASK_RUN_HOST=...` if
+// you need a different bind address for a local tunnel.
+const isDatabricksApp = Boolean(process.env.DATABRICKS_APP_PORT);
+const host = process.env.FLASK_RUN_HOST ?? (isDatabricksApp ? "0.0.0.0" : "127.0.0.1");
+
 await createApp({
   plugins: [
-    server(),
+    server({ host }),
+    // `genie()` with no config reads `DATABRICKS_GENIE_SPACE_ID` from
+    // the env and registers it as the `default` alias. Pass
+    // `genie({ spaces: { sales: "...", ops: "..." } })` to register
+    // multiple aliases; each becomes a separate tool the LLM can pick.
+    genie(),
     lakebase(),
     mastra({
       storage: true,

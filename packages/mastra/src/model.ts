@@ -25,6 +25,7 @@
  * the input verbatim and let Databricks return the canonical error.
  */
 
+import { commonUtils } from "@dbx-tools/appkit-shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
 
@@ -250,6 +251,7 @@ export async function buildModel(
   requestContext: RequestContext,
   overrides: BuildModelOverrides = {},
 ): Promise<MastraModelConfig> {
+  void setupFetchInterceptor();
   const user = requestContext.get(MASTRA_USER_KEY) as User;
   const clientConfig = user.executionContext.client.config;
   const host = (await clientConfig.getHost()).toString();
@@ -337,4 +339,145 @@ function pickFirstAvailable(
     if (present.has(candidate)) return candidate;
   }
   return fallbacks[0] ?? FALLBACK_MODEL_IDS[0]!;
+}
+
+/**
+ * OpenAI-flavoured chat message shape we need to mutate. We do not
+ * import the OpenAI / AI SDK types because both packages keep these
+ * fields under internal namespaces; the wire payload is the contract
+ * here and it's stable enough to inline.
+ */
+interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string;
+  tool_calls?: Array<{ id: string; type: string; function: unknown }>;
+  tool_call_id?: string;
+}
+
+/**
+ * Install a single shared `globalThis.fetch` wrapper for every POST to
+ * `/serving-endpoints/...`. The wrapper does two things:
+ *
+ *   1. Rewrites the outgoing `messages` array to repair Mastra/AI SDK
+ *      stream-replay quirks that Databricks-hosted Claude rejects (see
+ *      {@link sanitizeServingMessages}).
+ *   2. When `MASTRA_DEBUG_LLM=1`, dumps the (post-sanitize) JSON body
+ *      to stderr so 4xx debugging doesn't have to fight AI SDK's
+ *      `[Array]` formatter.
+ *
+ * Safe to call from any hot path: {@link commonUtils.memoize} ensures
+ * the wrapper is installed at most once per process, so subsequent
+ * calls collapse to a single cached promise even when
+ * {@link buildModel} fires on every agent step.
+ */
+const setupFetchInterceptor = commonUtils.memoize((): void => {
+  const debug = Boolean(process.env.MASTRA_DEBUG_LLM);
+  const original = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (async (input, init) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : (input as Request).url;
+    if (
+      url.includes("/serving-endpoints/") &&
+      init?.body &&
+      typeof init.body === "string"
+    ) {
+      const rewritten = rewriteServingBody(init.body);
+      if (rewritten !== init.body) {
+        init = { ...init, body: rewritten };
+      }
+      if (debug) {
+        try {
+          console.error("[mastra:llm-debug] -> POST", url);
+          console.error(JSON.stringify(JSON.parse(rewritten), null, 2));
+        } catch {
+          console.error("[mastra:llm-debug] -> POST", url, "(non-JSON body)");
+        }
+      }
+    }
+    return original(input, init);
+  }) as typeof globalThis.fetch;
+});
+
+/**
+ * Parse, sanitize, and re-serialize a `/serving-endpoints/...` POST
+ * body. Returns the original string verbatim when the body is not
+ * JSON, has no `messages`, or no rewrite was needed; this lets the
+ * caller skip the allocation of a new `init` object in the common
+ * pass-through case.
+ */
+function rewriteServingBody(body: string): string {
+  let parsed: { messages?: unknown };
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
+  }
+  if (!Array.isArray(parsed.messages)) return body;
+  const changed = sanitizeServingMessages(parsed.messages as ChatMessage[]);
+  return changed ? JSON.stringify(parsed) : body;
+}
+
+/**
+ * Repair a Mastra/AI SDK message replay that Databricks-hosted Claude
+ * rejects with `"This model does not support assistant message
+ * prefill. The conversation must end with a user message."`.
+ *
+ * The bug pattern: when an assistant turn streams text *and* a
+ * `tool_call`, the AI SDK persists them as two separate assistant
+ * entries (text-only and tool-call-only). On the next agent step the
+ * tool-call entry is replayed *before* the tool result and the
+ * text entry is replayed *after* it, so the conversation ends with a
+ * trailing assistant text message. Anthropic interprets that as a
+ * prefill request and rejects it on Databricks (the upstream Bedrock
+ * route disallows prefill).
+ *
+ * Fix: when the last message is an assistant text with no `tool_calls`
+ * and the chain immediately before it is `assistant(tool_calls=...)`
+ * followed only by `tool(...)` results, fold the trailing text back
+ * into the `content` of that opening assistant and drop the duplicate.
+ * The result is the canonical OpenAI shape
+ * `[..., user, assistant(text + tool_calls), tool(...)]` which both
+ * Databricks Claude and every other endpoint accept.
+ *
+ * Mutates `messages` in place; returns `true` when something changed
+ * so the caller knows whether to re-serialize.
+ */
+function sanitizeServingMessages(messages: ChatMessage[]): boolean {
+  if (messages.length < 2) return false;
+  const last = messages[messages.length - 1];
+  if (
+    !last ||
+    last.role !== "assistant" ||
+    (last.tool_calls && last.tool_calls.length > 0)
+  ) {
+    return false;
+  }
+
+  // Walk back through any contiguous tool-result messages to find the
+  // assistant turn that opened this tool sequence.
+  let i = messages.length - 2;
+  while (i >= 0 && messages[i]?.role === "tool") i--;
+  if (i < 0) return false;
+  const opener = messages[i];
+  if (
+    !opener ||
+    opener.role !== "assistant" ||
+    !opener.tool_calls ||
+    opener.tool_calls.length === 0
+  ) {
+    return false;
+  }
+
+  const lastContent = typeof last.content === "string" ? last.content : "";
+  const openerContent = typeof opener.content === "string" ? opener.content : "";
+  opener.content =
+    openerContent && lastContent
+      ? `${openerContent}\n\n${lastContent}`
+      : openerContent || lastContent;
+  messages.pop();
+  return true;
 }

@@ -19,7 +19,7 @@ example - swap `agents` for `mastra` and the imports stay structurally
 identical:
 
 ```ts
-import { analytics, createApp, files, server } from "@databricks/appkit";
+import { analytics, createApp, files, lakebase, server } from "@databricks/appkit";
 import { createAgent, mastra, tool } from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
 
@@ -39,13 +39,61 @@ const support = createAgent({
 });
 
 await createApp({
-  plugins: [server(), analytics(), files(), mastra({ agents: support })],
+  plugins: [
+    server(),
+    analytics(),
+    files(),
+    // Drop `lakebase()` in and `mastra` auto-enables per-agent thread
+    // storage (`schemaName: "mastra_<agentId>"`) plus a shared
+    // semantic-recall vector index. Skip it for a stateless agent.
+    lakebase(),
+    mastra({ agents: support }),
+  ],
 });
 ```
 
 `createAgent` is a no-op identity helper that anchors type inference.
 `tool` is the AppKit-shaped factory (`{ description, schema, execute }`)
 that auto-adapts to Mastra's `createTool` under the hood.
+
+Memory + storage cascades:
+
+- **No `lakebase()` registered** ▸ agent is fully stateless. No threads,
+  no recall. Same as `mastra()` alone.
+- **`lakebase()` registered, no `storage` / `memory` config** ▸ both
+  auto-turn on. Each agent gets its own `PostgresStore` schema; every
+  agent shares one `PgVector` recall index.
+- **Per-agent opt-out** ▸ `createAgent({ ..., memory: false, storage: false })`
+  for routing / one-shot agents that don't need history.
+- **Per-agent override** ▸ pass a `PgVectorConfig` / `PostgresStoreConfig`
+  object on the agent for a private index or a shared external schema.
+
+See [Memory + storage](#memory--storage) for the full cascade and worked
+examples.
+
+On the React side, never hardcode `/api/mastra/...`. Pull the published
+paths from `usePluginClientConfig` and use the `chatUrl` helper:
+
+```tsx
+import { usePluginClientConfig } from "@databricks/appkit-ui/react";
+import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra/client";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import { useMemo } from "react";
+
+function Chat() {
+  const config = usePluginClientConfig<MastraClientConfig>("mastra");
+  const transport = useMemo(
+    () => new DefaultChatTransport({ api: chatUrl(config) }),
+    [config],
+  );
+  const { messages, sendMessage } = useChat({ transport });
+  // ...
+}
+```
+
+See [Client wiring](#client-wiring) for the full `MastraClientConfig`
+shape and per-agent selection.
 
 ## Sensible defaults
 
