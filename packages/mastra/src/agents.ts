@@ -344,16 +344,21 @@ Rules:
  * Override globally via {@link MastraPluginConfig.styleInstructions}
  * (pass `false` to disable entirely, or a string to replace).
  */
-export const DEFAULT_STYLE_INSTRUCTIONS = `Output style:
-
-- Plain prose. Use hyphens (-) only. Never use em dashes (—) or en dashes (–).
-- Never use emojis.
-- Skip openers like "Great question", "Absolutely", "I'd be happy to help".
-- Skip closers like "Let me know if you have any questions".
-- Skip self-disclaimers ("I should mention", "It's important to note").
-- Answer directly. No preamble before the actual answer.
-- Use lists and headers only when they clarify a multi-part answer; not for short replies.
-- Quote numbers, code, identifiers, and tool output verbatim. Never paraphrase them.`;
+export const DEFAULT_STYLE_INSTRUCTIONS = [
+  "Output style:",
+  "",
+  "Use markdown formatting, including headings, lists, and code blocks.",
+  "Avoid lists and headers for short replies.",
+  "Plain prose.",
+  "Use hyphens (-) only. Never use em dashes or en dashes.",
+  "Never use emojis.",
+  "Skip openers like 'Great question', 'Absolutely', and 'I'd be happy to help'.",
+  "Skip closers like 'Let me know if you have any questions'.",
+  "Skip self-disclaimers like 'I should mention' and 'It's important to note'.",
+  "Answer directly.",
+  "Do not include a preamble before the actual answer.",
+  "Use lists and headers only when they clarify a multi-part answer.",
+].join("\n");
 
 /**
  * Resolve the style block to append to every agent's instructions.
@@ -364,6 +369,7 @@ function resolveStyleInstructions(config: MastraPluginConfig): string | null {
   if (typeof config.styleInstructions === "string") {
     return config.styleInstructions;
   }
+
   return DEFAULT_STYLE_INSTRUCTIONS;
 }
 
@@ -371,10 +377,7 @@ function resolveStyleInstructions(config: MastraPluginConfig): string | null {
  * Join an agent's bespoke instructions with the resolved style block.
  * Returns the bespoke text unchanged when the style block is disabled.
  */
-function composeInstructions(
-  agentInstructions: string,
-  style: string | null,
-): string {
+function composeInstructions(agentInstructions: string, style: string | null): string {
   if (!style) return agentInstructions;
   return `${agentInstructions.trimEnd()}\n\n${style}`;
 }

@@ -200,7 +200,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // the Mastra subapp. Errors propagate to Express's default error
     // handler via `next(err)` so callers see the real SDK message.
     router.get("/models", (req, res, next) => {
-      this.asUser(req)
+      this.userScopedSelf(req)
         .listModels()
         .then((endpoints) => res.json({ endpoints }))
         .catch(next);
@@ -208,8 +208,21 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
-      return this.asUser(req).mastraApp!(req, res, next);
+      return this.userScopedSelf(req).mastraApp!(req, res, next);
     });
+  }
+
+  /**
+   * Return `this.asUser(req)` when the request carries an OBO token,
+   * otherwise return `this` directly. Prevents the noisy AppKit warn
+   * (`asUser() called without user token in development mode. Skipping
+   * user impersonation.`) on every request in local dev where the
+   * browser never sends `x-forwarded-access-token`. Behavior is
+   * unchanged in production: a missing token always means a real OBO
+   * proxy call (and AppKit will throw upstream if that's wrong).
+   */
+  private userScopedSelf(req: express.Request): this {
+    return req.header("x-forwarded-access-token") ? (this.asUser(req) as this) : this;
   }
 
   /**

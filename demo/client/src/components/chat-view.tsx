@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { UIMessage } from "ai";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -254,19 +254,69 @@ const RoleAvatar = ({ role }: { role: UIMessage["role"] }) => (
  */
 const MARKDOWN_PLUGINS = [remarkGfm];
 
+/**
+ * Color-code numeric deltas like `+1.8%`, `-3.1%`, or `+0.6 pts` inside
+ * a single table cell. Matches the *first* signed numeric token in the
+ * cell; if no match, returns the children unchanged.
+ *
+ * Patterns recognized (case insensitive, allow comma/decimal):
+ *   +1.8%   -3.1%   +0.6 pts   -0.9 pts
+ */
+const DELTA_PATTERN = /^([+\u2212-])\s*\d[\d,.\s]*(?:%|\s*pts?)?$/i;
+
+function colorizeDelta(content: React.ReactNode): React.ReactNode {
+  if (typeof content !== "string") return content;
+  const text = content.trim();
+  const match = DELTA_PATTERN.exec(text);
+  if (!match) return content;
+  const sign = match[1];
+  if (sign === "+") return <span className="font-medium text-emerald-500">{content}</span>;
+  if (sign === "-" || sign === "\u2212")
+    return <span className="font-medium text-rose-500">{content}</span>;
+  return content;
+}
+
+const MARKDOWN_COMPONENTS = {
+  td: ({ children, ...rest }: React.HTMLAttributes<HTMLTableCellElement>) => {
+    const colored = Array.isArray(children)
+      ? children.map((c, i) => <React.Fragment key={i}>{colorizeDelta(c)}</React.Fragment>)
+      : colorizeDelta(children as React.ReactNode);
+    return <td {...rest}>{colored}</td>;
+  },
+};
+
 const AssistantMarkdown = ({ children }: { children: string }) => (
   <div
     className={cn(
       "prose prose-sm dark:prose-invert max-w-none break-words",
+      // Heading rhythm: enough weight + spacing to break up dense
+      // tabular content. `prose-sm` flattens these by default.
+      "prose-headings:font-semibold prose-headings:tracking-tight",
+      "prose-h1:text-lg prose-h1:mt-4 prose-h1:mb-2",
+      "prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2",
+      "prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1.5 prose-h3:text-muted-foreground prose-h3:uppercase prose-h3:tracking-wider",
+      // Code blocks.
       "[&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/60 [&_pre]:p-2",
       "[&_code]:rounded [&_code]:bg-muted/60 [&_code]:px-1 [&_code]:py-0.5",
       "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
-      "[&_table]:w-full [&_table]:border-collapse [&_table]:my-2",
-      "[&_th]:border [&_th]:border-border [&_th]:bg-muted/40 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left",
-      "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:align-top",
+      // Table chrome: rounded card, divided rows, sticky-feeling header,
+      // tabular-nums so 12,730.74 and 12,500.00 line up by column.
+      "[&_table]:w-full [&_table]:my-3 [&_table]:overflow-hidden [&_table]:rounded-md [&_table]:border [&_table]:border-border [&_table]:text-xs [&_table]:tabular-nums",
+      "[&_thead]:bg-muted/60",
+      "[&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground",
+      "[&_td]:px-3 [&_td]:py-1.5 [&_td]:align-top [&_td]:border-t [&_td]:border-border/60",
+      // Zebra striping on body rows for fast row tracking.
+      "[&_tbody_tr:nth-child(even)]:bg-muted/30",
+      // Right-align everything except the first (label) column.
+      "[&_th:not(:first-child)]:text-right [&_td:not(:first-child)]:text-right",
+      // Soft separators between sibling block content so paragraphs
+      // after a table don't crowd it.
+      "[&>p+table]:mt-2 [&>table+p]:mt-3",
     )}
   >
-    <Markdown remarkPlugins={MARKDOWN_PLUGINS}>{children}</Markdown>
+    <Markdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>
+      {children}
+    </Markdown>
   </div>
 );
 
