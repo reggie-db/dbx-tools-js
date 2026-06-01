@@ -52,22 +52,22 @@ type PluginInstanceOf<F extends PluginDataFactory> = InstanceType<
 // function. Typical AppKit factories return stable metadata; caching
 // avoids invoking `factory()` on every sibling lookup (which would
 // allocate a fresh descriptor tuple each time).
-const pluginDataCache = new WeakMap<PluginDataFactory, PluginData>();
+const dataCache = new WeakMap<PluginDataFactory, PluginData>();
 
 /**
  * Returns the static `{ plugin, name }` descriptor for an AppKit plugin
  * factory, caching per factory so repeated lookups do not allocate.
  */
-export function pluginData<F extends PluginDataFactory, D extends ReturnType<F>>(
+export function data<F extends PluginDataFactory, D extends ReturnType<F>>(
   factory: F,
 ): D {
-  const cached = pluginDataCache.get(factory);
+  const cached = dataCache.get(factory);
   if (cached !== undefined) {
     return cached as D;
   }
-  const data = factory();
-  pluginDataCache.set(factory, data);
-  return data as D;
+  const result = factory();
+  dataCache.set(factory, result);
+  return result as D;
 }
 
 /**
@@ -76,54 +76,57 @@ export function pluginData<F extends PluginDataFactory, D extends ReturnType<F>>
  * class.
  *
  * Returns `undefined` when the context is missing or the plugin is not
- * registered. For required siblings prefer {@link requirePlugin}.
+ * registered. For required siblings prefer {@link require}.
  *
  * @example
  * ```ts
  * import { lakebase } from "@databricks/appkit";
- * import { pluginInstance } from "@dbx-tools/appkit-shared";
+ * import { pluginUtils } from "@dbx-tools/appkit-shared";
  *
- * const lake = pluginInstance(this.context, lakebase);
+ * const lake = pluginUtils.instance(this.context, lakebase);
  * //    ^^ inferred as LakebasePlugin | undefined
  * lake?.exports().pool;
  * ```
  */
-export function pluginInstance<F extends PluginDataFactory>(
+export function instance<F extends PluginDataFactory>(
   ctx: PluginContextLike | undefined,
   factory: F,
 ): PluginInstanceOf<F> | undefined {
   if (!ctx) return undefined;
-  const name = pluginData(factory).name;
+  const name = data(factory).name;
   return ctx.getPlugins().get(name) as PluginInstanceOf<F> | undefined;
 }
 
 /**
- * Like {@link pluginInstance} but throws when the plugin is not
- * registered. Use for siblings whose absence is a wiring bug rather
- * than a runtime condition (e.g. requiring `lakebase` when the caller
- * has `storage` / `memory` enabled).
+ * Like {@link instance} but throws when the plugin is not registered.
+ * Use for siblings whose absence is a wiring bug rather than a runtime
+ * condition (e.g. requiring `lakebase` when the caller has `storage` /
+ * `memory` enabled).
  *
  * `caller` is prepended to the error message so cross-plugin failures
  * are easy to attribute in logs.
  *
+ * Always accessed through the namespace as `pluginUtils.require(...)`;
+ * the bare identifier is legal here because this package is pure ESM.
+ *
  * @example
  * ```ts
  * import { lakebase } from "@databricks/appkit";
- * import { requirePlugin } from "@dbx-tools/appkit-shared";
+ * import { pluginUtils } from "@dbx-tools/appkit-shared";
  *
- * const pool = requirePlugin(this.context, lakebase, "mastra")
+ * const pool = pluginUtils.require(this.context, lakebase, "mastra")
  *   .exports().pool;
  * ```
  */
-export function requirePlugin<F extends PluginDataFactory>(
+export function require<F extends PluginDataFactory>(
   ctx: PluginContextLike | undefined,
   factory: F,
   caller?: NameLike | string,
 ): PluginInstanceOf<F> {
-  const plugin = pluginInstance(ctx, factory);
+  const plugin = instance(ctx, factory);
   if (plugin) return plugin;
   const prefix =
     typeof caller === "string" ? `${caller}: ` : caller?.name ? `${caller.name}: ` : "";
-  const registeredName = pluginData(factory).name;
+  const registeredName = data(factory).name;
   throw new Error(`${prefix}required plugin not registered: ${registeredName}`);
 }

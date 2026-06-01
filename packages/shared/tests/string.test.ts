@@ -2,12 +2,15 @@ import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 
 import {
+  firstNonEmpty,
   toIdentifier,
   toIdentifierWithOptions,
   toSlug,
   toSlugWithOptions,
   tokenize,
   tokenizeWithOptions,
+  toUniqueSlug,
+  trimToNull,
 } from "../src/string.js";
 
 function take(gen: Iterable<string>): string[] {
@@ -321,5 +324,80 @@ describe("toSlugWithOptions", () => {
         "gamma",
       ),
     ).toBe("alpha-beta");
+  });
+});
+
+describe("trimToNull", () => {
+  it("returns null for non-strings", () => {
+    expect(trimToNull(undefined)).toBeNull();
+    expect(trimToNull(null)).toBeNull();
+    expect(trimToNull(42)).toBeNull();
+    expect(trimToNull(["abc"])).toBeNull();
+  });
+
+  it("returns null for blank strings", () => {
+    expect(trimToNull("")).toBeNull();
+    expect(trimToNull("   ")).toBeNull();
+    expect(trimToNull("\t\n")).toBeNull();
+  });
+
+  it("trims and returns non-empty strings", () => {
+    expect(trimToNull("  hello  ")).toBe("hello");
+    expect(trimToNull("x")).toBe("x");
+  });
+});
+
+describe("firstNonEmpty", () => {
+  it("delegates to trimToNull for scalars", () => {
+    expect(firstNonEmpty("  abc  ")).toBe("abc");
+    expect(firstNonEmpty(undefined)).toBeNull();
+    expect(firstNonEmpty(42)).toBeNull();
+  });
+
+  it("walks arrays until the first usable string", () => {
+    expect(firstNonEmpty(["", " ", "x", "y"])).toBe("x");
+    expect(firstNonEmpty([null, undefined, "  z  "])).toBe("z");
+    expect(firstNonEmpty([" ", "  "])).toBeNull();
+    expect(firstNonEmpty([])).toBeNull();
+  });
+});
+
+describe("toUniqueSlug", () => {
+  it("appends a hash suffix to a slugified description", () => {
+    const slug = toUniqueSlug("Read uploaded file");
+    expect(slug).toMatch(/^read_uploaded_file_[0-9a-f]{6}$/);
+  });
+
+  it("is deterministic across calls", () => {
+    expect(toUniqueSlug("Same description")).toBe(toUniqueSlug("Same description"));
+  });
+
+  it("uses fallback prefix when the slug ends up empty", () => {
+    const slug = toUniqueSlug("!!!");
+    expect(slug).toMatch(/^id_[0-9a-f]{6}$/);
+  });
+
+  it("honors custom delimiter, slug cap, and hash length", () => {
+    // slugMaxLength caps the *slug* portion only; the hash is added on
+    // top of it. With cap 8 + delimiter "-", "very-long" (9 chars)
+    // overflows so the trim strategy stops at "very".
+    const slug = toUniqueSlug("VeryLongDescriptionStringExceedingTheCap", {
+      delimiter: "-",
+      slugMaxLength: 8,
+      hashLength: 4,
+    });
+    expect(slug).toMatch(/^very-[0-9a-f]{4}$/);
+  });
+
+  it("hashes the raw source so same-slug inputs still differ", () => {
+    // Tokenisation drops punctuation, so "foo bar" and "foo  bar!" slugify
+    // identically. The hash is keyed off the raw value, so the suffixes
+    // must differ.
+    const a = toUniqueSlug("foo bar");
+    const b = toUniqueSlug("foo  bar!");
+    expect(a.split("_").slice(0, -1).join("_")).toBe(
+      b.split("_").slice(0, -1).join("_"),
+    );
+    expect(a).not.toBe(b);
   });
 });

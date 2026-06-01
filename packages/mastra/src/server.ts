@@ -17,6 +17,11 @@ import type express from "express";
 import { randomUUID } from "node:crypto";
 
 import { MASTRA_USER_KEY, type MastraPluginConfig, type User } from "./config.js";
+import {
+  extractModelOverride,
+  MASTRA_MODEL_OVERRIDE_KEY,
+  resolveServingConfig,
+} from "./serving.js";
 
 /**
  * `@mastra/express` subclass that stamps `RequestContext` with the
@@ -72,6 +77,22 @@ export class MastraServer extends MastraServerExpress {
       if (!requestContext.get(MASTRA_THREAD_ID_KEY)) {
         this.log.debug(`Setting thread id: ${sessionId}`);
         requestContext.set(MASTRA_THREAD_ID_KEY, sessionId);
+      }
+      // Per-request model override: only honored when the plugin
+      // opts in (default). Sources, in priority order, are
+      // `X-Mastra-Model` header, `?model=` query, and `model` /
+      // `modelId` body field; see `serving.ts`.
+      const serving = resolveServingConfig(this.config);
+      if (serving.allowOverride) {
+        const override = extractModelOverride({
+          headers: req.headers as Record<string, string | string[] | undefined>,
+          query: req.query as Record<string, unknown>,
+          body: req.body,
+        });
+        if (override) {
+          this.log.debug(`Model override: ${override}`);
+          requestContext.set(MASTRA_MODEL_OVERRIDE_KEY, override);
+        }
       }
       next();
     });

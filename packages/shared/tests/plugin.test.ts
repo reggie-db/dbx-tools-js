@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { pluginData, pluginInstance, requirePlugin } from "../src/plugin.js";
+import * as pluginUtils from "../src/plugin.js";
 
 // Minimal stand-ins for AppKit's plugin classes / factories. These mirror the
 // structural shape that `pluginUtils` expects (a factory returning
@@ -27,9 +27,9 @@ function buildContext(entries: [string, unknown][]) {
   return { getPlugins: () => map };
 }
 
-describe("pluginData", () => {
+describe("data", () => {
   it("returns the factory descriptor", () => {
-    expect(pluginData(fakeLakebaseFactory)).toEqual({
+    expect(pluginUtils.data(fakeLakebaseFactory)).toEqual({
       plugin: FakeLakebase,
       name: "lakebase",
     });
@@ -41,27 +41,27 @@ describe("pluginData", () => {
       calls += 1;
       return { plugin: FakeLakebase, name: "lakebase" };
     }
-    pluginData(counted);
-    pluginData(counted);
-    pluginData(counted);
+    pluginUtils.data(counted);
+    pluginUtils.data(counted);
+    pluginUtils.data(counted);
     expect(calls).toBe(1);
   });
 });
 
-describe("pluginInstance", () => {
+describe("instance", () => {
   it("returns the registered instance keyed by the factory's name", () => {
     const lake = new FakeLakebase();
     const ctx = buildContext([["lakebase", lake]]);
-    expect(pluginInstance(ctx, fakeLakebaseFactory)).toBe(lake);
+    expect(pluginUtils.instance(ctx, fakeLakebaseFactory)).toBe(lake);
   });
 
   it("returns undefined when the plugin is not registered", () => {
     const ctx = buildContext([]);
-    expect(pluginInstance(ctx, fakeLakebaseFactory)).toBeUndefined();
+    expect(pluginUtils.instance(ctx, fakeLakebaseFactory)).toBeUndefined();
   });
 
   it("returns undefined when context is missing", () => {
-    expect(pluginInstance(undefined, fakeLakebaseFactory)).toBeUndefined();
+    expect(pluginUtils.instance(undefined, fakeLakebaseFactory)).toBeUndefined();
   });
 
   it("distinguishes between siblings with different names", () => {
@@ -71,21 +71,21 @@ describe("pluginInstance", () => {
       ["lakebase", lake],
       ["genie", genie],
     ]);
-    expect(pluginInstance(ctx, fakeLakebaseFactory)).toBe(lake);
-    expect(pluginInstance(ctx, fakeGenieFactory)).toBe(genie);
+    expect(pluginUtils.instance(ctx, fakeLakebaseFactory)).toBe(lake);
+    expect(pluginUtils.instance(ctx, fakeGenieFactory)).toBe(genie);
   });
 });
 
-describe("requirePlugin", () => {
+describe("require", () => {
   it("returns the instance when registered", () => {
     const lake = new FakeLakebase();
     const ctx = buildContext([["lakebase", lake]]);
-    expect(requirePlugin(ctx, fakeLakebaseFactory)).toBe(lake);
+    expect(pluginUtils.require(ctx, fakeLakebaseFactory)).toBe(lake);
   });
 
   it("throws with the registered name when missing", () => {
     const ctx = buildContext([]);
-    expect(() => requirePlugin(ctx, fakeLakebaseFactory)).toThrow(
+    expect(() => pluginUtils.require(ctx, fakeLakebaseFactory)).toThrow(
       /required plugin not registered: lakebase/,
     );
   });
@@ -93,7 +93,7 @@ describe("requirePlugin", () => {
   it("throws with no prefix when no caller provided", () => {
     const ctx = buildContext([]);
     try {
-      requirePlugin(ctx, fakeLakebaseFactory);
+      pluginUtils.require(ctx, fakeLakebaseFactory);
       expect.unreachable();
     } catch (err) {
       expect((err as Error).message).toBe("required plugin not registered: lakebase");
@@ -102,27 +102,27 @@ describe("requirePlugin", () => {
 
   it("prepends caller string to the error message", () => {
     const ctx = buildContext([]);
-    expect(() => requirePlugin(ctx, fakeLakebaseFactory, "mastra")).toThrow(
+    expect(() => pluginUtils.require(ctx, fakeLakebaseFactory, "mastra")).toThrow(
       /^mastra: required plugin not registered: lakebase$/,
     );
   });
 
   it("prepends caller.name when caller is a NameLike object", () => {
     const ctx = buildContext([]);
-    expect(() => requirePlugin(ctx, fakeLakebaseFactory, { name: "mastra" })).toThrow(
-      /^mastra: required plugin not registered: lakebase$/,
-    );
+    expect(() =>
+      pluginUtils.require(ctx, fakeLakebaseFactory, { name: "mastra" }),
+    ).toThrow(/^mastra: required plugin not registered: lakebase$/);
   });
 
   it("falls back to no prefix when caller object has no name", () => {
     const ctx = buildContext([]);
-    expect(() => requirePlugin(ctx, fakeLakebaseFactory, {})).toThrow(
+    expect(() => pluginUtils.require(ctx, fakeLakebaseFactory, {})).toThrow(
       /^required plugin not registered: lakebase$/,
     );
   });
 
   it("throws when context is missing", () => {
-    expect(() => requirePlugin(undefined, fakeLakebaseFactory)).toThrow(
+    expect(() => pluginUtils.require(undefined, fakeLakebaseFactory)).toThrow(
       /required plugin not registered: lakebase/,
     );
   });

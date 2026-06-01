@@ -151,6 +151,87 @@ export function toSlug(...values: unknown[]): string {
   return toSlugWithOptions({}, ...values);
 }
 
+/**
+ * Trim `value` and return `null` for non-strings, `undefined`, or
+ * strings that are empty after trimming. Lets call sites collapse the
+ * common
+ *
+ * ```ts
+ * typeof v === "string" && v.trim() ? v.trim() : null
+ * ```
+ *
+ * dance into a single helper. Useful for HTTP header / query / form
+ * extractors where downstream code wants `string | null` to drive a
+ * cheap `??` / `if (x)` cascade.
+ */
+export function trimToNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Trim the first usable string out of `value`. Returns `null` when
+ * `value` is `undefined`, `null`, an empty string, or an array whose
+ * first string member is empty. Mirrors how Express / Node header
+ * accessors expose single vs. repeated headers - the first
+ * non-empty entry wins, everything else is ignored.
+ */
+export function firstNonEmpty(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const trimmed = trimToNull(item);
+      if (trimmed) return trimmed;
+    }
+    return null;
+  }
+  return trimToNull(value);
+}
+
+/**
+ * Slugify `value` (using the standard {@link toIdentifierWithOptions}
+ * tokenizer + delimiter rules) and **always** suffix a short
+ * deterministic hash. Use when you need a stable, slugified id that
+ * is guaranteed to be unique across descriptions sharing the same
+ * leading tokens (tool ids, cache keys, etc.).
+ *
+ * Behaviour differs from `toIdentifierWithOptions({ maxLength,
+ * truncateStrategy: "hash" })`: that helper only appends a hash when
+ * the slug *overflows* `maxLength`. This helper appends a hash
+ * unconditionally so the result is collision-resistant even for
+ * short inputs. The hash is computed over the raw `value` so two
+ * descriptions producing the same slug still get different ids.
+ *
+ * @param value - Source string (typically a tool/agent description).
+ * @param options.delimiter - Token separator (default `"_"`).
+ * @param options.slugMaxLength - Cap on the slug portion (the part
+ *   before the hash). Default 32.
+ * @param options.hashLength - Hex digits of SHA-1 to append.
+ *   Default 6.
+ * @param options.fallbackPrefix - Prefix used when the slug is empty
+ *   (e.g. punctuation-only input). Default `"id"`.
+ */
+export function toUniqueSlug(
+  value: string,
+  options: {
+    delimiter?: string;
+    slugMaxLength?: number;
+    hashLength?: number;
+    fallbackPrefix?: string;
+  } = {},
+): string {
+  const delimiter = options.delimiter ?? "_";
+  const slugMaxLength = options.slugMaxLength ?? 32;
+  const hashLength = options.hashLength ?? 6;
+  const fallbackPrefix = options.fallbackPrefix ?? "id";
+  const slug = toIdentifierWithOptions(
+    { delimiter, maxLength: slugMaxLength, truncateStrategy: "trim" },
+    value,
+  );
+  const hash = createHash("sha1").update(value).digest("hex").slice(0, hashLength);
+  return slug ? `${slug}${delimiter}${hash}` : `${fallbackPrefix}${delimiter}${hash}`;
+}
+
 function digestTokens(
   algorithm: string,
   length: number,

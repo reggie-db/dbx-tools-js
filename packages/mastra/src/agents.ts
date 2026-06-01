@@ -13,59 +13,205 @@
  * `chatRoute` agent for demos.
  */
 
-import { genie } from "@databricks/appkit";
-import { logUtils, pluginUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, pluginUtils, stringUtils } from "@dbx-tools/appkit-shared";
 import { Agent } from "@mastra/core/agent";
 import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
+import { createTool } from "@mastra/core/tools";
+import type { Tool } from "@mastra/core/tools";
 import type { Memory } from "@mastra/memory";
 
 import type { MastraPluginConfig } from "./config.js";
-import { buildGenieTools, type GenieExports } from "./genie.js";
 import { buildModel } from "./model.js";
 
-/** Per-agent tool record. Alias of Mastra's `ToolsInput`. */
+/**
+ * Tool record accepted by every Mastra `Agent.tools` field and by the
+ * `tools(plugins)` callback on {@link MastraAgentDefinition}.
+ *
+ * Alias of Mastra's `ToolsInput`, so it already accepts:
+ *
+ * - Mastra tools built with {@link createTool} (or `new Tool(...)`)
+ * - Mastra tools built with the AppKit-shaped {@link tool} wrapper
+ *   below
+ * - Vercel AI SDK tools (`tool({ ... })` from `ai`)
+ * - Provider-defined tools (e.g. `openai.tools.webSearch(...)`)
+ *
+ * Existing tool libraries drop in as-is - nothing in this package
+ * forces a rebuild.
+ */
 export type MastraTools = ToolsInput;
 
+/** Re-export of Mastra's native `createTool` for full-feature access. */
+export { createTool } from "@mastra/core/tools";
+
 /**
- * Typed plugin map handed to the function form of
- * {@link MastraAgentDefinition.tools}. Each entry exposes a
- * `.toolkit(opts)` method that returns a tools record ready to spread
- * into an agent's `tools` field.
+ * AppKit-shaped tool factory. Lets users mix-and-match tools across
+ * AppKit's `agents` plugin and `mastra` with a single import:
  *
- * Entries are `undefined` when the matching AppKit plugin isn't
- * registered in `createApp({ plugins: [...] })`, mirroring AppKit's
- * "unknown name resolves to undefined" semantic. Guard with `?.` and
- * `?? {}` when spreading.
+ * ```ts
+ * import { tool } from "@dbx-tools/appkit-mastra";
+ * import { z } from "zod";
+ *
+ * get_weather: tool({
+ *   description: "Weather",
+ *   schema: z.object({ city: z.string() }),
+ *   execute: async ({ city }) => `Sunny in ${city}`,
+ * }),
+ * ```
+ *
+ * Maps onto Mastra's `createTool`:
+ *
+ * - `description` -> `description` (required)
+ * - `schema` -> `inputSchema` (optional)
+ * - `execute(input)` -> `execute(input, ctx)` - Mastra already calls
+ *   the first arg with the parsed inputs, so the body shape is
+ *   identical. The Mastra `context` arg is forwarded as the second
+ *   parameter when the caller declares it.
+ * - `id`: optional. Defaults to a stable identifier derived from
+ *   `description` (slugified, with a short hash suffix for
+ *   uniqueness). Pass an explicit `id` when you need a stable string
+ *   for tracing or MCP exposure.
+ *
+ * Reach for {@link createTool} when you need Mastra-only fields
+ * (`outputSchema`, `suspendSchema`, `requireApproval`, `mcp`, etc.).
+ */
+export function tool(opts: AppKitToolOptions): Tool {
+  const id = opts.id ?? deriveToolId(opts.description);
+  return createTool({
+    id,
+    description: opts.description,
+    ...(opts.schema ? { inputSchema: opts.schema as never } : {}),
+    execute: opts.execute as never,
+  });
+}
+
+/**
+ * Input shape for the AppKit-style {@link tool} factory. A trimmed
+ * subset of Mastra's `createTool` options that mirrors the
+ * `@databricks/appkit/beta` `tool({ description, schema, execute })`
+ * signature.
+ *
+ * Generics are intentionally absent - inference flows through the
+ * caller's `schema` (typically a Zod object), and the `execute` body
+ * destructures naturally from that. Reach for {@link createTool} when
+ * you need the fully-typed input/output schemas wired explicitly.
+ */
+export interface AppKitToolOptions {
+  /** Optional stable identifier; auto-derived from `description` when omitted. */
+  id?: string;
+  /** Human-readable description shown to the model. Required. */
+  description: string;
+  /**
+   * Optional input schema (any Standard Schema instance, e.g. Zod).
+   * Maps to Mastra's `inputSchema`; passed through to the model
+   * verbatim.
+   */
+  schema?: unknown;
+  /**
+   * Execute body. First arg is the parsed input (typed off `schema`
+   * when supplied), second arg is the full Mastra execution context
+   * (request context, abort signal, mastra instance) if you need it.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  execute: (input: any, context?: unknown) => unknown;
+}
+
+/**
+ * Build a deterministic Mastra tool id from a description.
+ * Delegates to {@link stringUtils.toUniqueSlug}: slug + always-on
+ * SHA-1 suffix so two tools with the same leading words don't
+ * collide in traces. Stable across runs.
+ */
+function deriveToolId(description: string): string {
+  return stringUtils.toUniqueSlug(description, { fallbackPrefix: "tool" });
+}
+
+/**
+ * Identity helper that brands a definition as a Mastra agent. Mirrors
+ * AppKit's `createAgent(def)` so the registration shape matches:
+ *
+ * ```ts
+ * const support = createAgent({
+ *   instructions: "...",
+ *   model: "databricks-claude-sonnet-4-6",
+ *   tools(plugins) { return { ... }; },
+ * });
+ * ```
+ *
+ * Returns the definition unchanged - the wrapper exists only to anchor
+ * type inference and to match the AppKit API surface.
+ */
+export function createAgent<T extends MastraAgentDefinition>(def: T): T {
+  return def;
+}
+
+/**
+ * Filter / rename options accepted by every plugin's `.toolkit()`
+ * method. Mirrors AppKit's `ToolkitOptions` verbatim so options pass
+ * through unchanged - the underlying AppKit plugin does the filtering
+ * and we just adapt the resulting entries into Mastra tools.
+ */
+export interface ToolkitOptions {
+  /**
+   * Key prefix prepended to every tool name. AppKit's default is
+   * `${pluginName}.` when omitted; pass an explicit `""` to drop it.
+   */
+  prefix?: string;
+  /** Allowlist of local tool names. */
+  only?: string[];
+  /** Denylist of local tool names. */
+  except?: string[];
+  /** Remap specific local names to different keys. */
+  rename?: Record<string, string>;
+}
+
+/**
+ * Toolkit provider shape every entry in the {@link MastraPlugins} map
+ * exposes. Identical to AppKit's `PluginToolkitProvider` - any AppKit
+ * plugin that implements the standard `ToolProvider` interface
+ * (`getAgentTools` + `executeAgentTool` + `toolkit`) is reachable
+ * through this surface automatically.
+ */
+export interface MastraPluginToolkitProvider {
+  /**
+   * Returns a Mastra-shaped tools record adapted from the plugin's
+   * agent tools. Each tool dispatches back through the plugin's
+   * `executeAgentTool` so OBO auth and telemetry spans stay intact.
+   */
+  toolkit(opts?: ToolkitOptions): MastraTools;
+}
+
+/**
+ * Plugin map handed to the function form of
+ * {@link MastraAgentDefinition.tools}. Mirrors AppKit's `Plugins`
+ * type exactly: a string-keyed record where every value exposes
+ * `.toolkit(opts)`.
+ *
+ * Implemented as a runtime Proxy that auto-discovers any registered
+ * AppKit plugin implementing the standard `ToolProvider` interface
+ * (`analytics`, `files`, `lakebase`, `genie`, plus any third-party
+ * plugin that does the same). Unknown names resolve to `undefined`
+ * at runtime, so guard with `?.` and `?? {}` when spreading from a
+ * plugin that may not be registered in every environment.
  *
  * @example
  * ```ts
- * mastra({
- *   agents: {
- *     analyst: {
- *       instructions: "...",
- *       tools(plugins) {
- *         return {
- *           ...(plugins.genie?.toolkit({ aliases: ["default"] }) ?? {}),
- *           custom: createTool({ ... }),
- *         };
- *       },
- *     },
+ * createAgent({
+ *   instructions: "...",
+ *   tools(plugins) {
+ *     return {
+ *       ...plugins.analytics.toolkit(),
+ *       ...plugins.files.toolkit({ only: ["uploads.read"] }),
+ *       get_weather: tool({
+ *         description: "Weather",
+ *         schema: z.object({ city: z.string() }),
+ *         execute: async ({ city }) => `Sunny in ${city}`,
+ *       }),
+ *     };
  *   },
  * });
  * ```
  */
-export interface MastraPlugins {
-  /**
-   * Wraps the AppKit `genie` plugin's exports. Pass the list of Genie
-   * space aliases (as configured on `genie({ spaces: { ... } })`); each
-   * alias becomes a `sendMessage`-style tool plus a shared
-   * `genie_get_conversation` lookup. Returns `undefined` here when the
-   * `genie` plugin isn't registered.
-   */
-  genie?: {
-    toolkit(opts: { aliases: string[]; signal?: AbortSignal }): MastraTools;
-  };
-}
+export type MastraPlugins = Record<string, MastraPluginToolkitProvider>;
 
 /** Function form of {@link MastraAgentDefinition.tools}. */
 export type MastraToolsFn = (
@@ -163,7 +309,7 @@ export async function buildAgents(opts: {
   const agents: Record<string, Agent> = {};
 
   for (const [id, def] of Object.entries(definitions)) {
-    const tools = await resolveTools(def.tools, plugins, ambientTools, id);
+    const tools = await resolveTools(def.tools, plugins, ambientTools);
     const useMemory = def.memory ?? true;
     agents[id] = new Agent({
       id,
@@ -187,18 +333,65 @@ export async function buildAgents(opts: {
 }
 
 /**
- * Pick the agent definitions to build: `config.agents` when set,
- * otherwise a single built-in analyst keyed `default`. An empty
- * `config.agents = {}` is treated as "use the default" rather than
- * erroring so a user can `agents: {}` while iterating without losing
- * their chat route.
+ * Normalize `config.agents` into a `Record<id, definition>`. Accepts
+ * any of the three shapes documented on
+ * {@link MastraPluginConfig.agents}:
+ *
+ * - Record - returned as-is when non-empty.
+ * - Single definition (detected via the required `instructions`
+ *   field) - keyed by `slugify(def.name)` or `FALLBACK_AGENT_ID`.
+ * - Array - keyed by `slugify(def.name)` or `agent_${i}`; duplicate
+ *   slugs fail loudly so users know to set explicit names.
+ *
+ * Omitted or empty inputs fall back to a single built-in analyst so
+ * the bare `mastra()` call still mounts a working chat route.
  */
 function resolveDefinitions(
   config: MastraPluginConfig,
 ): Record<string, MastraAgentDefinition> {
-  if (config.agents && Object.keys(config.agents).length > 0) {
-    return config.agents;
+  const input = config.agents;
+  if (!input) return fallbackDefinitions();
+
+  if (Array.isArray(input)) {
+    if (input.length === 0) return fallbackDefinitions();
+    const out: Record<string, MastraAgentDefinition> = {};
+    input.forEach((def, i) => {
+      const key = deriveAgentKey(def, i);
+      if (out[key]) {
+        throw new Error(
+          `mastra: duplicate agent id "${key}" derived from name "${def.name ?? ""}"; ` +
+            `set unique \`name\`s on each definition`,
+        );
+      }
+      out[key] = def;
+    });
+    return out;
   }
+
+  // Single-definition shorthand: an agent always has `instructions: string`,
+  // a record-of-agents never has that field directly.
+  if (typeof (input as MastraAgentDefinition).instructions === "string") {
+    const def = input as MastraAgentDefinition;
+    const key = deriveAgentKey(def);
+    return { [key]: def };
+  }
+
+  const record = input as Record<string, MastraAgentDefinition>;
+  if (Object.keys(record).length === 0) return fallbackDefinitions();
+  return record;
+}
+
+/** Derive a registry id from a definition's `name`, with a fallback. */
+function deriveAgentKey(def: MastraAgentDefinition, index?: number): string {
+  if (def.name) {
+    const slug = stringUtils.toIdentifier(def.name);
+    if (slug) return slug;
+  }
+  return index === undefined ? FALLBACK_AGENT_ID : `agent_${index}`;
+}
+
+/** Built-in fallback registry used when `agents` is omitted / empty. */
+function fallbackDefinitions(): Record<string, MastraAgentDefinition> {
   return {
     [FALLBACK_AGENT_ID]: {
       name: "Default Agent",
@@ -208,88 +401,149 @@ function resolveDefinitions(
 }
 
 /**
- * Adapt an `AgentDefinition.model` override into the
- * `DynamicArgument<MastraModelConfig>` Mastra's `Agent` expects.
+ * Pick the effective model spec for an agent. Fallback ladder, in
+ * order:
  *
- * - `undefined`: pure default resolver.
- * - `string`: shorthand for "default resolver, swap modelId".
- * - other: passed through (callers retain full control).
+ *   1. Per-agent `def.model` (string sugar or `DynamicArgument`).
+ *   2. Plugin-level `config.defaultModel` (string sugar or
+ *      `DynamicArgument`) - mirrors AppKit's `agents({ defaultModel })`.
+ *   3. The auto-resolver that mints user-scoped tokens against
+ *      `/serving-endpoints` via {@link buildModel}.
+ *
+ * String values are treated as `modelId` sugar and threaded through
+ * `buildModel`'s override hook so the runtime fuzzy matcher and the
+ * per-request `X-Mastra-Model` override layer on top of the static
+ * choice. Non-string `DynamicArgument`s are passed through verbatim;
+ * callers that need full control over `providerId` / `headers` /
+ * `modelId` bypass the resolver pipeline entirely.
  */
 function resolveModel(
   config: MastraPluginConfig,
   override: MastraAgentDefinition["model"],
 ): AgentConfig["model"] {
-  if (override === undefined) {
+  const effective = override ?? config.defaultModel;
+  if (effective === undefined) {
     return ({ requestContext }) => buildModel(config, requestContext);
   }
-  if (typeof override === "string") {
-    const modelId = override;
-    return async ({ requestContext }) => {
-      // `buildModel` always returns an OpenAICompatibleConfig today
-      // (providerId / modelId / url / headers). Narrowing it out of
-      // `MastraModelConfig`'s union of string-id and class instances
-      // takes more types than it's worth - cast for the spread.
-      const base = (await buildModel(config, requestContext)) as Record<
-        string,
-        unknown
-      >;
-      return { ...base, modelId } as ReturnType<typeof buildModel> extends Promise<
-        infer T
-      >
-        ? T
-        : never;
-    };
+  if (typeof effective === "string") {
+    const modelId = effective;
+    return ({ requestContext }) => buildModel(config, requestContext, { modelId });
   }
-  return override;
+  return effective;
 }
 
 /**
  * Resolve a definition's `tools` field to a flat `MastraTools` record,
  * merging in plugin-level ambient tools (per-agent tools win on key
- * collision). A thrown callback fails registration with a useful
- * "agent X tools(plugins) callback threw" wrapper instead of leaking
- * the raw stack.
+ * collision). Callback errors propagate verbatim so the original stack
+ * survives - the caller already knows which agent was registering.
  */
 async function resolveTools(
   defTools: MastraAgentDefinition["tools"],
   plugins: MastraPlugins,
   ambientTools: MastraTools,
-  agentId: string,
 ): Promise<MastraTools> {
   if (!defTools) return { ...ambientTools };
-  let resolved: MastraTools;
-  if (typeof defTools === "function") {
-    try {
-      resolved = await defTools(plugins);
-    } catch (err) {
-      throw new Error(
-        `mastra: agent "${agentId}" tools(plugins) callback threw: ${(err as Error).message}`,
-        { cause: err },
-      );
-    }
-  } else {
-    resolved = defTools;
-  }
+  const resolved = typeof defTools === "function" ? await defTools(plugins) : defTools;
   return { ...ambientTools, ...resolved };
 }
 
 /**
- * Build the typed {@link MastraPlugins} index passed to the function
- * form of `MastraAgentDefinition.tools`. Each known plugin contributes
- * a `.toolkit(opts)` method that wraps its existing public API into a
- * Mastra-shaped tools record; missing plugins map to `undefined` so
- * the agent callback can guard with `?.`.
+ * Build the {@link MastraPlugins} runtime proxy handed to
+ * `tools(plugins)` callbacks.
+ *
+ * Implemented as a `Proxy` over the AppKit plugin context so
+ * `plugins.<name>` resolves at first access. Any sibling plugin that
+ * implements AppKit's standard `ToolProvider` interface
+ * (`toolkit(opts?)` + `executeAgentTool(name, args, signal?)`) is
+ * auto-adapted into Mastra tools. Unknown names return `undefined`,
+ * matching AppKit's `Plugins` semantics so `plugins.foo?.toolkit()`
+ * remains safe in environments where `foo` isn't registered.
  */
 function buildPluginsMap(
   context: pluginUtils.PluginContextLike | undefined,
 ): MastraPlugins {
-  const map: MastraPlugins = {};
-  const geniePlugin = pluginUtils.pluginInstance(context, genie);
-  if (geniePlugin) {
-    const exports = geniePlugin.exports() as GenieExports;
-    map.genie = {
-      toolkit: ({ aliases, signal }) => buildGenieTools({ aliases, exports, signal }),
-    };
+  const cache = new Map<string, MastraPluginToolkitProvider | null>();
+  return new Proxy({} as MastraPlugins, {
+    get(_target, propName) {
+      if (typeof propName !== "string") return undefined;
+      if (cache.has(propName)) return cache.get(propName) ?? undefined;
+      const plugin = context?.getPlugins().get(propName);
+      const provider = adaptPluginToolkit(plugin);
+      cache.set(propName, provider);
+      return provider ?? undefined;
+    },
+  });
+}
+
+/**
+ * AppKit `ToolProvider` shape we duck-type against any registered
+ * plugin. Defined structurally to avoid coupling to AppKit's internal
+ * type module layout.
+ */
+interface AppKitToolkitProvider {
+  toolkit?: (opts?: ToolkitOptions) => Record<string, AppKitToolkitEntry>;
+  executeAgentTool?: (
+    name: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
+}
+
+/** Single entry returned by an AppKit plugin's `.toolkit(opts)` call. */
+interface AppKitToolkitEntry {
+  pluginName: string;
+  localName: string;
+  def: {
+    name: string;
+    description: string;
+    parameters: unknown;
+  };
+}
+
+/**
+ * Adapt an AppKit `ToolProvider` plugin instance into a
+ * {@link MastraPluginToolkitProvider}. Returns `null` for any plugin
+ * that doesn't implement both `toolkit` and `executeAgentTool` (e.g.
+ * `server`, `lakebase` when used only as a Postgres pool, etc.).
+ */
+function adaptPluginToolkit(plugin: unknown): MastraPluginToolkitProvider | null {
+  if (!plugin || typeof plugin !== "object") return null;
+  const p = plugin as AppKitToolkitProvider;
+  if (typeof p.toolkit !== "function" || typeof p.executeAgentTool !== "function") {
+    return null;
   }
-  return map;
+  return {
+    toolkit(opts?: ToolkitOptions): MastraTools {
+      const entries = p.toolkit!(opts);
+      const tools: MastraTools = {};
+      for (const [key, entry] of Object.entries(entries)) {
+        tools[key] = toolkitEntryToMastraTool(entry, p);
+      }
+      return tools;
+    },
+  };
+}
+
+/**
+ * Wrap a single {@link AppKitToolkitEntry} as a Mastra tool whose
+ * `execute` dispatches back through `plugin.executeAgentTool(...)` so
+ * AppKit's OBO auth (`asUser`) and telemetry spans stay intact. JSON
+ * Schema parameters pass through unchanged - Mastra's `PublicSchema`
+ * accepts `JSONSchema7` directly via `@mastra/schema-compat`.
+ */
+function toolkitEntryToMastraTool(
+  entry: AppKitToolkitEntry,
+  plugin: AppKitToolkitProvider,
+): Tool {
+  return createTool({
+    id: `${entry.pluginName}__${entry.localName}`,
+    description: entry.def.description,
+    ...(entry.def.parameters ? { inputSchema: entry.def.parameters as never } : {}),
+    execute: async (input: unknown, context: unknown) => {
+      const signal = (context as { abortSignal?: AbortSignal } | undefined)
+        ?.abortSignal;
+      return plugin.executeAgentTool!(entry.localName, input, signal);
+    },
+  });
 }

@@ -27,6 +27,7 @@
 
 import {
   genie,
+  getExecutionContext,
   lakebase,
   Plugin,
   toPlugin,
@@ -44,9 +45,15 @@ import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import type { MastraPluginConfig } from "./config.js";
 import { buildMemory, needsLakebase, resolveLakebasePool } from "./memory.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
+import {
+  clearServingEndpointsCache,
+  listServingEndpoints,
+  resolveServingConfig,
+  type ServingEndpointSummary,
+} from "./serving.js";
 
-const GENIE_MANIFEST = pluginUtils.pluginData(genie).plugin.manifest;
-const LAKEBASE_MANIFEST = pluginUtils.pluginData(lakebase).plugin.manifest;
+const GENIE_MANIFEST = pluginUtils.data(genie).plugin.manifest;
+const LAKEBASE_MANIFEST = pluginUtils.data(lakebase).plugin.manifest;
 
 /**
  * AppKit plugin (registered name: `mastra`) that hosts Mastra agents
@@ -107,15 +114,45 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
   override exports() {
     return {
-      /** Resolved default agent (or `null` before setup completes). */
+      /**
+       * Ids of every registered agent in registration order. Matches
+       * AppKit `agents.list()` so callers can iterate the registry the
+       * same way under both plugins.
+       */
+      list: (): string[] => Object.keys(this.built?.agents ?? {}),
+      /**
+       * Look up a registered agent by id. Returns `null` (not
+       * undefined) when unknown so call sites can early-return without
+       * a separate `in` check.
+       */
+      get: (id: string): Agent | null => this.built?.agents[id] ?? null,
+      /**
+       * The agent `chatRoute` binds to when the client doesn't name
+       * one. Resolves to `config.defaultAgent`, the first registered
+       * id, or the built-in `default` fallback.
+       */
       getDefault: (): Agent | null =>
         (this.built && this.built.agents[this.built.defaultAgentId]) ?? null,
-      /** Look up a registered agent by id. */
-      getAgent: (id: string): Agent | null => this.built?.agents[id] ?? null,
-      /** Ids of every registered agent (in registration order). */
-      listAgents: (): string[] => Object.keys(this.built?.agents ?? {}),
+      /** Underlying Mastra instance for advanced use (custom routes etc.). */
       getMastra: () => this.mastra,
+      /** Express subapp Mastra is mounted on; mostly for tests. */
       getMastraServer: () => this.mastraServer,
+      /**
+       * Fetch the workspace's Model Serving endpoints (cached). Same
+       * payload the `GET /models` route returns; surfaced here so
+       * other plugins / scripts can introspect the catalogue without
+       * an HTTP round-trip. AppKit wraps this with `asUser(req)` for
+       * OBO scoping automatically.
+       */
+      listModels: (): Promise<ServingEndpointSummary[]> => this.listModels(),
+      /**
+       * Force-evict cached endpoint listings via AppKit's
+       * `CacheManager`. Useful in tests or right after an admin
+       * deploys a new endpoint and doesn't want to wait for the TTL.
+       * Returns the underlying `CacheManager.delete`/`clear` promise.
+       */
+      clearModelsCache: (host?: string): Promise<void> =>
+        clearServingEndpointsCache(host),
     };
   }
 
@@ -127,10 +164,34 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   }
 
   override injectRoutes(router: IAppRouter): void {
+    // `GET /models` exposes the cached endpoint list so clients can
+    // populate model pickers, validate `?model=` choices, etc. Must
+    // be registered before the catch-all that forwards everything to
+    // the Mastra subapp. Errors propagate to Express's default error
+    // handler via `next(err)` so callers see the real SDK message.
+    router.get("/models", (req, res, next) => {
+      this.asUser(req)
+        .listModels()
+        .then((endpoints) => res.json({ endpoints }))
+        .catch(next);
+    });
+
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       return this.asUser(req).mastraApp!(req, res, next);
     });
+  }
+
+  /**
+   * Implementation backing both the `/models` route and the
+   * `listModels` export. Runs inside the AppKit user-context proxy so
+   * `getExecutionContext()` returns the OBO-scoped client.
+   */
+  private async listModels(): Promise<ServingEndpointSummary[]> {
+    const client = getExecutionContext().client;
+    const host = (await client.config.getHost()).toString();
+    const serving = resolveServingConfig(this.config);
+    return listServingEndpoints(client, host, { ttlMs: serving.ttlMs });
   }
 
   private async buildAgentAndServer(): Promise<void> {

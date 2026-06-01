@@ -37,7 +37,7 @@ export function resolveLakebasePool(
   context: pluginUtils.PluginContextLike | undefined,
   caller: MastraPluginConfig,
 ): LakebasePool {
-  return pluginUtils.requirePlugin(context, lakebase, caller).exports().pool;
+  return pluginUtils.require(context, lakebase, caller).exports().pool;
 }
 
 /**

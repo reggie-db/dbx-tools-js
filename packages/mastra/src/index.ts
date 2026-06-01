@@ -1,9 +1,23 @@
 /**
  * AppKit Mastra integration: {@link MastraPlugin} / {@link mastra},
- * plugin config types, agent registration helpers, and Genie tool
- * builders for Mastra agents.
+ * plugin config types, agent registration helpers, Genie tool
+ * builders, and dynamic Model Serving endpoint resolution.
  */
 export * from "./plugin.js";
 export * from "./config.js";
 export * from "./agents.js";
 export * from "./genie.js";
+export {
+  clearServingEndpointsCache,
+  extractModelOverride,
+  listServingEndpoints,
+  MASTRA_MODEL_OVERRIDE_KEY,
+  MODEL_OVERRIDE_BODY_FIELDS,
+  MODEL_OVERRIDE_HEADER,
+  MODEL_OVERRIDE_QUERY,
+  resolveModelId,
+  type ResolvedModel,
+  type ResolveModelOptions,
+  type ServingEndpointSummary,
+} from "./serving.js";
+export { FALLBACK_MODEL_IDS, FALLBACK_MODELS_BY_PROVIDER } from "./model.js";
