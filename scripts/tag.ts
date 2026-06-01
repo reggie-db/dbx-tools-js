@@ -37,7 +37,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pMemoize from "p-memoize";
-import { Config, serving, WorkspaceClient } from "@databricks/sdk-experimental";
+import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
 type Bump = "major" | "minor" | "patch";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -295,9 +295,7 @@ if (dirty) {
   for (const line of dirty.split("\n")) console.log(`  ${line}`);
 }
 if (ahead !== "0") {
-  console.log(
-    `Unpushed commits: ${ahead} (will be pushed with the release commit)`,
-  );
+  console.log(`Unpushed commits: ${ahead} (will be pushed with the release commit)`);
 }
 console.log();
 
