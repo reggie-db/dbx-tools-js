@@ -16,12 +16,13 @@
 // read it from the first publishable package, sanity-check that the
 // rest agree, then bump the shared version everywhere.
 //
-// Safety checks before tagging:
-//   1. Working tree must be clean (so the release commit only carries
-//      the version bump, nothing stray).
-//   2. HEAD must already be pushed to origin (so the new commit lands
-//      cleanly on top of a known-good ref).
-//   3. New tag must not already exist locally or on the remote.
+// Local state policy:
+//   - Dirty files are auto-staged (`git add -A`) and folded into the
+//     release commit. If you don't want something shipped, stash it.
+//   - Unpushed commits are pushed along with the release commit.
+//   - Branch must have an upstream (otherwise we can't push).
+//   - New tag must not already exist locally or on the remote
+//     (pick a different bump).
 //
 // Tag message:
 //   The script collects commit log + diff stat since the previous tag
@@ -242,19 +243,13 @@ const currentVersion = pkgs[0]!.version;
 const nextVersion = bumpVersion(currentVersion, bump);
 const tag = `v${nextVersion}`;
 
-// Dirty + ahead-of-upstream checks only matter when we're about to
-// actually commit and push. Dry-run is read-only, so skip them so the
-// user can preview the next version, tag, and release notes even with
-// edits in flight or unpushed commits.
+// The script is permissive about local state: dirty files get folded
+// into the release commit and unpushed commits get pushed along with
+// it. Dry-run still skips everything that touches disk or the remote.
 const branch = run(["rev-parse", "--abbrev-ref", "HEAD"], { capture: true });
+const dirty = run(["status", "--porcelain"], { capture: true });
+let ahead = "0";
 if (!dryRun) {
-  const dirty = run(["status", "--porcelain"], { capture: true });
-  if (dirty) {
-    fail(
-      `Working tree is dirty. Commit (or stash) outstanding changes before tagging:\n${dirty}`,
-    );
-  }
-
   const upstream = run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
     capture: true,
     check: false,
@@ -264,12 +259,7 @@ if (!dryRun) {
       `Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`,
     );
   }
-  const ahead = run(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
-  if (ahead !== "0") {
-    fail(
-      `HEAD is ${ahead} commit(s) ahead of ${upstream}. Push first:\n  git push origin ${branch}`,
-    );
-  }
+  ahead = run(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
 }
 
 const localTag = spawnSync("git", ["rev-parse", "--verify", `refs/tags/${tag}`], {
@@ -300,6 +290,15 @@ console.log(
 );
 console.log(`Packages:`);
 for (const p of pkgs) console.log(`  ${p.name}`);
+if (dirty) {
+  console.log(`Dirty files (will be folded into the release commit):`);
+  for (const line of dirty.split("\n")) console.log(`  ${line}`);
+}
+if (ahead !== "0") {
+  console.log(
+    `Unpushed commits: ${ahead} (will be pushed with the release commit)`,
+  );
+}
 console.log();
 
 const notesContext = buildReleaseNotesContext(prevTag, tag);
@@ -331,7 +330,7 @@ console.log(`Writing ${nextVersion} to ${pkgs.length} package.json file(s)...`);
 for (const p of pkgs) writeVersion(p.path, nextVersion);
 
 console.log(`Committing release ${tag}...`);
-run(["add", ...pkgs.map((p) => p.path)]);
+run(["add", "-A"]);
 run(["commit", "-m", `chore: release ${tag}`]);
 
 console.log(`Pushing ${branch}...`);
