@@ -307,11 +307,14 @@ let aiSummary: string | null = null;
 if (notesContext.commits.length === 0) {
   console.log("(skipping release notes: no commits between previous tag and HEAD)");
 } else {
-  aiSummary = await releaseNotes(notesContext);
+  try {
+    aiSummary = (await releaseNotes(notesContext))?.trim() || null;
+  } catch (error) {
+    console.warn("Error generating release notes:", error);
+    aiSummary = null;
+  }
 }
-const tagMessage = aiSummary?.trim()
-  ? `Release ${tag}\n\n${aiSummary.trim()}\n`
-  : `Release ${tag}`;
+const tagMessage = aiSummary ? `Release ${tag}\n\n${aiSummary}\n` : `Release ${tag}`;
 
 console.log();
 console.log("--- tag message ---");
