@@ -2,6 +2,7 @@ name: Release (disabled)
 
 # DISABLED: npm publishing is intentionally turned off. The workflow is
 # kept on disk (with `workflow_dispatch` as the only trigger) so it can
+# be re-enabled by flipping the trigger back to `push: branches: [main]`
 # when packages are ready to ship.
 #
 # On the first run after one or more changesets land, `changesets/action`
