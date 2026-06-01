@@ -12,6 +12,7 @@
     "build": "bun scripts/build.ts",
     "create": "bun scripts/create-package.ts",
     "version": "bunx changeset version",
+    "tag": "bun scripts/tag.ts",
     "release": "bun scripts/build.ts && bun scripts/publish.ts",
     "dev": "bun --elide-lines=0 run --filter '@dbx-tools/appkit-demo' dev"
   },

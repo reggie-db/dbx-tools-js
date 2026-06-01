@@ -25,10 +25,17 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = resolve(ROOT, "packages");
+// GitHub repository slug used to populate `repository.url` /
+// `repository.directory` for trusted-publisher verification and
+// "View source" links on npmjs.com.
+const REPO_SLUG = "reggie-db/dbx-tools-appkit";
+const REPO_URL = `git+https://github.com/${REPO_SLUG}.git`;
+const HOMEPAGE = `https://github.com/${REPO_SLUG}#readme`;
+const BUGS_URL = `https://github.com/${REPO_SLUG}/issues`;
 
 interface PackageJson {
   name?: string;
@@ -56,6 +63,18 @@ const PUBLISH_FIELDS = {
     },
   },
   files: ["dist", "index.ts", "src"],
+  license: "Apache-2.0",
+  homepage: HOMEPAGE,
+  bugs: { url: BUGS_URL },
+  // Force `npm publish` to upload to public npm regardless of whatever
+  // registry the developer's `~/.npmrc` defaults to (e.g. a
+  // read-only corporate mirror). `publishConfig` is consulted by
+  // `npm publish` only; install/resolve paths still respect the
+  // ambient default registry.
+  publishConfig: {
+    registry: "https://registry.npmjs.org/",
+    access: "public",
+  },
 } as const;
 
 function discoverPackages(): PublishablePackage[] {
@@ -72,12 +91,23 @@ function discoverPackages(): PublishablePackage[] {
     });
 }
 
-function augment(original: PackageJson): PackageJson {
+function augment(original: PackageJson, pkg: PublishablePackage): PackageJson {
+  // Per-package `repository.directory` so the npmjs.com "View source"
+  // link lands on the right subfolder. The URL itself is the same
+  // monorepo for every package - that match is what trusted-publisher
+  // verification compares against the actor's GitHub repo.
+  const repository = {
+    type: "git",
+    url: REPO_URL,
+    directory: relative(ROOT, pkg.dir).replace(/\\/g, "/"),
+  };
+
   // Spread original first so any explicitly-set value in the source
   // package.json wins. This lets a single package override a field
   // (e.g. a custom `exports` map) without touching this script.
   return {
     ...PUBLISH_FIELDS,
+    repository,
     ...original,
     exports: original.exports ?? PUBLISH_FIELDS.exports,
     files: (original.files as string[] | undefined) ?? [...PUBLISH_FIELDS.files],
@@ -100,7 +130,7 @@ function snapshot(): void {
 function applyAugmentation(): void {
   for (const pkg of packages) {
     const original = JSON.parse(snapshots.get(pkg.jsonPath)!) as PackageJson;
-    const augmented = augment(original);
+    const augmented = augment(original, pkg);
     writeFileSync(pkg.jsonPath, JSON.stringify(augmented, null, 2) + "\n");
   }
 }

@@ -69,33 +69,65 @@ bun run create shared <slug>   # types-only package stub
 
 Publishable packages use Changesets. Workspace members under `@dbx-tools/*` are
 configured as `fixed` in [`.changeset/config.json`](.changeset/config.json) so
-they version together. Add a change:
+they version together. Releases are **tag-driven**: pushing a `v<version>` tag
+to `origin` fires the [release workflow](.github/workflows/release.yml), which
+builds every publishable workspace and runs `bunx changeset publish` against
+npm. No PR-based versioning bot, no auto-publish on push to `main` - the tag
+push is the deliberate signal that this commit ships.
+
+### Per-release flow
 
 ```bash
+# 1. Record what's changing.
 bun changeset
-# pick packages + bump level, write a one-liner summary
+#    pick packages + bump level, write a one-liner summary
+
+# 2. Apply the changeset: bumps every fixed @dbx-tools/* package's version
+#    and regenerates CHANGELOG.md entries. Commit the result.
+bun run version
+git commit -am "chore: version packages"
+git push origin main
+
+# 3. Tag the version-bump commit and push the tag. The script reads the
+#    bumped version from the workspace, refuses to tag on a dirty tree or
+#    when HEAD is ahead of origin, then creates and pushes v<version>.
+bun run tag
+#    optionally: bun run tag --dry-run   to preview
 ```
 
-The [release workflow](.github/workflows/release.yml) is **disabled by default**
-(trigger is `workflow_dispatch` only) until packages are ready to ship. To
-enable real publishes:
+The tag push triggers the workflow. Build + publish typically takes ~2 minutes
+on `ubuntu-latest`.
 
-1. Add an `NPM_TOKEN` repo secret with publish access to the `@dbx-tools`
-   scope (npm automation token, `Read and Publish` scope).
-2. Flip the workflow trigger from `workflow_dispatch:` to
-   `push: { branches: [main] }`.
+### What the publish step does
 
-Once enabled, every push to `main` either opens a "Version Packages" PR that
-applies pending changesets and regenerates changelogs, or - if no pending
-changesets remain - publishes the bumped packages via `bun run release`. The
-`release` script (`scripts/publish.ts`) snapshots each package's minimal
-`package.json`, mutates it in place with the npm-ready `main` / `types` /
-`exports` / `files` fields, runs `changeset publish`, then restores the
-originals so the workspace shape on disk stays clean.
+`scripts/publish.ts` snapshots each minimal on-disk `package.json`, mutates it
+in place with the npm-ready fields - `main`, `types`, `exports`, `files`,
+`license`, `repository` (with per-package `directory`), `homepage`, `bugs`,
+`publishConfig` - then runs `bunx changeset publish`. Changesets compares each
+package's version against what's on npm and publishes the ones the registry
+hasn't seen. The script restores the originals in a `finally` block so the
+workspace shape on disk stays minimal regardless of success or failure.
 
-To publish manually from a developer machine (after `bun changeset version`):
+### Auth
+
+The workflow reads `NPM_TOKEN` from a repository secret (npm Automation token
+with publish access to the `@dbx-tools` scope). After the very first publish
+of each package on npm, you can configure **trusted publishing** per package
+(`npmjs.com → @dbx-tools/<pkg> → Settings → Trusted Publishing → GitHub
+Actions → workflow `release.yml`, repo `reggie-db/dbx-tools-appkit``) and then
+drop the `NODE_AUTH_TOKEN:` env line from the workflow - `id-token: write` is
+already granted, and npm CLI 11.5.1+ on the runner (pinned via `node-version:
+24.x` in the workflow) will negotiate the OIDC publish token automatically.
+For maximum security, follow up with `Settings → Publishing access → Require
+2FA and disallow tokens` to lock out any future leaked token.
+
+### Manual ad-hoc publish
+
+You can run the same publish flow locally - useful for one-off republishes or
+debugging the augmentation:
 
 ```bash
+# Auth: ~/.npmrc needs //registry.npmjs.org/:_authToken=npm_xxx
 bun run release            # bun scripts/build.ts && bun scripts/publish.ts
 ```
 

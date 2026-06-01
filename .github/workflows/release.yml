@@ -1,25 +1,40 @@
-name: Release (disabled)
+name: Release
 
-# DISABLED: npm publishing is intentionally turned off. The workflow is
-# kept on disk (with `workflow_dispatch` as the only trigger) so it can
-# be re-enabled by flipping the trigger back to `push: branches: [main]`
-# when packages are ready to ship.
+# Tag-driven release. Push a `v<version>` tag (use `bun run tag` to
+# generate one from the current package.json versions) and this
+# workflow builds every publishable workspace and publishes to npm.
 #
-# On the first run after one or more changesets land, `changesets/action`
-# opens a "Version Packages" PR that applies the version bumps and
-# regenerates changelogs. Merging that PR triggers this workflow again,
-# this time with no pending changesets, and `publish: bun run release`
-# pushes the bumped packages to npm.
+# Locally:
+#   bun changeset                         # record what's changing
+#   bun run version                       # bump versions + write CHANGELOG
+#   git commit -am "chore: version packages"
+#   git push origin main
+#   bun run tag                           # create + push v<version>
 #
-# Required repository secrets (when re-enabled):
-#   NPM_TOKEN  - npm automation token with publish access to @dbx-tools.
-#                Create at https://www.npmjs.com/settings/<your-user>/tokens
-#                with type "Automation" and "Read and Publish" scope.
+# The tag push fires this workflow. `bun run release` runs
+# `bun scripts/build.ts && bun scripts/publish.ts`; the publish step
+# augments each package.json with npm-ready fields (main / types /
+# exports / files / publishConfig / repository) then runs
+# `bunx changeset publish`, which compares each package.json version
+# against the registry and publishes the ones that don't exist yet.
 #
-# The default GITHUB_TOKEN handles the version PR; you do not need to add
-# a PAT for that side.
+# Auth: NPM_TOKEN secret (Automation token from npmjs.com → Access
+# Tokens) is read by npm via the auth-token line emitted by
+# actions/setup-node when `NODE_AUTH_TOKEN` is set on the publish
+# step. Once trusted publishing is configured per-package on
+# npmjs.com (Settings → Trusted Publishing → GitHub Actions →
+# `release.yml`), the workflow can swap to OIDC by removing the
+# NODE_AUTH_TOKEN env line; `id-token: write` is already granted
+# below.
+#
+# Manual trigger is also enabled (workflow_dispatch) for one-off
+# republishes that don't go through a tag - useful when retrying a
+# partial publish.
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
 
 concurrency:
@@ -27,8 +42,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
   id-token: write
 
 jobs:
@@ -43,20 +57,23 @@ jobs:
         with:
           bun-version: latest
 
+      - uses: actions/setup-node@v6
+        with:
+          # Pinned to 24.x so `npm` is >= 11.5.1, the minimum for
+          # trusted publishing / OIDC auth. Bun is used for everything
+          # else; only `bunx changeset publish` (which shells out to
+          # `npm publish`) requires the system `npm`.
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org/"
+
       - name: Install
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build
         run: bun run build
 
-      - name: Create release PR or publish
-        uses: changesets/action@v1
-        with:
-          publish: bun run release
-          version: bun run version
-          commit: "chore: version packages"
-          title: "Version Packages"
+      - name: Publish
+        run: bun run release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
