@@ -8,9 +8,9 @@
  * helpers from other packages. Types come along with the namespace
  * (e.g. `httpUtils.HeaderInput`, `logUtils.Logger`).
  */
-export * as commonUtils from "./common.js";
-export * as httpUtils from "./http.js";
-export * as logUtils from "./log.js";
-export * as pluginUtils from "./plugin.js";
-export * as projectUtils from "./project.js";
-export * as stringUtils from "./string.js";
+export * as commonUtils from "./src/common.js";
+export * as httpUtils from "./src/http.js";
+export * as logUtils from "./src/log.js";
+export * as pluginUtils from "./src/plugin.js";
+export * as projectUtils from "./src/project.js";
+export * as stringUtils from "./src/string.js";

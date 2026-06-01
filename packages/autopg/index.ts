@@ -13,6 +13,6 @@
  * await createApp({ plugins: [lakebase(), server()] });
  * ```
  */
-export * from "./address.js";
-export * from "./autopg.js";
-export * from "./resolver.js";
+export * from "./src/address.js";
+export * from "./src/autopg.js";
+export * from "./src/resolver.js";

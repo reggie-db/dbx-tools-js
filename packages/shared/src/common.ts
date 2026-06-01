@@ -28,7 +28,9 @@ export function memoize<TArgs extends readonly unknown[], TReturn>(
 ): (...args: TArgs) => TReturn | Promise<TReturn>;
 
 export function memoize<TArgs extends readonly unknown[], TReturn>(
-  fn: ((...args: TArgs) => TReturn | Promise<TReturn>) | (() => TReturn | Promise<TReturn>),
+  fn:
+    | ((...args: TArgs) => TReturn | Promise<TReturn>)
+    | (() => TReturn | Promise<TReturn>),
   options?: MemoizeOptions<TArgs>,
 ): ((...args: TArgs) => TReturn | Promise<TReturn>) | (() => Promise<TReturn>) {
   if (fn.length === 0) {
@@ -88,9 +90,7 @@ export function memoized(
   return descriptor;
 }
 
-function defaultMemoizeKey<TArgs extends readonly unknown[]>(
-  ...args: TArgs
-): string {
+function defaultMemoizeKey<TArgs extends readonly unknown[]>(...args: TArgs): string {
   return JSON.stringify(args);
 }
 
@@ -102,4 +102,3 @@ function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
     typeof (value as Promise<T>).then === "function"
   );
 }
-

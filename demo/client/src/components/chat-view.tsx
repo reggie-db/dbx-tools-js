@@ -1,50 +1,50 @@
+import { useEffect, useRef, useState } from "react";
+import type { UIMessage } from "ai";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
-  Conversation,
-  ConversationContent,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation";
-import { Message, MessageContent } from "@/components/ai-elements/message";
-import {
-  PromptInput,
-  PromptInputActionAddAttachments,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuTrigger,
-  PromptInputAttachment,
-  PromptInputAttachments,
-  PromptInputBody,
-  PromptInputButton,
-  type PromptInputMessage,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputFooter,
-  PromptInputTools,
-} from "@/components/ai-elements/prompt-input";
-import { Action, Actions } from "@/components/ai-elements/actions";
-import { Fragment, useState } from "react";
-import { Response } from "@/components/ai-elements/response";
-import { Shimmer } from "@/components/ai-elements/shimmer";
-import {
+  ArrowDownIcon,
   CheckIcon,
+  ChevronDownIcon,
   CopyIcon,
-  GlobeIcon,
+  MessageSquareIcon,
   RefreshCcwIcon,
+  SendIcon,
+  SparklesIcon,
+  UserIcon,
   XIcon,
 } from "lucide-react";
 import {
-  Source,
-  Sources,
-  SourcesContent,
-  SourcesTrigger,
-} from "@/components/ai-elements/sources";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
-import { Spinner } from "@databricks/appkit-ui/react";
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
-import type { UIMessage } from "ai";
+  Avatar,
+  AvatarFallback,
+  Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+  Item,
+  ItemContent,
+  ItemMedia,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Spinner,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+  cn,
+} from "@databricks/appkit-ui/react";
 
 const DEFAULT_SUGGESTIONS = [
   "Tell me about Spirited Away",
@@ -52,19 +52,15 @@ const DEFAULT_SUGGESTIONS = [
   "Summarize the plot of Howl's Moving Castle",
 ];
 
+const BOTTOM_THRESHOLD_PX = 24;
+
 export type ChatStatus = "submitted" | "streaming" | "ready" | "error";
 
 /**
- * Lifecycle of a tool invocation we want to surface in the chat
- * bubble: queued/running while we wait on the tool, done once the
- * `tool-result` chunk lands, or `error` for `tool-error`. Tool name
- * is rendered verbatim apart from `_` -> ` ` and a leading namespace
- * (e.g. `genie_default_`) being dropped for readability.
- *
- * `progress` carries mid-flight {@link ToolProgress} events emitted
- * by the tool itself via Mastra's `ctx.writer` (used by the Genie
- * tool to forward status / SQL / row-count info while it waits on
- * the long-running Databricks call).
+ * Lifecycle of a single tool invocation surfaced inline in the assistant
+ * bubble. `running` while we wait for the backend, `done` on `tool-result`,
+ * `error` on `tool-error`. `progress` is an in-order log of mid-flight
+ * events the tool itself pushed through Mastra's `ctx.writer`.
  */
 export type ToolEvent = {
   id: string;
@@ -74,10 +70,9 @@ export type ToolEvent = {
 };
 
 /**
- * Normalised progress event published by a tool while it runs. The
- * shape mirrors `packages/mastra/src/genie.ts#GenieProgress`; the
- * union is kept open here (`"text"`, `"sql"`, `"data"`, ...) so other
- * tools can publish their own kinds without a UI change.
+ * Normalised progress event shape; mirrors `GenieProgress` in the Mastra
+ * Genie tool wrapper. Open union so new tools can publish new kinds
+ * without breaking existing renders.
  */
 export type ToolProgress =
   | { kind: "started"; conversationId: string; messageId: string; spaceId: string }
@@ -88,24 +83,27 @@ export type ToolProgress =
   | { kind: "suggested"; questions: string[] }
   | { kind: "error"; error: string };
 
+/** Subset of a Model Serving endpoint surfaced in the model picker. */
+export type ChatModelOption = { name: string };
+
 export type ChatViewProps = {
   messages: UIMessage[];
   status: ChatStatus;
-  sendMessage: (
-    message: { text: string; files?: PromptInputMessage["files"] },
-    options?: { body?: Record<string, unknown> },
-  ) => void;
+  sendMessage: (message: { text: string }) => void;
   regenerate?: () => void;
   suggestions?: string[];
-  /**
-   * Map of assistant message id -> tool invocations that fired during
-   * that turn. Rendered as inline status pills inside the bubble so
-   * long-running tools (e.g. Genie SQL) give visible feedback while
-   * the LLM is waiting on a `tool-result` chunk.
-   */
   toolEventsByMessage?: Record<string, ToolEvent[]>;
+  /** Available model endpoints. Pass an empty array (or omit) to hide the picker. */
+  models?: ChatModelOption[];
+  /** Currently selected model name; empty string means "use server default". */
+  model?: string;
+  onModelChange?: (model: string) => void;
 };
 
+/**
+ * Strip noisy provider prefixes (e.g. `genie_default_`) and turn
+ * snake/camel into a flat lower-case label the user can read.
+ */
 const humanizeToolName = (toolName: string): string =>
   toolName
     .replace(/^[a-z0-9]+_(?:default|primary)_/i, "")
@@ -114,27 +112,25 @@ const humanizeToolName = (toolName: string): string =>
     .toLowerCase();
 
 /**
- * Pick the freshest user-facing label for a running tool. When the
- * tool has published status updates (Genie does this with each step
- * of FETCHING_METADATA / ASKING_AI / EXECUTING_QUERY), use the latest
- * one so the shimmer text actually tracks what the backend is doing
+ * Track the freshest status label a running tool has published so the
+ * inline pill follows the backend (FETCHING_METADATA -> EXECUTING_QUERY)
  * instead of stalling on a generic "calling X".
  */
 const runningLabelFor = (event: ToolEvent): string => {
-  const latestStatus = [...(event.progress ?? [])]
+  const latest = [...(event.progress ?? [])]
     .reverse()
     .find((p): p is Extract<ToolProgress, { kind: "status" }> => p.kind === "status");
-  if (latestStatus) return latestStatus.label;
-  return `calling ${humanizeToolName(event.toolName)}`;
+  return latest ? latest.label : `calling ${humanizeToolName(event.toolName)}`;
 };
 
+const getReasoningText = (parts: UIMessage["parts"]): string =>
+  parts
+    .filter((p): p is { type: "reasoning"; text: string } => p.type === "reasoning")
+    .map((p) => p.text)
+    .join("\n\n");
+
 const ToolProgressDetails = ({ progress }: { progress: ToolProgress[] }) => {
-  // We filter out "status" / "started" because those drive the pill
-  // label itself; only the substantive payloads (SQL, row counts,
-  // suggestions, errors) make it into the detail list.
-  const detailed = progress.filter(
-    (p) => p.kind !== "status" && p.kind !== "started",
-  );
+  const detailed = progress.filter((p) => p.kind !== "status" && p.kind !== "started");
   if (detailed.length === 0) return null;
   return (
     <div className="mt-2 flex flex-col gap-2">
@@ -142,27 +138,24 @@ const ToolProgressDetails = ({ progress }: { progress: ToolProgress[] }) => {
         switch (p.kind) {
           case "sql":
             return (
-              <details
-                key={`sql-${i}`}
-                className="rounded border border-border/60 bg-background/40 text-xs"
-              >
-                <summary className="cursor-pointer px-2 py-1 text-muted-foreground">
-                  SQL{p.title ? `: ${p.title}` : ""}
-                </summary>
-                <pre className="overflow-x-auto px-2 pb-2 text-foreground">
-                  <code>{p.sql}</code>
-                </pre>
-                {p.description && (
-                  <p className="px-2 pb-2 text-muted-foreground">{p.description}</p>
-                )}
-              </details>
+              <Collapsible key={`sql-${i}`} className="rounded border border-border/60 bg-background/40 text-xs">
+                <CollapsibleTrigger className="flex w-full items-center gap-1 px-2 py-1 text-left text-muted-foreground hover:text-foreground">
+                  <ChevronDownIcon className="size-3" />
+                  <span>SQL{p.title ? `: ${p.title}` : ""}</span>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <pre className="overflow-x-auto px-2 pb-2 text-foreground">
+                    <code>{p.sql}</code>
+                  </pre>
+                  {p.description && (
+                    <p className="px-2 pb-2 text-muted-foreground">{p.description}</p>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
             );
           case "data":
             return (
-              <div
-                key={`data-${i}`}
-                className="text-xs text-muted-foreground"
-              >
+              <div key={`data-${i}`} className="text-xs text-muted-foreground">
                 returned {p.rowCount} row{p.rowCount === 1 ? "" : "s"}
                 {p.columns.length > 0
                   ? ` · ${p.columns.slice(0, 6).join(", ")}${p.columns.length > 6 ? "..." : ""}`
@@ -184,19 +177,13 @@ const ToolProgressDetails = ({ progress }: { progress: ToolProgress[] }) => {
             );
           case "text":
             return (
-              <p
-                key={`text-${i}`}
-                className="text-xs text-muted-foreground italic"
-              >
+              <p key={`text-${i}`} className="text-xs italic text-muted-foreground">
                 {p.content}
               </p>
             );
           case "error":
             return (
-              <p
-                key={`err-${i}`}
-                className="text-xs text-destructive"
-              >
+              <p key={`err-${i}`} className="text-xs text-destructive">
                 {p.error}
               </p>
             );
@@ -208,54 +195,188 @@ const ToolProgressDetails = ({ progress }: { progress: ToolProgress[] }) => {
   );
 };
 
-const ToolStatusList = ({ events }: { events: ToolEvent[] }) => (
+const ToolEventPill = ({ event }: { event: ToolEvent }) => {
+  const isRunning = event.status === "running";
+  const isError = event.status === "error";
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-border/40 bg-background/30 px-2 py-1.5">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        {isRunning ? (
+          <>
+            <Spinner className="size-3" />
+            <span className="animate-pulse">{runningLabelFor(event)}</span>
+          </>
+        ) : isError ? (
+          <>
+            <XIcon className="size-3 text-destructive" />
+            <span>failed {humanizeToolName(event.toolName)}</span>
+          </>
+        ) : (
+          <>
+            <CheckIcon className="size-3" />
+            <span>called {humanizeToolName(event.toolName)}</span>
+          </>
+        )}
+      </div>
+      {event.progress && event.progress.length > 0 && (
+        <ToolProgressDetails progress={event.progress} />
+      )}
+    </div>
+  );
+};
+
+const ToolEventList = ({ events }: { events: ToolEvent[] }) => (
   <div className="mb-2 flex flex-col gap-2">
-    {events.map((event) => {
-      const isRunning = event.status === "running";
-      const isError = event.status === "error";
-      const Icon = isError ? XIcon : CheckIcon;
-      return (
-        <div
-          key={event.id}
-          className="flex flex-col gap-1 rounded-md border border-border/40 bg-background/30 px-2 py-1.5"
-        >
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {isRunning ? (
-              <>
-                <Spinner className="size-3" />
-                <Shimmer as="span" duration={1.5}>
-                  {runningLabelFor(event)}
-                </Shimmer>
-              </>
-            ) : (
-              <>
-                <Icon className={isError ? "size-3 text-destructive" : "size-3"} />
-                <span>
-                  {isError ? "failed " : "called "}
-                  {humanizeToolName(event.toolName)}
-                </span>
-              </>
-            )}
-          </div>
-          {event.progress && event.progress.length > 0 && (
-            <ToolProgressDetails progress={event.progress} />
-          )}
-        </div>
-      );
-    })}
+    {events.map((event) => (
+      <ToolEventPill key={event.id} event={event} />
+    ))}
   </div>
 );
 
-type MessagePartWithReasoningText = {
-  type: string;
-  text?: string;
+const RoleAvatar = ({ role }: { role: UIMessage["role"] }) => (
+  <Avatar className="size-7">
+    <AvatarFallback>
+      {role === "assistant" ? (
+        <SparklesIcon className="size-4" />
+      ) : (
+        <UserIcon className="size-4" />
+      )}
+    </AvatarFallback>
+  </Avatar>
+);
+
+/**
+ * GitHub-flavoured Markdown renderer. `remark-gfm` adds tables,
+ * strikethrough, task lists, and autolink literals on top of plain
+ * react-markdown. No syntax highlighter is wired in - fenced code
+ * still renders as a styled `<pre><code>` block, just not colourised
+ * (avoids dragging in shiki / highlight.js + their language packs).
+ */
+const MARKDOWN_PLUGINS = [remarkGfm];
+
+const AssistantMarkdown = ({ children }: { children: string }) => (
+  <div
+    className={cn(
+      "prose prose-sm dark:prose-invert max-w-none break-words",
+      "[&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted/60 [&_pre]:p-2",
+      "[&_code]:rounded [&_code]:bg-muted/60 [&_code]:px-1 [&_code]:py-0.5",
+      "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
+      "[&_table]:w-full [&_table]:border-collapse [&_table]:my-2",
+      "[&_th]:border [&_th]:border-border [&_th]:bg-muted/40 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left",
+      "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:align-top",
+    )}
+  >
+    <Markdown remarkPlugins={MARKDOWN_PLUGINS}>{children}</Markdown>
+  </div>
+);
+
+type AssistantBubbleProps = {
+  message: UIMessage;
+  isLast: boolean;
+  status: ChatStatus;
+  events?: ToolEvent[];
+  regenerate?: () => void;
 };
 
-const getVisibleReasoningText = (parts: MessagePartWithReasoningText[]) =>
-  parts
-    .filter((part) => part.type === "reasoning")
-    .map((part) => part.text ?? "")
-    .join("\n\n");
+const AssistantBubble = ({
+  message,
+  isLast,
+  status,
+  events,
+  regenerate,
+}: AssistantBubbleProps) => {
+  const reasoning = getReasoningText(message.parts);
+  const isReasoningStreaming =
+    isLast && status === "streaming" && message.parts.at(-1)?.type === "reasoning";
+  const textParts = message.parts.filter(
+    (p): p is { type: "text"; text: string } => p.type === "text",
+  );
+  const fullText = textParts.map((p) => p.text).join("");
+  const hasText = fullText.length > 0;
+
+  return (
+    <Item className="items-start gap-3 border-none bg-transparent p-0">
+      <ItemMedia>
+        <RoleAvatar role="assistant" />
+      </ItemMedia>
+      <ItemContent className="gap-2">
+        {reasoning && (
+          <Collapsible defaultOpen={isReasoningStreaming}>
+            <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+              <ChevronDownIcon className="size-3" />
+              <span>{isReasoningStreaming ? "thinking..." : "thoughts"}</span>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="mt-1 border-l-2 border-border/60 pl-3 text-xs text-muted-foreground whitespace-pre-wrap">
+                {reasoning}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+        {events && events.length > 0 && <ToolEventList events={events} />}
+        {hasText && <AssistantMarkdown>{fullText}</AssistantMarkdown>}
+        {isLast && hasText && (
+          <div className="flex items-center gap-1">
+            {regenerate && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    onClick={() => regenerate()}
+                  >
+                    <RefreshCcwIcon className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Retry</TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-7"
+                  onClick={() => navigator.clipboard.writeText(fullText)}
+                >
+                  <CopyIcon className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy</TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+      </ItemContent>
+    </Item>
+  );
+};
+
+const UserBubble = ({ message }: { message: UIMessage }) => {
+  const text = message.parts
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("");
+  return (
+    <Item className="items-start gap-3 border-none bg-transparent p-0">
+      <ItemMedia>
+        <RoleAvatar role="user" />
+      </ItemMedia>
+      <ItemContent>
+        <div className="rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{text}</div>
+      </ItemContent>
+    </Item>
+  );
+};
+
+/**
+ * Sentinel for "no explicit model" in the Select. Radix's `SelectItem`
+ * forbids an empty string `value`, so we map `""` <-> `__default__`
+ * across the dropdown boundary.
+ */
+const DEFAULT_MODEL_VALUE = "__default__";
 
 export const ChatView = ({
   messages,
@@ -264,198 +385,188 @@ export const ChatView = ({
   regenerate,
   suggestions = DEFAULT_SUGGESTIONS,
   toolEventsByMessage = {},
+  models,
+  model,
+  onModelChange,
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
-  const [webSearch, setWebSearch] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
-  // Show the loader whenever the request is in flight but the assistant
-  // hasn't produced any visible signal yet. Without this the indicator
-  // disappears as soon as the status flips to "streaming", which can
-  // happen before the first text-delta / reasoning-delta lands and
-  // leaves an empty gap on screen. Tool indicators are rendered
-  // inline in the bubble, so once any tool event exists for the
-  // current assistant id we hand the wait UI off to that and hide
-  // the standalone spinner.
-  const lastMessage = messages.at(-1);
-  const lastToolEvents = lastMessage ? toolEventsByMessage[lastMessage.id] : undefined;
-  const lastIsAssistantWithContent =
-    lastMessage?.role === "assistant" &&
-    (lastMessage.parts.some(
-      (part) =>
-        (part.type === "text" || part.type === "reasoning") &&
-        Boolean((part as { text?: string }).text),
-    ) ||
-      (lastToolEvents?.length ?? 0) > 0);
-  const isWaiting =
-    (status === "submitted" || status === "streaming") && !lastIsAssistantWithContent;
+  // Auto-scroll to bottom whenever a new chunk lands, but only while the
+  // user is already pinned to the bottom. Lets them scroll up to read
+  // history mid-stream without the view yanking them back.
+  useEffect(() => {
+    if (!isAtBottom || !scrollRef.current) return;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, toolEventsByMessage, isAtBottom]);
 
-  const handleSubmit = (message: PromptInputMessage) => {
-    const hasText = Boolean(message.text);
-    const hasAttachments = Boolean(message.files?.length);
-    if (!(hasText || hasAttachments)) return;
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD_PX);
+  };
 
-    sendMessage(
-      {
-        text: message.text || "Sent with attachments",
-        files: message.files,
-      },
-      { body: { webSearch } },
-    );
+  const scrollToBottom = () => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    sendMessage({ text });
     setInput("");
   };
 
-  const handleSuggestionClick = (suggestion: string) => {
-    sendMessage({ text: suggestion });
-  };
+  const lastMessage = messages.at(-1);
+  const lastEvents = lastMessage ? toolEventsByMessage[lastMessage.id] : undefined;
+  const lastAssistantHasContent =
+    lastMessage?.role === "assistant" &&
+    (lastMessage.parts.some(
+      (p) =>
+        (p.type === "text" || p.type === "reasoning") &&
+        Boolean((p as { text?: string }).text),
+    ) ||
+      (lastEvents?.length ?? 0) > 0);
+  const isWaiting =
+    (status === "submitted" || status === "streaming") && !lastAssistantHasContent;
+
+  const showModelPicker = Boolean(
+    models && models.length > 0 && onModelChange,
+  );
 
   return (
-    <div className="max-w-4xl mx-auto p-0 md:p-6 relative size-full">
-      <div className="flex flex-col h-full">
-        <Conversation className="h-full">
-          <ConversationContent>
-            {messages.map((message, messageIndex) => {
-              const isLastAssistantMessage =
-                message.role === "assistant" && messageIndex === messages.length - 1;
-              const reasoningText = getVisibleReasoningText(message.parts);
-              const isReasoningStreaming =
-                isLastAssistantMessage &&
-                status === "streaming" &&
-                message.parts.at(-1)?.type === "reasoning";
-              const events =
-                message.role === "assistant" ? toolEventsByMessage[message.id] : undefined;
-              const hasTextPart = message.parts.some((p) => p.type === "text");
-
-              return (
-                <div key={message.id}>
-                  {message.role === "assistant" &&
-                    message.parts.filter((part) => part.type === "source-url").length >
-                      0 && (
-                      <Sources>
-                        <SourcesTrigger
-                          count={
-                            message.parts.filter((part) => part.type === "source-url")
-                              .length
-                          }
-                        />
-                        {message.parts
-                          .filter((part) => part.type === "source-url")
-                          .map((part, i) => (
-                            <SourcesContent key={`${message.id}-${i}`}>
-                              <Source
-                                key={`${message.id}-${i}`}
-                                href={part.url}
-                                title={part.url}
-                              />
-                            </SourcesContent>
-                          ))}
-                      </Sources>
-                    )}
-                  {reasoningText && (
-                    <Reasoning className="w-full" isStreaming={isReasoningStreaming}>
-                      <ReasoningTrigger />
-                      <ReasoningContent>{reasoningText}</ReasoningContent>
-                    </Reasoning>
-                  )}
-                  {events && events.length > 0 && !hasTextPart && (
-                    <Message from={message.role}>
-                      <MessageContent>
-                        <ToolStatusList events={events} />
-                      </MessageContent>
-                    </Message>
-                  )}
-                  {message.parts.map((part, i) => {
-                    const firstTextIdx = message.parts.findIndex(
-                      (p) => p.type === "text",
-                    );
-                    switch (part.type) {
-                      case "text":
-                        return (
-                          <Fragment key={`${message.id}-${i}`}>
-                            <Message from={message.role}>
-                              <MessageContent>
-                                {i === firstTextIdx &&
-                                  events &&
-                                  events.length > 0 && (
-                                    <ToolStatusList events={events} />
-                                  )}
-                                <Response>{part.text}</Response>
-                              </MessageContent>
-                            </Message>
-                            {isLastAssistantMessage && (
-                              <Actions className="mt-2">
-                                {regenerate && (
-                                  <Action onClick={() => regenerate()} label="Retry">
-                                    <RefreshCcwIcon className="size-3" />
-                                  </Action>
-                                )}
-                                <Action
-                                  onClick={() =>
-                                    navigator.clipboard.writeText(part.text)
-                                  }
-                                  label="Copy"
-                                >
-                                  <CopyIcon className="size-3" />
-                                </Action>
-                              </Actions>
-                            )}
-                          </Fragment>
-                        );
-                      case "reasoning":
-                        return null;
-                      default:
-                        return null;
-                    }
-                  })}
-                </div>
-              );
-            })}
-            {isWaiting && <Spinner className="size-5 text-muted-foreground" />}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
-
-        <Suggestions>
-          {suggestions.map((suggestion) => (
-            <Suggestion
-              key={suggestion}
-              onClick={handleSuggestionClick}
-              suggestion={suggestion}
-            />
-          ))}
-        </Suggestions>
-
-        <PromptInput onSubmit={handleSubmit} className="mt-4" globalDrop multiple>
-          <PromptInputBody>
-            <PromptInputAttachments>
-              {(attachment) => <PromptInputAttachment data={attachment} />}
-            </PromptInputAttachments>
-            <PromptInputTextarea
-              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                setInput(e.target.value)
+    <TooltipProvider delayDuration={200}>
+      <div className="mx-auto flex h-full max-w-4xl flex-col p-0 md:p-6">
+        {showModelPicker && (
+          <div className="flex items-center justify-end gap-2 px-4 pb-2 pt-1 text-xs text-muted-foreground">
+            <span>Model</span>
+            <Select
+              value={model ? model : DEFAULT_MODEL_VALUE}
+              onValueChange={(v) =>
+                onModelChange?.(v === DEFAULT_MODEL_VALUE ? "" : v)
               }
-              value={input}
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools>
-              <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger />
-                <PromptInputActionMenuContent>
-                  <PromptInputActionAddAttachments />
-                </PromptInputActionMenuContent>
-              </PromptInputActionMenu>
-              <PromptInputButton
-                variant={webSearch ? "default" : "ghost"}
-                onClick={() => setWebSearch(!webSearch)}
+            >
+              <SelectTrigger size="sm" className="w-[260px]">
+                <SelectValue placeholder="Server default" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DEFAULT_MODEL_VALUE}>
+                  Server default
+                </SelectItem>
+                {models!.map((m) => (
+                  <SelectItem key={m.name} value={m.name}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="relative flex-1 overflow-y-auto"
+        >
+          {messages.length === 0 ? (
+            <Empty className="h-full">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <MessageSquareIcon className="size-5" />
+                </EmptyMedia>
+                <EmptyTitle>Start a conversation</EmptyTitle>
+                <EmptyDescription>
+                  Ask anything, or pick a suggestion below.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <div className="flex flex-col gap-4 p-4">
+              {messages.map((message, i) => {
+                const isLast = i === messages.length - 1;
+                if (message.role === "assistant") {
+                  return (
+                    <AssistantBubble
+                      key={message.id}
+                      message={message}
+                      isLast={isLast}
+                      status={status}
+                      events={toolEventsByMessage[message.id]}
+                      regenerate={regenerate}
+                    />
+                  );
+                }
+                return <UserBubble key={message.id} message={message} />;
+              })}
+              {isWaiting && (
+                <div className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
+                  <Spinner className="size-3" />
+                  <span className="animate-pulse">thinking...</span>
+                </div>
+              )}
+            </div>
+          )}
+          {!isAtBottom && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={scrollToBottom}
+              className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full shadow"
+            >
+              <ArrowDownIcon className="size-4" />
+            </Button>
+          )}
+        </div>
+
+        {messages.length === 0 && suggestions.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pb-2">
+            {suggestions.map((s) => (
+              <Button
+                key={s}
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => sendMessage({ text: s })}
               >
-                <GlobeIcon size={16} />
-                <span>Search</span>
-              </PromptInputButton>
-            </PromptInputTools>
-            <PromptInputSubmit disabled={!input && !status} status={status} />
-          </PromptInputFooter>
-        </PromptInput>
+                {s}
+              </Button>
+            ))}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="px-4 pb-4 pt-2">
+          <InputGroup>
+            <InputGroupTextarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e as unknown as React.FormEvent);
+                }
+              }}
+              placeholder="Send a message..."
+              rows={1}
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                type="submit"
+                size="icon-sm"
+                variant="default"
+                disabled={!input.trim() || status === "streaming" || status === "submitted"}
+              >
+                {status === "streaming" || status === "submitted" ? (
+                  <Spinner className="size-3" />
+                ) : (
+                  <SendIcon className="size-3" />
+                )}
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+        </form>
       </div>
-    </div>
+    </TooltipProvider>
   );
 };

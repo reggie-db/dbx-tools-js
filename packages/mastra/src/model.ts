@@ -25,7 +25,12 @@
  * the input verbatim and let Databricks return the canonical error.
  */
 
-import { commonUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import {
+  commonUtils,
+  httpUtils,
+  logUtils,
+  stringUtils,
+} from "@dbx-tools/appkit-shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
 
@@ -315,12 +320,12 @@ async function pickModelId(
   const endpoints = await listServingEndpoints(user.executionContext.client, host, {
     ttlMs: serving.ttlMs,
   });
-
-  if (explicit !== undefined) {
-    return resolveModelId(explicit, endpoints, { threshold: serving.threshold })
-      .modelId;
-  }
-  return pickFirstAvailable(serving.fallbacks, endpoints);
+  const modelId =
+    explicit !== undefined
+      ? resolveModelId(explicit, endpoints, { threshold: serving.threshold }).modelId
+      : pickFirstAvailable(serving.fallbacks, endpoints);
+  logUtils.logger(config).debug(`model selected: ${modelId}`);
+  return modelId;
 }
 
 /**
@@ -377,7 +382,7 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
   const debug = Boolean(process.env.MASTRA_DEBUG_LLM);
   const original = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input, init) => {
-    const url = _toRequestUrl(input);
+    const url = httpUtils.toURL(input);
     if (
       !url ||
       !url.pathname.startsWith(SERVING_ENDPOINTS_PATH_PREFIX) ||
@@ -394,36 +399,12 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
         console.error("[mastra:llm-debug] -> POST", url.toString());
         console.error(JSON.stringify(JSON.parse(rewritten), null, 2));
       } catch {
-        console.error(
-          "[mastra:llm-debug] -> POST",
-          url.toString(),
-          "(non-JSON body)",
-        );
+        console.error("[mastra:llm-debug] -> POST", url.toString(), "(non-JSON body)");
       }
     }
     return original(input, init);
   }) as typeof globalThis.fetch;
 });
-
-/**
- * Pull a parsed `URL` out of a fetch `input` argument (string, `URL`,
- * or `Request`). Returns `null` for invalid / relative URLs; the
- * interceptor uses that as a "leave the request alone" signal so
- * non-serving traffic always falls through to the original `fetch`.
- */
-function _toRequestUrl(input: RequestInfo | URL): URL | null {
-  const raw =
-    typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
-  try {
-    return new URL(raw);
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Parse, sanitize, and re-serialize a `/serving-endpoints/...` POST
@@ -498,7 +479,10 @@ function sanitizeServingMessages(messages: ChatMessage[]): boolean {
   // `trimToNull` collapses the `typeof string && trimmed` dance and
   // drops blank fragments before the `\n\n` join below, so the merge
   // never introduces stray leading / trailing whitespace.
-  const merged = [stringUtils.trimToNull(opener.content), stringUtils.trimToNull(last.content)]
+  const merged = [
+    stringUtils.trimToNull(opener.content),
+    stringUtils.trimToNull(last.content),
+  ]
     .filter((s): s is string => s !== null)
     .join("\n\n");
   opener.content = merged;

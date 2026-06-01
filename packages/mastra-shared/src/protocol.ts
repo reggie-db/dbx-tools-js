@@ -46,6 +46,29 @@ export interface MastraClientConfig {
 }
 
 /**
+ * Minimal descriptor for a Databricks Model Serving endpoint. Mirrors
+ * the server-side `ServingEndpointSummary` from `serving.ts` and is
+ * kept here so the React client can type the `/models` response
+ * without importing the full plugin (which would pull in `pg`,
+ * `fastembed`, and Mastra itself).
+ */
+export interface ServingEndpointSummary {
+  /** Endpoint name as listed by the Model Serving REST API. */
+  name: string;
+  /** Task hint (e.g. `"llm/v1/chat"`). Useful for filtering. */
+  task?: string;
+  /** Ready / updating / failed state. */
+  state?: string;
+  /** Free-form description; mostly informational. */
+  description?: string;
+}
+
+/** JSON payload returned by `GET ${basePath}/models`. */
+export interface ServingEndpointsResponse {
+  endpoints: ServingEndpointSummary[];
+}
+
+/**
  * Compute the chat URL for a given agent, falling back to the default
  * when `agentId` is omitted. Returns `config.chatPath` directly for
  * the default agent (the `chatRoute` mount that does not require an

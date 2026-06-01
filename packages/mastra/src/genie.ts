@@ -66,7 +66,7 @@ export type GenieProgress =
   | { kind: "suggested"; questions: string[] }
   | { kind: "error"; error: string };
 
-const _sendMessageSchema = z.object({
+const sendMessageSchema = z.object({
   content: z.string().describe("Natural-language question to send to the Genie space."),
   conversationId: z
     .string()
@@ -78,7 +78,7 @@ const _sendMessageSchema = z.object({
     ),
 });
 
-const _getConversationSchema = z.object({
+const getConversationSchema = z.object({
   alias: z
     .string()
     .describe(
@@ -123,12 +123,12 @@ export function buildGenieTools(opts: {
         "SQL statements it executed. Returns `{ conversationId, content, " +
         "queries, ... }`; pass `conversationId` back in to follow up in " +
         "the same Genie thread.",
-      inputSchema: _sendMessageSchema,
+      inputSchema: sendMessageSchema,
       execute: async ({ content, conversationId }, ctx) => {
         const stream = opts.exports.sendMessage(alias, content, conversationId, {
           signal: opts.signal,
         });
-        return _drainGenieStream(stream, ctx.writer);
+        return drainGenieStream(stream, ctx.writer);
       },
     });
   }
@@ -139,7 +139,7 @@ export function buildGenieTools(opts: {
       "Fetch the full message history of a prior Genie conversation by id. " +
       "Use when the user references an earlier Genie thread by id, or to " +
       "inspect attachments / SQL from previous turns.",
-    inputSchema: _getConversationSchema,
+    inputSchema: getConversationSchema,
     execute: async ({ alias, conversationId }) => {
       return opts.exports.getConversation(alias, conversationId, opts.signal);
     },
@@ -160,7 +160,7 @@ export function buildGenieTools(opts: {
  * so the UI can show status changes, SQL, and row counts as they
  * happen instead of staring at a spinner for the full Genie round-trip.
  */
-async function _drainGenieStream(
+async function drainGenieStream(
   stream: AsyncGenerator<GenieStreamEvent>,
   writer?: ToolStream,
 ): Promise<{
@@ -216,7 +216,7 @@ async function _drainGenieStream(
         await emit({
           kind: "status",
           status: event.status,
-          label: _humanizeGenieStatus(event.status),
+          label: humanizeGenieStatus(event.status),
         });
         break;
       case "query_result": {
@@ -302,7 +302,7 @@ export function buildGenieProvider(plugin: GeniePluginInstance): {
 } {
   return {
     toolkit(_opts?: unknown) {
-      const aliases = _extractGenieAliases(plugin);
+      const aliases = extractGenieAliases(plugin);
       return buildGenieTools({
         aliases,
         exports: {
@@ -321,7 +321,7 @@ export function buildGenieProvider(plugin: GeniePluginInstance): {
  * `${alias}.sendMessage` / `${alias}.getConversation`, so the unique
  * set of name prefixes is the alias list.
  */
-function _extractGenieAliases(plugin: GeniePluginInstance): string[] {
+function extractGenieAliases(plugin: GeniePluginInstance): string[] {
   const aliases = new Set<string>();
   for (const t of plugin.getAgentTools()) {
     const dot = t.name.indexOf(".");
@@ -336,7 +336,7 @@ function _extractGenieAliases(plugin: GeniePluginInstance): string[] {
  * labels safe to drop straight into a UI pill. Unknown codes are
  * lower-cased with underscores stripped so new states still render.
  */
-function _humanizeGenieStatus(status: string): string {
+function humanizeGenieStatus(status: string): string {
   switch (status) {
     case "FETCHING_METADATA":
       return "Fetching metadata";

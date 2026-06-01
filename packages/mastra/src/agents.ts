@@ -335,6 +335,51 @@ Rules:
    question instead of guessing.`;
 
 /**
+ * Style guardrails appended to every agent's `instructions` to curb
+ * common LLM-isms (em dashes, emojis, sycophantic openers, excessive
+ * hedging, throwaway closers). Appended rather than prepended so the
+ * agent's role/context comes first; the model's recency bias then
+ * helps the style rules dominate the response surface.
+ *
+ * Override globally via {@link MastraPluginConfig.styleInstructions}
+ * (pass `false` to disable entirely, or a string to replace).
+ */
+export const DEFAULT_STYLE_INSTRUCTIONS = `Output style:
+
+- Plain prose. Use hyphens (-) only. Never use em dashes (—) or en dashes (–).
+- Never use emojis.
+- Skip openers like "Great question", "Absolutely", "I'd be happy to help".
+- Skip closers like "Let me know if you have any questions".
+- Skip self-disclaimers ("I should mention", "It's important to note").
+- Answer directly. No preamble before the actual answer.
+- Use lists and headers only when they clarify a multi-part answer; not for short replies.
+- Quote numbers, code, identifiers, and tool output verbatim. Never paraphrase them.`;
+
+/**
+ * Resolve the style block to append to every agent's instructions.
+ * Returns `null` when the caller opted out (`styleInstructions: false`).
+ */
+function resolveStyleInstructions(config: MastraPluginConfig): string | null {
+  if (config.styleInstructions === false) return null;
+  if (typeof config.styleInstructions === "string") {
+    return config.styleInstructions;
+  }
+  return DEFAULT_STYLE_INSTRUCTIONS;
+}
+
+/**
+ * Join an agent's bespoke instructions with the resolved style block.
+ * Returns the bespoke text unchanged when the style block is disabled.
+ */
+function composeInstructions(
+  agentInstructions: string,
+  style: string | null,
+): string {
+  if (!style) return agentInstructions;
+  return `${agentInstructions.trimEnd()}\n\n${style}`;
+}
+
+/**
  * Resolve every entry in `config.agents` into a Mastra `Agent`
  * instance. When `config.agents` is omitted the plugin registers a
  * single built-in `default` analyst so the bare `mastra()` call still
@@ -360,6 +405,7 @@ export async function buildAgents(opts: {
 
   const plugins = buildPluginsMap(context);
   const ambientTools = config.tools ?? {};
+  const style = resolveStyleInstructions(config);
   const agents: Record<string, Agent> = {};
 
   for (const [id, def] of Object.entries(definitions)) {
@@ -369,7 +415,7 @@ export async function buildAgents(opts: {
       id,
       name: def.name ?? id,
       ...(def.description !== undefined ? { description: def.description } : {}),
-      instructions: def.instructions,
+      instructions: composeInstructions(def.instructions, style),
       model: resolveModel(config, def.model),
       tools,
       ...(memory ? { memory } : {}),

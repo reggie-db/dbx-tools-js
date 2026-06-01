@@ -8,11 +8,11 @@
  * instead - that subpath is pure (no pg / fastembed / Mastra deps) and
  * is the right surface for `usePluginClientConfig` consumers.
  */
-export * from "./plugin.js";
-export * from "./client.js";
-export * from "./config.js";
-export * from "./agents.js";
-export * from "./genie.js";
+export * from "./src/plugin.js";
+export * from "../mastra-shared/src/protocol.js";
+export * from "./src/config.js";
+export * from "./src/agents.js";
+export * from "./src/genie.js";
 export {
   clearServingEndpointsCache,
   extractModelOverride,
@@ -25,11 +25,11 @@ export {
   type ResolvedModel,
   type ResolveModelOptions,
   type ServingEndpointSummary,
-} from "./serving.js";
+} from "./src/serving.js";
 export {
   FALLBACK_MODEL_IDS,
   MODEL_CATALOG,
   modelForTier,
   modelsForTier,
   ModelTier,
-} from "./model.js";
+} from "./src/model.js";

@@ -7,7 +7,11 @@ import {
   type ToolEvent,
   type ToolProgress,
 } from "@/components/chat-view";
-import { useMastraClient, useMastraConfig } from "@/lib/mastra-client";
+import {
+  useMastraClient,
+  useMastraConfig,
+  useMastraModels,
+} from "@/lib/mastra-client";
 
 // Same chat UI as pages/Chat.tsx, but instead of pointing useChat at the
 // chatRoute() endpoint, we drive messages by hand using @mastra/client-js.
@@ -31,8 +35,15 @@ const isToolProgress = (value: unknown): value is ToolProgress =>
   typeof (value as { kind?: unknown }).kind === "string";
 
 const Stream = () => {
-  const mastraClient = useMastraClient();
+  const [model, setModel] = useState("");
+  // `useMastraClient(model)` rebuilds the client with
+  // `X-Mastra-Model` attached as a default header whenever the
+  // selected model changes. The Mastra plugin's server middleware
+  // reads that header and overrides the per-request resolved model
+  // without redeploying the agent.
+  const mastraClient = useMastraClient(model);
   const { defaultAgent } = useMastraConfig();
+  const { models } = useMastraModels();
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("ready");
   // Tool-call status keyed by the assistant message that owns them. We
@@ -233,6 +244,9 @@ const Stream = () => {
       sendMessage={sendMessage}
       regenerate={regenerate}
       toolEventsByMessage={toolEventsByMessage}
+      models={models}
+      model={model}
+      onModelChange={setModel}
     />
   );
 };

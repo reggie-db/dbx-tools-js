@@ -58,7 +58,8 @@ export function parseGitRemote(url: string): string | undefined {
 
   const scp = /^[^@]+@[^:]+:(.+)$/i.exec(trimmed);
   if (scp) {
-    return lastPathSegment(scp[1]);
+    const segment = scp[1];
+    return lastPathSegment(segment ?? "");
   }
 
   try {
@@ -74,8 +75,7 @@ export function parseGitRemote(url: string): string | undefined {
 async function resolveProjectName(cwd: string): Promise<string> {
   const root = await findProjectRoot(cwd);
 
-  const fromPackage =
-    (await readNameViaNpm(root)) ?? readNameFromPackageJson(root);
+  const fromPackage = (await readNameViaNpm(root)) ?? readNameFromPackageJson(root);
   if (fromPackage) {
     return fromPackage;
   }

@@ -161,4 +161,19 @@ export interface MastraPluginConfig extends BasePluginConfig {
    * or to add custom endpoints in front of the public catalogue.
    */
   defaultModelFallbacks?: readonly string[];
+  /**
+   * Style guardrails appended to every agent's `instructions` to curb
+   * common LLM-isms (em dashes, emojis, sycophantic openers, throwaway
+   * closers, excessive hedging).
+   *
+   * - `undefined` (default): use the built-in
+   *   `DEFAULT_STYLE_INSTRUCTIONS` from `agents.ts`.
+   * - `string`: replace the default with the supplied block.
+   * - `false`: disable entirely (agents see only their bespoke
+   *   `instructions`).
+   *
+   * Appended (not prepended) so the agent's role and rules come first
+   * and the style block leans on the model's recency bias.
+   */
+  styleInstructions?: string | false;
 }

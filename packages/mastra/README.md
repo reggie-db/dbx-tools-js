@@ -7,7 +7,7 @@ consume with `useChat()`.
 
 The plugin is designed so that wiring it up looks the same as the
 AppKit
-[`agents`](https://developers.databricks.com/docs/appkit/v0/plugins/agents)
+`[agents](https://developers.databricks.com/docs/appkit/v0/plugins/agents)`
 plugin - same `createAgent` / `tool` helpers, same `tools(plugins)`
 callback shape, same `ToolkitOptions`. Switching between the two for a
 given agent is a one-line import change.
@@ -59,14 +59,13 @@ that auto-adapts to Mastra's `createTool` under the hood.
 Memory + storage cascades:
 
 - **No `lakebase()` registered** ▸ agent is fully stateless. No threads,
-  no recall. Same as `mastra()` alone.
-- **`lakebase()` registered, no `storage` / `memory` config** ▸ both
-  auto-turn on. Each agent gets its own `PostgresStore` schema; every
-  agent shares one `PgVector` recall index.
+no recall. Same as `mastra()` alone.
+- `**lakebase()` registered, no `storage` / `memory` config** ▸ both
+auto-turn on. Each agent gets its own `PostgresStore` schema; every
+agent shares one `PgVector` recall index.
 - **Per-agent opt-out** ▸ `createAgent({ ..., memory: false, storage: false })`
-  for routing / one-shot agents that don't need history.
-- **Per-agent override** ▸ pass a `PgVectorConfig` / `PostgresStoreConfig`
-  object on the agent for a private index or a shared external schema.
+for routing / one-shot agents that don't need history.
+- **Per-agent override** ▸ pass a `PgVectorConfig` / `PostgresStoreConfig` object on the agent for a private index or a shared external schema.spe
 
 See [Memory + storage](#memory--storage) for the full cascade and worked
 examples.
@@ -100,46 +99,53 @@ shape and per-agent selection.
 The plugin is opinionated about what "no config" should mean. Everything
 below can be overridden, but the bare path works:
 
-| Scenario                                | What you get                                                                                                                                                                                                    |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mastra()`                              | One built-in `default` analyst agent, model from `/serving-endpoints`; memory + storage auto-on if the `lakebase` plugin is registered                                                                          |
-| `mastra({ agents: def })`               | Single-agent shorthand - `def` is registered and marked as default                                                                                                                                              |
-| `mastra({ agents: [def1, def2] })`      | Array shorthand - keys come from each `def.name` (or `agent_<i>`); first one is default                                                                                                                         |
-| `mastra({ agents: { x: def, y: def }})` | Record - keys are the registered ids; first key is the default                                                                                                                                                  |
-| No `defaultAgent` set                   | First registered agent wins                                                                                                                                                                                     |
-| No `model` on an agent                  | Falls back to `config.defaultModel`, then `DATABRICKS_SERVING_ENDPOINT_NAME`, then walks `defaultModelFallbacks` (Thinking → Balanced → Fast tiers, Claude ↔ GPT ↔ Gemini interleaved within each, then open-weights) and picks the first endpoint actually present in the workspace |
-| No `name` on a definition               | Uses the registry key as `Agent.name`                                                                                                                                                                           |
-| No `tools` on an agent                  | Inherits plugin-level `config.tools` ambient set (if any)                                                                                                                                                       |
-| No `storage` / `memory` and `lakebase()` registered | Both auto-default to `true`. Pass `false` (or a custom config object) on the plugin or an agent to opt out / override.                                                                                |
-| `storage` / `memory` on an agent        | Cascades from plugin: storage namespaces **per-agent** (`schemaName: "mastra_<agentId>"`), vector recall is **shared** across agents on one `PgVector` singleton.                                              |
+
+| Scenario                                            | What you get                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mastra()`                                          | One built-in `default` analyst agent, model from `/serving-endpoints`; memory + storage auto-on if the `lakebase` plugin is registered                                                                                                                                               |
+| `mastra({ agents: def })`                           | Single-agent shorthand - `def` is registered and marked as default                                                                                                                                                                                                                   |
+| `mastra({ agents: [def1, def2] })`                  | Array shorthand - keys come from each `def.name` (or `agent_<i>`); first one is default                                                                                                                                                                                              |
+| `mastra({ agents: { x: def, y: def }})`             | Record - keys are the registered ids; first key is the default                                                                                                                                                                                                                       |
+| No `defaultAgent` set                               | First registered agent wins                                                                                                                                                                                                                                                          |
+| No `model` on an agent                              | Falls back to `config.defaultModel`, then `DATABRICKS_SERVING_ENDPOINT_NAME`, then walks `defaultModelFallbacks` (Thinking → Balanced → Fast tiers, Claude ↔ GPT ↔ Gemini interleaved within each, then open-weights) and picks the first endpoint actually present in the workspace |
+| No `name` on a definition                           | Uses the registry key as `Agent.name`                                                                                                                                                                                                                                                |
+| No `tools` on an agent                              | Inherits plugin-level `config.tools` ambient set (if any)                                                                                                                                                                                                                            |
+| No `storage` / `memory` and `lakebase()` registered | Both auto-default to `true`. Pass `false` (or a custom config object) on the plugin or an agent to opt out / override.                                                                                                                                                               |
+| `storage` / `memory` on an agent                    | Cascades from plugin: storage namespaces **per-agent** (`schemaName: "mastra_<agentId>"`), vector recall is **shared** across agents on one `PgVector` singleton.                                                                                                                    |
+
 
 Every field on `MastraAgentDefinition`:
 
-| Field          | Description                                                                               |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| `name`         | Display name. Defaults to the registry key.                                               |
-| `description`  | Long-form description, surfaced as `Agent.description`.                                   |
-| `instructions` | System prompt body. Required.                                                             |
-| `model`        | Per-agent model override. String = `modelId` sugar; otherwise a Mastra `DynamicArgument`. |
-| `tools`        | Plain record OR `(plugins) => tools` callback (see below).                                |
+
+| Field          | Description                                                                                                                                                                         |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`         | Display name. Defaults to the registry key.                                                                                                                                         |
+| `description`  | Long-form description, surfaced as `Agent.description`.                                                                                                                             |
+| `instructions` | System prompt body. Required.                                                                                                                                                       |
+| `model`        | Per-agent model override. String = `modelId` sugar; otherwise a Mastra `DynamicArgument`.                                                                                           |
+| `tools`        | Plain record OR `(plugins) => tools` callback (see below).                                                                                                                          |
 | `memory`       | `false`, `true`, or a `PgVectorConfig`. Cascades from `config.memory`. **Default: shared singleton `PgVector` across every agent** - object override switches to a dedicated index. |
 | `storage`      | `false`, `true`, or a `PostgresStoreConfig`. Cascades from `config.storage`. **Default: per-agent namespace** via `schemaName: "mastra_<agentId>"` so threads stay isolated.        |
 
+
 Plugin-level fields:
 
-| Field                   | Description                                                                                                                                                                           |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents`                | The registry. Omit for a built-in `default` analyst.                                                                                                                                  |
-| `defaultAgent`          | Id that `chatRoute` binds to when no `:agentId` is supplied. Defaults to first registered.                                                                                            |
-| `defaultModel`          | Fallback for any agent that omits `model`. Same shape (string sugar or `DynamicArgument`).                                                                                            |
+
+| Field                   | Description                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents`                | The registry. Omit for a built-in `default` analyst.                                                                                                                                                                                                                                                                                                                                         |
+| `defaultAgent`          | Id that `chatRoute` binds to when no `:agentId` is supplied. Defaults to first registered.                                                                                                                                                                                                                                                                                                   |
+| `defaultModel`          | Fallback for any agent that omits `model`. Same shape (string sugar or `DynamicArgument`).                                                                                                                                                                                                                                                                                                   |
 | `defaultModelFallbacks` | Priority-ordered list walked when no `model` / env / override is set. First entry whose endpoint exists in the workspace wins. Default chains the three `ModelTier`s (Thinking → Balanced → Fast); within each tier providers are interleaved Claude ↔ GPT ↔ Gemini with open-weights appended. Compose your own with `modelsForTier(ModelTier.Fast)` or read straight from `MODEL_CATALOG`. |
-| `tools`                 | Ambient tools merged into every agent (per-agent tools win on collisions).                                                                                                            |
-| `storage`               | `undefined` (default) auto-enables when `lakebase()` is registered; `true` does the same explicitly; `false` opts out; an object opens a dedicated `PostgresStore`. Per-agent default is `schemaName: "mastra_<agentId>"`.                                                                                                                                       |
-| `memory`                | `undefined` (default) auto-enables when `lakebase()` is registered; `true` does the same explicitly; `false` opts out; an object opens a dedicated `PgVector`. Default behavior: one shared `PgVector` singleton across every agent. |
-| `modelFuzzyMatch`       | `false` to disable fuzzy snapping of model ids against the workspace's Model Serving catalogue. Defaults to `true`.                                                                   |
-| `modelFuzzyThreshold`   | Fuse.js score threshold (`0` exact, `1` anything). Defaults to `0.4`.                                                                                                                 |
-| `modelCacheTtlMs`       | TTL for the cached endpoint list, per workspace host. Defaults to 5 minutes. Concurrent callers share one in-flight fetch.                                                            |
-| `modelOverride`         | `false` to disable per-request `X-Mastra-Model` / `?model=` / body overrides. Defaults to `true`.                                                                                     |
+| `tools`                 | Ambient tools merged into every agent (per-agent tools win on collisions).                                                                                                                                                                                                                                                                                                                   |
+| `storage`               | `undefined` (default) auto-enables when `lakebase()` is registered; `true` does the same explicitly; `false` opts out; an object opens a dedicated `PostgresStore`. Per-agent default is `schemaName: "mastra_<agentId>"`.                                                                                                                                                                   |
+| `memory`                | `undefined` (default) auto-enables when `lakebase()` is registered; `true` does the same explicitly; `false` opts out; an object opens a dedicated `PgVector`. Default behavior: one shared `PgVector` singleton across every agent.                                                                                                                                                         |
+| `modelFuzzyMatch`       | `false` to disable fuzzy snapping of model ids against the workspace's Model Serving catalogue. Defaults to `true`.                                                                                                                                                                                                                                                                          |
+| `modelFuzzyThreshold`   | Fuse.js score threshold (`0` exact, `1` anything). Defaults to `0.4`.                                                                                                                                                                                                                                                                                                                        |
+| `modelCacheTtlMs`       | TTL for the cached endpoint list, per workspace host. Defaults to 5 minutes. Concurrent callers share one in-flight fetch.                                                                                                                                                                                                                                                                   |
+| `modelOverride`         | `false` to disable per-request `X-Mastra-Model` / `?model=` / body overrides. Defaults to `true`.                                                                                                                                                                                                                                                                                            |
+| `styleInstructions`     | Style guardrails appended to every agent's `instructions` to curb LLM-isms (em dashes, emojis, sycophantic openers, throwaway closers). `undefined` (default) uses the built-in `DEFAULT_STYLE_INSTRUCTIONS`; a string replaces it; `false` disables.                                                                                                                                        |
+
 
 ## The `tools(plugins)` callback
 
@@ -214,7 +220,7 @@ AppKit's own toolkits expose (passed through verbatim):
 
 - `prefix?: string` - prepended to every key (AppKit default: `${pluginName}.`)
 - `only?: string[]` / `except?: string[]` - allow/deny list against the
-  local tool name
+local tool name
 - `rename?: Record<string, string>` - remap individual keys
 
 ### `tool()` vs `createTool()`
@@ -267,7 +273,7 @@ When any of these is set the resolver fuzzy-matches that single id
 against the live `/serving-endpoints` list, in priority order:
 
 1. Per-request override (`X-Mastra-Model` header, `?model=` query,
-   or `model` / `modelId` body field; see below)
+  or `model` / `modelId` body field; see below)
 2. Per-agent `def.model` (string sugar or `DynamicArgument`)
 3. Plugin-level `config.defaultModel`
 4. `DATABRICKS_SERVING_ENDPOINT_NAME` env var
@@ -293,11 +299,11 @@ variant is wired up.
 The catalogue is grouped two ways:
 
 - By **capability tier** via the `ModelTier` enum:
-  `ModelTier.Thinking` (deepest reasoning), `ModelTier.Balanced`
-  (cost/latency sweet spot), `ModelTier.Fast` (cheap & quick for
-  classification / routing / simple summarisation).
+`ModelTier.Thinking` (deepest reasoning), `ModelTier.Balanced`
+(cost/latency sweet spot), `ModelTier.Fast` (cheap & quick for
+classification / routing / simple summarisation).
 - By **provider** within each tier: `claude`, `gpt`, `gemini`,
-  `openSource`.
+`openSource`.
 
 Both views live on `MODEL_CATALOG[tier][provider]`. The walked
 `FALLBACK_MODEL_IDS` chains the three tiers in descending power
@@ -305,11 +311,13 @@ Both views live on `MODEL_CATALOG[tier][provider]`. The walked
 round-robin-zipped (Claude ↔ GPT ↔ Gemini) before the open-weights
 tail is appended as the universal floor.
 
-| Tier (most powerful first) | Claude | GPT | Gemini | Open weights |
-| --- | --- | --- | --- | --- |
-| `ModelTier.Thinking` | Opus 4.8 → 4.7 → 4.6 → 4.5 → 4.1 | 5.5 Pro | 3.1 Pro → 3 Pro → 2.5 Pro | Llama 4 Maverick, GPT-OSS 120B, Llama 3.1 405B |
-| `ModelTier.Balanced` | Sonnet 4.6 → 4.5 → 4 | 5.5 → 5.4 → 5.2 → 5.1 → 5 | 3.5 Flash → 3 Flash → 2.5 Flash | Llama 3.3 70B, Qwen3-Next 80B, Qwen35 122B |
-| `ModelTier.Fast` | Haiku 4.5 | 5.4 mini → 5.4 nano → 5 mini → 5 nano | 3.1 Flash Lite | GPT-OSS 20B, Gemma 3 12B, Llama 3.1 8B |
+
+| Tier (most powerful first) | Claude                           | GPT                                   | Gemini                          | Open weights                                   |
+| -------------------------- | -------------------------------- | ------------------------------------- | ------------------------------- | ---------------------------------------------- |
+| `ModelTier.Thinking`       | Opus 4.8 → 4.7 → 4.6 → 4.5 → 4.1 | 5.5 Pro                               | 3.1 Pro → 3 Pro → 2.5 Pro       | Llama 4 Maverick, GPT-OSS 120B, Llama 3.1 405B |
+| `ModelTier.Balanced`       | Sonnet 4.6 → 4.5 → 4             | 5.5 → 5.4 → 5.2 → 5.1 → 5             | 3.5 Flash → 3 Flash → 2.5 Flash | Llama 3.3 70B, Qwen3-Next 80B, Qwen35 122B     |
+| `ModelTier.Fast`           | Haiku 4.5                        | 5.4 mini → 5.4 nano → 5 mini → 5 nano | 3.1 Flash Lite                  | GPT-OSS 20B, Gemma 3 12B, Llama 3.1 8B         |
+
 
 #### Pick a tier-appropriate model for one agent
 
@@ -414,11 +422,13 @@ m.clearModelsCache(); // force the next call to re-fetch
 Any in-flight request can pick a different backing endpoint without
 redeploying. Sources, checked in priority order:
 
+
 | Source                    | Example                                          |
 | ------------------------- | ------------------------------------------------ |
 | `X-Mastra-Model` header   | `curl -H 'X-Mastra-Model: claude-haiku' ...`     |
 | `?model=` query parameter | `POST /api/mastra/route/chat?model=llama-70b`    |
 | Body `model` or `modelId` | `{ "messages": [...], "model": "claude-haiku" }` |
+
 
 The override flows through the same fuzzy matcher as static ids, so
 `X-Mastra-Model: claude sonnet` still snaps to
@@ -434,10 +444,12 @@ the moment the `lakebase` plugin is registered. Bare `mastra()` next to
 `lakebase()` already gets you per-agent threads + shared semantic recall;
 zero extra config required.
 
-| Knob          | Default when `lakebase()` is registered                                                                            | What it backs                                              |
-| ------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| `storage`     | **Per-agent** `PostgresStore` namespaced by `schemaName: "mastra_<agentId>"` so threads + messages stay isolated. | Mastra threads, messages, working memory.                  |
-| `memory`      | **Shared singleton** `PgVector` across every agent (cross-agent semantic recall on one index).                    | RAG-style recall over past messages via FastEmbed vectors. |
+
+| Knob      | Default when `lakebase()` is registered                                                                           | What it backs                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `storage` | **Per-agent** `PostgresStore` namespaced by `schemaName: "mastra_<agentId>"` so threads + messages stay isolated. | Mastra threads, messages, working memory.                  |
+| `memory`  | **Shared singleton** `PgVector` across every agent (cross-agent semantic recall on one index).                    | RAG-style recall over past messages via FastEmbed vectors. |
+
 
 Override either at the plugin level, the agent level, or both. The agent
 value wins when set; otherwise the plugin value cascades.
@@ -486,15 +498,15 @@ mastra({
 Notes:
 
 - `PostgresStore` runs `CREATE SCHEMA IF NOT EXISTS` on `init()`, so
-  per-agent schemas spring into existence the first time an agent saves
-  a message. No bundle / migration step required.
+per-agent schemas spring into existence the first time an agent saves
+a message. No bundle / migration step required.
 - Disabling `lakebase()` from your plugin list while leaving `storage` /
-  `memory` truthy fails fast at setup with a clear "lakebase plugin not
-  registered" error.
+`memory` truthy fails fast at setup with a clear "lakebase plugin not
+registered" error.
 - The `lakebase` plugin is declared as a **required** resource only when
-  `storage` / `memory` is explicitly truthy at registration time. Auto-on
-  defaults activate inside `setup:complete`, after lakebase is already
-  proven to be present.
+`storage` / `memory` is explicitly truthy at registration time. Auto-on
+defaults activate inside `setup:complete`, after lakebase is already
+proven to be present.
 
 ## Runtime exports
 
@@ -557,14 +569,16 @@ function Chat() {
 `MastraClientConfig` fields (all derived from the server-side plugin
 mount, so a custom `mastra({ name: "myMastra" })` rewrites every path):
 
-| Field              | Example                                | Description                                           |
-| ------------------ | -------------------------------------- | ----------------------------------------------------- |
-| `basePath`         | `"/api/mastra"`                        | Plugin mount path.                                    |
-| `chatPath`         | `"/api/mastra/route/chat"`             | Default-agent chat URL. Use `chatUrl(config)` to get it. |
-| `chatPathTemplate` | `"/api/mastra/route/chat/:agentId"`    | OpenAPI-style template for tools / docs.              |
-| `modelsPath`       | `"/api/mastra/models"`                 | `GET` cached endpoint catalogue.                      |
-| `defaultAgent`     | `"analyst"`                            | Agent id `chatRoute` binds to when none is supplied.  |
-| `agents`           | `["analyst", "helper"]`                | Every registered agent id in order.                   |
+
+| Field              | Example                             | Description                                              |
+| ------------------ | ----------------------------------- | -------------------------------------------------------- |
+| `basePath`         | `"/api/mastra"`                     | Plugin mount path.                                       |
+| `chatPath`         | `"/api/mastra/route/chat"`          | Default-agent chat URL. Use `chatUrl(config)` to get it. |
+| `chatPathTemplate` | `"/api/mastra/route/chat/:agentId"` | OpenAPI-style template for tools / docs.                 |
+| `modelsPath`       | `"/api/mastra/models"`              | `GET` cached endpoint catalogue.                         |
+| `defaultAgent`     | `"analyst"`                         | Agent id `chatRoute` binds to when none is supplied.     |
+| `agents`           | `["analyst", "helper"]`             | Every registered agent id in order.                      |
+
 
 `chatUrl(config, agentId?)` returns `config.chatPath` for the default
 agent (the registered `chatRoute` mount that omits `:agentId`), and

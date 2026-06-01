@@ -24,7 +24,10 @@ import { CacheManager, type getExecutionContext } from "@databricks/appkit";
 import { stringUtils } from "@dbx-tools/appkit-shared";
 import Fuse from "fuse.js";
 
+import type { ServingEndpointSummary } from "../../mastra-shared/src/protocol.js";
 import type { MastraPluginConfig } from "./config.js";
+
+export type { ServingEndpointSummary };
 
 /**
  * Structural type for the Databricks workspace client. Derived from
@@ -55,18 +58,6 @@ const DEFAULT_TTL_MS = 5 * 60 * 1000;
 
 /** Default Fuse.js score threshold below which a fuzzy match is accepted. */
 const DEFAULT_FUZZY_THRESHOLD = 0.4;
-
-/** Minimal endpoint surface used by callers; matches the SDK's `ServingEndpoint`. */
-export interface ServingEndpointSummary {
-  /** Endpoint name as listed by the Model Serving REST API. */
-  name: string;
-  /** Task hint (e.g. `"llm/v1/chat"`). Useful for filtering. */
-  task?: string;
-  /** Ready / updating / failed state. */
-  state?: string;
-  /** Free-form description; mostly informational. */
-  description?: string;
-}
 
 /** Cache key parts under which endpoint listings are stored. */
 const CACHE_KEY_NAMESPACE = "mastra:serving-endpoints";

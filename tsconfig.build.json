@@ -3,12 +3,13 @@
   "compilerOptions": {
     "noEmit": false,
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "allowImportingTsExtensions": false,
+    "emitDeclarationOnly": false,
     "outDir": "${configDir}/dist",
     "rootDir": "${configDir}/src",
-    "customConditions": []
+    "allowImportingTsExtensions": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
   },
-  "include": ["${configDir}/src"]
+  "include": ["${configDir}/src"],
+  "exclude": ["${configDir}/tests", "${configDir}/**/*.test.ts"]
 }

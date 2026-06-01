@@ -14,7 +14,7 @@
 // the runtime lookup works) from that single value. No `<T>` annotation
 // or string literal needed at the call site.
 
-import { NameLike } from "./common.js";
+import type { NameLike } from "./common.js";
 
 // Minimal structural shape of `this.context`. We mirror only the method
 // we touch instead of depending on AppKit's `PluginContext` type, which

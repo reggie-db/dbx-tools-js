@@ -1,4 +1,4 @@
-import { NameLike } from "./common.js";
+import type { NameLike } from "./common.js";
 
 /** Plugin-facing logger surface returned by {@link logger}. */
 export interface Logger {
