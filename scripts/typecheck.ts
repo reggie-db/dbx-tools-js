@@ -1,17 +1,23 @@
-// scripts/typecheck.js
+// scripts/typecheck.ts
 
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-const packageJson = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8"));
+interface PackageJson {
+  workspaces?: string[];
+}
 
-const workspaces = packageJson.workspaces ?? [];
+const packageJson = JSON.parse(
+  fs.readFileSync(path.resolve("package.json"), "utf8"),
+) as PackageJson;
+
+const workspaces: string[] = packageJson.workspaces ?? [];
 
 console.log(`Found ${workspaces.length} workspace patterns`);
 console.log(workspaces);
 
-function findTsconfigs(dir) {
+function findTsconfigs(dir: string): string[] {
   if (!fs.existsSync(dir)) {
     return [];
   }
@@ -28,7 +34,7 @@ function findTsconfigs(dir) {
     .sort();
 }
 
-function expandWorkspace(pattern) {
+function expandWorkspace(pattern: string): string[] {
   if (!pattern.includes("*")) {
     const tsconfigs = findTsconfigs(pattern);
 
@@ -68,7 +74,7 @@ function expandWorkspace(pattern) {
     });
 }
 
-const configs = workspaces.flatMap(expandWorkspace);
+const configs: string[] = workspaces.flatMap(expandWorkspace);
 
 console.log("\nConfigs to typecheck:");
 
@@ -81,7 +87,7 @@ if (configs.length === 0) {
   process.exit(0);
 }
 
-const failures = [];
+const failures: string[] = [];
 
 for (const config of configs) {
   console.log(`\n=== Typechecking ${config} ===`);
