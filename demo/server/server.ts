@@ -28,6 +28,12 @@ import { mastra } from "@dbx-tools/appkit-mastra";
 
 await autopg();
 
+// `mastra({ agents })` accepts a registry of code-defined agents,
+// mirroring AppKit's `agents()` plugin. Each entry's `tools` can be a
+// plain record or a `(plugins) => tools` callback that receives a typed
+// sibling-plugin index (currently just `genie`; extend `MastraPlugins`
+// to surface more). Omit `agents` entirely to get a built-in default
+// analyst.
 await createApp({
   plugins: [
     server(),
@@ -36,6 +42,16 @@ await createApp({
       servingAlias: "default",
       storage: true,
       memory: true,
+      // agents: {
+      //   analyst: {
+      //     instructions: "You are a data analyst...",
+      //     tools(plugins) {
+      //       return {
+      //         ...(plugins.genie?.toolkit({ aliases: ["default"] }) ?? {}),
+      //       };
+      //     },
+      //   },
+      // },
     }),
   ],
 });
