@@ -324,7 +324,7 @@ async function pickModelId(
     explicit !== undefined
       ? resolveModelId(explicit, endpoints, { threshold: serving.threshold }).modelId
       : pickFirstAvailable(serving.fallbacks, endpoints);
-  logUtils.logger(config).debug(`model selected: ${modelId}`);
+  //logUtils.logger(config).debug(`model selected: ${modelId}`);
   return modelId;
 }
 
