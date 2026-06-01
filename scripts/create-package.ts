@@ -6,10 +6,12 @@ import { dirname, resolve } from "node:path";
 // Scaffolds a new workspace package under `packages/<slug>/`. Two kinds:
 //
 //   - `plugin`: empty AppKit Plugin subclass with inline manifest, modeled
-//     after `memory`. After files are written, `bun add` is invoked
-//     twice in the new package dir so `@databricks/appkit` lands in both
-//     `peerDependencies` and `devDependencies` at whatever version bun
-//     currently resolves (no hard-coded version that can drift).
+//     after `memory`. After files are written, `bun add --peer
+//     @databricks/appkit` lands the peer declaration at whatever version
+//     bun currently resolves (no hard-coded version that can drift). The
+//     dev copy already lives in the root `package.json` and Bun hoists
+//     it into every workspace's `node_modules`, so no second `--dev`
+//     pass is needed.
 //
 //   - `shared`: pure-types package with a barrel `index.ts` and a
 //     `protocol.ts` seed file, modeled after `appkit-shared`. No
@@ -49,7 +51,7 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-function bunAdd(cwd: string, flag: "--peer" | "--dev", pkg: string): void {
+function bunAdd(cwd: string, flag: "--peer", pkg: string): void {
   // Inherit stdio so `bun add`'s install summary streams to the user.
   // `bun` resolves on PATH; the script itself is invoked via `bun run create`
   // so the binary is already present.
@@ -88,13 +90,17 @@ const pkgName = `${SCOPE}/${NPM_PREFIX}${slug}`;
 
 // Same `package.json` / `tsconfig.json` shape for both kinds: every
 // publishable package in the workspace already follows this template.
+// `main` / `types` are intentionally omitted - the `exports` map (with
+// `source` / `types` / `default` conditions) is the only resolution
+// path TypeScript (`moduleResolution: "bundler"`), Bun, and modern
+// bundlers actually use. Shared tooling devDeps live at the root
+// `package.json` and Bun hoists them into every workspace's
+// `node_modules`, so packages stay free of duplicated dev metadata.
 const packageJson = {
   name: pkgName,
   version: "0.1.0",
   license: "Apache-2.0",
   type: "module",
-  main: "./dist/index.js",
-  types: "./dist/index.d.ts",
   exports: {
     ".": {
       source: "./src/index.ts",
@@ -158,13 +164,13 @@ export const ${camel} = toPlugin(${className});
   write(resolve(pkgDir, "src", `${slug}.ts`), pluginTs);
 
   console.log(`Scaffolded packages/${slug}/ (plugin, npm name ${pkgName})`);
-  console.log("Installing @databricks/appkit as peer + dev dependency...");
+  console.log("Installing @databricks/appkit as peer dependency...");
 
-  // Two passes because `bun add` flips between peer/dev/regular via its
-  // flag and has no "add to both" mode. Each pass re-runs the workspace
-  // install but it's cheap once the package is already cached.
+  // Only the peer declaration goes in the package - the dev copy lives
+  // in the root `package.json` and Bun hoists it into this workspace's
+  // `node_modules`. Pinning the peer at install time picks up whatever
+  // version bun currently resolves so the floor never drifts.
   bunAdd(pkgDir, "--peer", "@databricks/appkit");
-  bunAdd(pkgDir, "--dev", "@databricks/appkit");
 } else {
   // Shared package: barrel re-exports from a single seed protocol module.
   // Matches `appkit-shared`-style `src/{index,protocol}.ts` layout.

@@ -182,6 +182,20 @@ that implements the standard `getAgentTools()` + `executeAgentTool()` +
 `executeAgentTool`, so OBO auth (`asUser`) and telemetry spans stay
 intact.
 
+`plugins.genie` is special-cased: it swaps the generic AppKit toolkit
+(which only emits a single final result chunk per call) for a
+streaming-aware tools record built on top of the plugin's
+`exports().sendMessage` AsyncGenerator. Each Genie wire event
+(`FETCHING_METADATA`, `ASKING_AI`, `EXECUTING_QUERY`, attached SQL,
+`query_result` row counts, errors) is normalised into a `GenieProgress`
+payload and pushed mid-flight through Mastra's `ctx.writer`, surfacing
+as `tool-output` chunks the React client can render as inline status
+pills, SQL blocks, and row-count badges while the LLM is still waiting
+on the final `tool-result`. Tool ids are stable: `genie` for the
+default alias, `genie-<alias>` for additional aliases, and one shared
+`genie_get_conversation`. The LLM still receives a single clean final
+payload so the streaming UI doesn't leak into the assistant message.
+
 Plugins that aren't registered (or don't implement the toolkit
 interface) resolve to `undefined` at runtime, so guard with `?.` /
 `?? {}` when a backing plugin is optional in some environments:

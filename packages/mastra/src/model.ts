@@ -25,7 +25,7 @@
  * the input verbatim and let Databricks return the canonical error.
  */
 
-import { commonUtils } from "@dbx-tools/appkit-shared";
+import { commonUtils, stringUtils } from "@dbx-tools/appkit-shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
 
@@ -341,6 +341,9 @@ function pickFirstAvailable(
   return fallbacks[0] ?? FALLBACK_MODEL_IDS[0]!;
 }
 
+/** Path prefix that identifies a Databricks Model Serving REST call. */
+const SERVING_ENDPOINTS_PATH_PREFIX = "/serving-endpoints/";
+
 /**
  * OpenAI-flavoured chat message shape we need to mutate. We do not
  * import the OpenAI / AI SDK types because both packages keep these
@@ -374,33 +377,53 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
   const debug = Boolean(process.env.MASTRA_DEBUG_LLM);
   const original = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input, init) => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : (input as Request).url;
+    const url = _toRequestUrl(input);
     if (
-      url.includes("/serving-endpoints/") &&
-      init?.body &&
-      typeof init.body === "string"
+      !url ||
+      !url.pathname.startsWith(SERVING_ENDPOINTS_PATH_PREFIX) ||
+      typeof init?.body !== "string"
     ) {
-      const rewritten = rewriteServingBody(init.body);
-      if (rewritten !== init.body) {
-        init = { ...init, body: rewritten };
-      }
-      if (debug) {
-        try {
-          console.error("[mastra:llm-debug] -> POST", url);
-          console.error(JSON.stringify(JSON.parse(rewritten), null, 2));
-        } catch {
-          console.error("[mastra:llm-debug] -> POST", url, "(non-JSON body)");
-        }
+      return original(input, init);
+    }
+    const rewritten = rewriteServingBody(init.body);
+    if (rewritten !== init.body) {
+      init = { ...init, body: rewritten };
+    }
+    if (debug) {
+      try {
+        console.error("[mastra:llm-debug] -> POST", url.toString());
+        console.error(JSON.stringify(JSON.parse(rewritten), null, 2));
+      } catch {
+        console.error(
+          "[mastra:llm-debug] -> POST",
+          url.toString(),
+          "(non-JSON body)",
+        );
       }
     }
     return original(input, init);
   }) as typeof globalThis.fetch;
 });
+
+/**
+ * Pull a parsed `URL` out of a fetch `input` argument (string, `URL`,
+ * or `Request`). Returns `null` for invalid / relative URLs; the
+ * interceptor uses that as a "leave the request alone" signal so
+ * non-serving traffic always falls through to the original `fetch`.
+ */
+function _toRequestUrl(input: RequestInfo | URL): URL | null {
+  const raw =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Parse, sanitize, and re-serialize a `/serving-endpoints/...` POST
@@ -472,12 +495,13 @@ function sanitizeServingMessages(messages: ChatMessage[]): boolean {
     return false;
   }
 
-  const lastContent = typeof last.content === "string" ? last.content : "";
-  const openerContent = typeof opener.content === "string" ? opener.content : "";
-  opener.content =
-    openerContent && lastContent
-      ? `${openerContent}\n\n${lastContent}`
-      : openerContent || lastContent;
+  // `trimToNull` collapses the `typeof string && trimmed` dance and
+  // drops blank fragments before the `\n\n` join below, so the merge
+  // never introduces stray leading / trailing whitespace.
+  const merged = [stringUtils.trimToNull(opener.content), stringUtils.trimToNull(last.content)]
+    .filter((s): s is string => s !== null)
+    .join("\n\n");
+  opener.content = merged;
   messages.pop();
   return true;
 }

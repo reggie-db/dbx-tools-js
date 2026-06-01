@@ -13,6 +13,7 @@
  * `chatRoute` agent for demos.
  */
 
+import { genie } from "@databricks/appkit";
 import { logUtils, pluginUtils, stringUtils } from "@dbx-tools/appkit-shared";
 import { Agent } from "@mastra/core/agent";
 import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
@@ -21,6 +22,7 @@ import type { Tool } from "@mastra/core/tools";
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import type { MastraPluginConfig } from "./config.js";
+import { buildGenieProvider } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
 import { buildModel } from "./model.js";
 
@@ -511,6 +513,14 @@ async function resolveTools(
  * auto-adapted into Mastra tools. Unknown names return `undefined`,
  * matching AppKit's `Plugins` semantics so `plugins.foo?.toolkit()`
  * remains safe in environments where `foo` isn't registered.
+ *
+ * `genie` is special-cased to swap the generic AppKit toolkit (which
+ * runs `executeAgentTool` and only emits a single final `tool-result`
+ * chunk per call) for the streaming-aware tools built by
+ * {@link buildGenieProvider}. The streaming variant forwards each
+ * Genie wire event (status, SQL, row counts, errors) out through the
+ * Mastra `ctx.writer`, so the UI gets `tool-output` chunks in real
+ * time instead of staring at a spinner for the full Genie round-trip.
  */
 function buildPluginsMap(
   context: pluginUtils.PluginContextLike | undefined,
@@ -520,12 +530,30 @@ function buildPluginsMap(
     get(_target, propName) {
       if (typeof propName !== "string") return undefined;
       if (cache.has(propName)) return cache.get(propName) ?? undefined;
-      const plugin = context?.getPlugins().get(propName);
-      const provider = adaptPluginToolkit(plugin);
+      const provider = resolveProvider(context, propName);
       cache.set(propName, provider);
       return provider ?? undefined;
     },
   });
+}
+
+/**
+ * Pick the right {@link MastraPluginToolkitProvider} for a sibling
+ * plugin lookup. Returns the streaming-aware Genie adapter when the
+ * caller asks for `genie`; falls back to the generic AppKit
+ * `ToolProvider` adapter for every other plugin name.
+ */
+function resolveProvider(
+  context: pluginUtils.PluginContextLike | undefined,
+  propName: string,
+): MastraPluginToolkitProvider | null {
+  if (propName === "genie") {
+    const geniePlugin = pluginUtils.instance(context, genie);
+    if (!geniePlugin) return null;
+    return buildGenieProvider(geniePlugin) as MastraPluginToolkitProvider;
+  }
+  const plugin = context?.getPlugins().get(propName);
+  return adaptPluginToolkit(plugin);
 }
 
 /**
