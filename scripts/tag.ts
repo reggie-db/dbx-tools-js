@@ -36,8 +36,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import pMemoize from "p-memoize";
-import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
 import { aiQuery } from "./util.js";
 type Bump = "major" | "minor" | "patch";
 

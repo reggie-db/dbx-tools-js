@@ -39,6 +39,7 @@ const BUGS_URL = `https://github.com/${REPO_SLUG}/issues`;
 
 interface PackageJson {
   name?: string;
+  version?: string;
   private?: boolean;
   [key: string]: unknown;
 }
@@ -48,6 +49,17 @@ interface PublishablePackage {
   dir: string;
   jsonPath: string;
 }
+
+// Standard dep keys that can carry `workspace:` specifiers. Note we
+// include `devDependencies` because they remain in the published
+// `package.json` even though consumers don't install them - leaving
+// `workspace:*` there still breaks any tool that strict-validates.
+const DEP_KEYS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+] as const;
 
 const PUBLISH_FIELDS = {
   main: "dist/index.js",
@@ -91,7 +103,44 @@ function discoverPackages(): PublishablePackage[] {
     });
 }
 
-function augment(original: PackageJson, pkg: PublishablePackage): PackageJson {
+function resolveWorkspaceSpecifier(spec: string, targetVersion: string): string {
+  // `workspace:` protocol forms (pnpm-compatible):
+  //   workspace:*       -> exact target version
+  //   workspace:^       -> ^<target>
+  //   workspace:~       -> ~<target>
+  //   workspace:<range> -> <range> verbatim (e.g. workspace:^1.2.0)
+  const rest = spec.slice("workspace:".length);
+  if (rest === "*" || rest === "") return targetVersion;
+  if (rest === "^") return `^${targetVersion}`;
+  if (rest === "~") return `~${targetVersion}`;
+  return rest;
+}
+
+function rewriteWorkspaceDeps(
+  meta: PackageJson,
+  workspaceVersions: Map<string, string>,
+): void {
+  for (const key of DEP_KEYS) {
+    const deps = meta[key];
+    if (!deps || typeof deps !== "object") continue;
+    for (const [name, spec] of Object.entries(deps as Record<string, string>)) {
+      if (typeof spec !== "string" || !spec.startsWith("workspace:")) continue;
+      const targetVersion = workspaceVersions.get(name);
+      if (!targetVersion) {
+        throw new Error(
+          `${meta.name}: ${key}["${name}"] uses ${spec} but ${name} is not a publishable workspace package`,
+        );
+      }
+      (deps as Record<string, string>)[name] = resolveWorkspaceSpecifier(spec, targetVersion);
+    }
+  }
+}
+
+function augment(
+  original: PackageJson,
+  pkg: PublishablePackage,
+  workspaceVersions: Map<string, string>,
+): PackageJson {
   // Per-package `repository.directory` so the npmjs.com "View source"
   // link lands on the right subfolder. The URL itself is the same
   // monorepo for every package - that match is what trusted-publisher
@@ -105,13 +154,16 @@ function augment(original: PackageJson, pkg: PublishablePackage): PackageJson {
   // Spread original first so any explicitly-set value in the source
   // package.json wins. This lets a single package override a field
   // (e.g. a custom `exports` map) without touching this script.
-  return {
+  const merged: PackageJson = {
     ...PUBLISH_FIELDS,
     repository,
     ...original,
     exports: original.exports ?? PUBLISH_FIELDS.exports,
     files: (original.files as string[] | undefined) ?? [...PUBLISH_FIELDS.files],
   };
+
+  rewriteWorkspaceDeps(merged, workspaceVersions);
+  return merged;
 }
 
 const packages = discoverPackages();
@@ -128,9 +180,17 @@ function snapshot(): void {
 }
 
 function applyAugmentation(): void {
+  // Build name -> version map from the snapshots so workspace:* in any
+  // package resolves against the same version the dependee will ship.
+  const workspaceVersions = new Map<string, string>();
+  for (const pkg of packages) {
+    const meta = JSON.parse(snapshots.get(pkg.jsonPath)!) as PackageJson;
+    if (meta.name && meta.version) workspaceVersions.set(meta.name, meta.version);
+  }
+
   for (const pkg of packages) {
     const original = JSON.parse(snapshots.get(pkg.jsonPath)!) as PackageJson;
-    const augmented = augment(original, pkg);
+    const augmented = augment(original, pkg, workspaceVersions);
     writeFileSync(pkg.jsonPath, JSON.stringify(augmented, null, 2) + "\n");
   }
 }
