@@ -5,6 +5,10 @@ dist
 client/dist
 tmp
 
+# Staging directory built by scripts/publish.ts when packing each
+# workspace package for npm. Always recreated, always cleaned up.
+.npm-publish
+
 # bun.lock is uncommitted because it bakes in the registry URLs of whoever
 # ran `bun install` (e.g. a corporate npm proxy), which we don't want
 # leaking to the public repo or to other contributors.

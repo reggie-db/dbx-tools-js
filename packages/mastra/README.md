@@ -195,14 +195,132 @@ intact.
 streaming-aware tools record built on top of the plugin's
 `exports().sendMessage` AsyncGenerator. Each Genie wire event
 (`FETCHING_METADATA`, `ASKING_AI`, `EXECUTING_QUERY`, attached SQL,
-`query_result` row counts, errors) is normalised into a `GenieProgress`
-payload and pushed mid-flight through Mastra's `ctx.writer`, surfacing
-as `tool-output` chunks the React client can render as inline status
-pills, SQL blocks, and row-count badges while the LLM is still waiting
-on the final `tool-result`. Tool ids are stable: `genie` for the
-default alias, `genie-<alias>` for additional aliases, and one shared
-`genie_get_conversation`. The LLM still receives a single clean final
-payload so the streaming UI doesn't leak into the assistant message.
+errors) is normalised into a `GenieProgress` payload and pushed
+mid-flight through Mastra's `ctx.writer`, surfacing as
+`tool-output` chunks the React client can render as inline status
+pills and SQL blocks while the LLM is still waiting on the final
+`tool-result`. Tool ids are stable: `genie` for the default alias,
+`genie-<alias>` for additional aliases, and one shared
+`genie_get_conversation`.
+
+Genie tool-result shape (LLM-bound):
+
+```
+{
+  conversationId?: string,        // pass back to continue the same Genie thread
+  genieAnswer?: string,           // Genie's prose answer; pass through verbatim
+  suggestedFollowUps?: string[],  // UI shows as buttons; don't list in reply
+  error?: string,
+}
+```
+
+The shape is deliberately minimal: only Genie's own answer plus
+thread continuation / follow-up metadata. Row data and dataset
+metadata are intentionally absent so the LLM has no way to
+reformat them into a markdown table - if a chart is useful, the
+model calls the separate `render_data` tool (see below) which
+produces an inline visualization instead.
+
+Genie data flow:
+
+- The writer emits `kind: "started" | "status" | "sql" |
+  "suggested" | "error"` events for the live loading pill. SQL
+  text is shown via a small Shiki-highlighted block.
+- `query_result` events from Genie's stream (rows + manifest) are
+  silently discarded. The LLM never sees rows; the UI never
+  renders rows from Genie. Charts come from `render_data`.
+- After a hard reload, `synthesizeToolEventsFromHistory` rebuilds
+  `suggested` events from the persisted tool-result; SQL pills
+  and charts are live-only and don't replay.
+
+### `render_data` (system-default ambient tool)
+
+`buildAgents` registers a system-level `render_data` tool on
+every agent so the model can submit any tabular dataset for
+inline charting. Users can shadow it by including a same-named
+tool in `config.tools` or in a per-agent `tools` map; otherwise
+it's just there.
+
+The tool is generic - not coupled to Genie or any particular
+upstream. Input is `{ title, description?, data: Row[] }` where
+`data` is an array of objects keyed by column name (a SQL row
+set, an API response, a hand-built array, etc.).
+
+#### Async fire-and-forget design
+
+The tool is intentionally a thin relay: it does **not** call the
+chart-planner inline. Instead it:
+
+1. Mints a short `chartId` (8 hex chars).
+2. Pushes a single `{ kind: "chart", chartId, title, description?,
+   data }` event onto `ctx.writer` so the chat client receives the
+   raw rows out-of-band.
+3. Returns `{ chartId }` to the calling LLM **immediately**.
+
+The model never blocks on chart planning. It can call
+`render_data` for each chart it wants in parallel within a single
+turn, then keep streaming prose around the markers while the
+client is still rendering.
+
+Actual chart planning happens client-side via a separate HTTP
+endpoint:
+
+- `POST ${basePath}/route/render-chart` (registered by the plugin)
+  takes `{ title, description?, data }` and runs an inner Mastra
+  `Agent` configured with `modelForTier(ModelTier.Fast)`. The
+  agent's `structuredOutput` schema is a compact "chart plan"
+  (chart type + axis labels + categories + series); the route
+  expands it into an Echarts `EChartsOption` JSON and returns
+  `{ option, chartType }`.
+- The chat client's `<ChartSlot>` component fires this fetch on
+  mount when it sees a `[[chart:<id>]]` marker paired with a
+  `chart` writer event. It shows a same-sized loading frame
+  until the spec lands, then swaps in `<ReactECharts>` in place.
+  Specs are cached client-side by `chartId` so re-renders during
+  streaming don't re-fetch.
+
+Total turn-time impact: the agent's loop only pauses for the
+synchronous tool-call round trip (a few ms). Chart planning
+(2-3s of inner-agent latency) overlaps with the model's prose
+generation and the user's reading time, instead of stacking on
+top of them.
+
+#### Inline placement contract
+
+The model embeds `[[chart:<chartId>]]` on its own line in its
+markdown reply at the position where the chart should appear:
+
+```markdown
+## Audit Score
+
+Audit Score is stable at ~94%, hovering between 93.5 and 95.0.
+
+[[chart:a3f9c1d2]]
+
+## Service Time
+
+Service time is the outlier at 162.5s, up from a target of 150s.
+
+[[chart:b7e2d4f1]]
+```
+
+The chat client splits the assistant text on these markers and
+drops a `<ChartSlot>` in at each spot. A marker that arrives
+before its `chart` event (rare; only during fast streaming) shows
+a "Queueing chart" skeleton; a chart whose marker the model
+forgot to place falls through to the end of the reply as a
+fallback. Both paths share the same fixed-height frame so the
+layout doesn't jump as charts resolve.
+
+#### Trade-offs
+
+- The dataset rides a writer event, not the persisted
+  tool-result, so charts don't re-render after a hard reload.
+  The model can call `render_data` again on the next turn if the
+  user asks for it.
+- The endpoint accepts up to 5,000 rows / ~2 MB per request as a
+  guardrail. Larger datasets should be sampled or aggregated by
+  the producing tool before passing to `render_data`.
 
 Plugins that aren't registered (or don't implement the toolkit
 interface) resolve to `undefined` at runtime, so guard with `?.` /

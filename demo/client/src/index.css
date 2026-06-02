@@ -1,5 +1,11 @@
 @import "@databricks/appkit-ui/styles.css";
+@import "streamdown/styles.css";
 @import "tailwindcss";
+
+/* Tell Tailwind's content scanner to also pull utility classes out of
+   streamdown's compiled JS, so the markdown chrome it ships keeps its
+   classes when the demo is built. */
+@source "../../../node_modules/streamdown/dist";
 
 html,
 body,

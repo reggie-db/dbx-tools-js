@@ -71,9 +71,9 @@ Publishable packages under `@dbx-tools/*` are configured as `fixed` in
 [`.changeset/config.json`](.changeset/config.json), so they version together.
 Releases are **tag-driven**: pushing a `v<version>` tag to `origin` fires the
 [release workflow](.github/workflows/release.yml), which builds every
-publishable workspace and runs `bunx changeset publish` against npm. No
-PR-based versioning bot, no auto-publish on push to `main` - the tag push is
-the deliberate signal that this commit ships.
+publishable workspace and runs `scripts/publish.ts` against npm. No PR-based
+versioning bot, no auto-publish on push to `main` - the tag push is the
+deliberate signal that this commit ships.
 
 ### Per-release flow
 
@@ -102,13 +102,33 @@ on `ubuntu-latest`.
 
 ### What the publish step does
 
-`scripts/publish.ts` snapshots each minimal on-disk `package.json`, mutates it
-in place with the npm-ready fields - `main`, `types`, `exports`, `files`,
-`license`, `repository` (with per-package `directory`), `homepage`, `bugs`,
-`publishConfig` - then runs `bunx changeset publish`. Changesets compares each
-package's version against what's on npm and publishes the ones the registry
-hasn't seen. The script restores the originals in a `finally` block so the
-workspace shape on disk stays minimal regardless of success or failure.
+`scripts/publish.ts` keeps the on-disk source tree read-only and instead
+**stages** each package into `packages/<slug>/.npm-publish/` (gitignored).
+For every publishable workspace it:
+
+1. Asks npm whether the current `name@version` is already on the registry.
+   If so, it skips (so re-running the script after a partial failure is
+   safe and never trips `EPUBLISHCONFLICT`).
+2. Creates a fresh `.npm-publish/` directory inside the package.
+3. Copies everything listed in `files` (defaulting to `dist`, `index.ts`,
+   `src`) from the package root into the stage.
+4. Writes the augmented `package.json` into the stage. Augmentation
+   grafts on the npm-ready fields - `main`, `types`, `exports`, `files`,
+   `license`, `repository` (with per-package `directory`), `homepage`,
+   `bugs`, `publishConfig` - and rewrites every `workspace:*` and
+   `catalog:` specifier to a real version range (npm doesn't understand
+   either protocol).
+5. Runs `npm publish` from inside the stage.
+6. Removes the stage in a `finally`.
+
+Because the source tree's `package.json` files are never mutated, a crash,
+Ctrl-C, or a `git add -A` from another process can't wedge the workspace.
+The worst-case recovery is `rm -rf packages/*/.npm-publish` (and even that
+isn't needed - the next run wipes the directory before reusing it).
+
+`bun scripts/publish.ts --dry-run` runs the same flow but swaps `npm
+publish` for `npm pack --dry-run`, so you can inspect exactly what would
+ship without touching the registry.
 
 ### Auth
 
@@ -129,7 +149,11 @@ You can run the same publish flow locally - useful for one-off republishes or
 debugging the augmentation:
 
 ```bash
-# Auth: ~/.npmrc needs //registry.npmjs.org/:_authToken=npm_xxx
+# Inspect the staged tarballs without uploading anything.
+bun scripts/build.ts
+bun scripts/publish.ts --dry-run
+
+# For real (auth: ~/.npmrc needs //registry.npmjs.org/:_authToken=npm_xxx)
 bun run release            # bun scripts/build.ts && bun scripts/publish.ts
 ```
 

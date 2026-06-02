@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 type TokenizeOptions = {
   distinct?: boolean;
   lowerCase?: boolean;
+  capitalize?: boolean;
   omitUriScheme?: boolean;
   omitEmailDomain?: boolean;
   camelCase?: boolean;
@@ -10,7 +11,7 @@ type TokenizeOptions = {
 
 // Keys/identifiers/slugs are always lowercased; `lowerCase` is not a
 // caller-configurable option.
-type KeyOptions = Omit<TokenizeOptions, "lowerCase"> & {
+type KeyOptions = Omit<TokenizeOptions, "lowerCase" | "capitalize"> & {
   maxLength?: number;
   truncateStrategy?: "hash" | "trim" | "empty";
   truncateHashAlgorithm?: string;
@@ -23,7 +24,7 @@ type IdentifierOptions = KeyOptions & {
 
 type ResolvedTokenizeOptions = Required<TokenizeOptions>;
 type ResolvedIdentifierOptions = Required<
-  IdentifierOptions & Pick<TokenizeOptions, "lowerCase">
+  IdentifierOptions & Pick<TokenizeOptions, "lowerCase" | "capitalize">
 >;
 
 const TOKENIZE_CAMEL_CASE_REGEXP = /[A-Z]?[a-z]+|[0-9]+|[A-Z]+(?![a-z])/g;
@@ -35,6 +36,7 @@ const EMAIL_REGEXP =
 const TOKENIZE_DEFAULTS: ResolvedTokenizeOptions = {
   distinct: false,
   lowerCase: false,
+  capitalize: false,
   omitUriScheme: false,
   omitEmailDomain: false,
   camelCase: true,
@@ -76,6 +78,7 @@ export function* tokenizeWithOptions(
     for (const tokenMatch of stringValue.matchAll(regexp)) {
       let token = tokenMatch[0]!;
       if (opts.lowerCase) token = token.toLowerCase();
+      if (opts.capitalize) token = token.charAt(0).toUpperCase() + token.slice(1);
       if (!token || seen?.has(token)) continue;
       seen?.add(token);
       yield token;
@@ -186,6 +189,36 @@ export function firstNonEmpty(value: unknown): string | null {
     return null;
   }
   return trimToNull(value);
+}
+
+/**
+ * Tagged-template helper that collapses a multi-line indented
+ * template literal into a single space-joined string. Lets call
+ * sites write Zod `.describe()` blocks, Mastra tool descriptions,
+ * and other long prose constants as readable indented paragraphs
+ * in source while still emitting clean text the LLM (or any other
+ * consumer) doesn't have to mentally re-flow. Interpolated values
+ * are stringified verbatim and folded with the surrounding
+ * whitespace.
+ *
+ * ```ts
+ * toDescription`
+ *   Ask the Genie space "${alias}" a question.
+ *   Pass the answer through as-is.
+ * `;
+ * // -> 'Ask the Genie space "default" a question. Pass the answer through as-is.'
+ * ```
+ */
+export function toDescription(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+): string {
+  let out = "";
+  for (let i = 0; i < strings.length; i += 1) {
+    out += strings[i];
+    if (i < values.length) out += String(values[i]);
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /**

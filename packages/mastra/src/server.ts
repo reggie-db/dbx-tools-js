@@ -42,60 +42,74 @@ export class MastraServer extends MastraServerExpress {
   override registerAuthMiddleware(): void {
     super.registerAuthMiddleware();
     this.app.use((req, res, next) => {
-      const executionContext = getExecutionContext();
-      const user: User = {
-        id:
-          "userId" in executionContext
-            ? executionContext.userId
-            : executionContext.serviceUserId,
-        executionContext,
-      };
       const requestContext = res.locals.requestContext! as RequestContext;
-      requestContext.set(MASTRA_USER_KEY, user);
-      if (!requestContext.get(MASTRA_RESOURCE_ID_KEY)) {
-        this.log.debug(`Setting resource id: ${user.id}`);
-        requestContext.set(MASTRA_RESOURCE_ID_KEY, user.id);
-      }
-      const cookies = httpUtils.parseCookies(req.headers.cookie);
-      const cookieName = stringUtils.toIdentifierWithOptions(
-        { delimiter: "_", distinct: true },
-        "appkit",
-        this.config.name!,
-        "sessionId",
-      );
-      let sessionId = cookies[cookieName];
-      if (!sessionId) {
-        sessionId = randomUUID();
-        res.cookie(cookieName, sessionId, {
-          httpOnly: true,
-          sameSite: "lax",
-          secure: req.secure,
-          path: "/",
-        });
-      }
-      res.locals.sessionId = sessionId;
-      if (!requestContext.get(MASTRA_THREAD_ID_KEY)) {
-        this.log.debug(`Setting thread id: ${sessionId}`);
-        requestContext.set(MASTRA_THREAD_ID_KEY, sessionId);
-      }
-      // Per-request model override: only honored when the plugin
-      // opts in (default). Sources, in priority order, are
-      // `X-Mastra-Model` header, `?model=` query, and `model` /
-      // `modelId` body field; see `serving.ts`.
-      const serving = resolveServingConfig(this.config);
-      if (serving.allowOverride) {
-        const override = extractModelOverride({
-          headers: req.headers as Record<string, string | string[] | undefined>,
-          query: req.query as Record<string, unknown>,
-          body: req.body,
-        });
-        if (override) {
-          this.log.debug(`Model override: ${override}`);
-          requestContext.set(MASTRA_MODEL_OVERRIDE_KEY, override);
-        }
-      }
+      this.configureRequestContextUser(requestContext);
+      this.configureRequestContextThreadId(req, res, requestContext);
+      this.configureRequestContextModelOverride(req, requestContext);
       next();
     });
+  }
+
+  configureRequestContextUser(requestContext: RequestContext) {
+    if (
+      [MASTRA_USER_KEY, MASTRA_RESOURCE_ID_KEY].every((key) => requestContext.get(key))
+    )
+      return;
+    const executionContext = getExecutionContext();
+    const user: User = {
+      id:
+        "userId" in executionContext
+          ? executionContext.userId
+          : executionContext.serviceUserId,
+      executionContext,
+    };
+    requestContext.set(MASTRA_USER_KEY, user);
+    requestContext.set(MASTRA_RESOURCE_ID_KEY, user.id);
+  }
+
+  configureRequestContextThreadId(
+    req: express.Request,
+    res: express.Response,
+    requestContext: RequestContext,
+  ) {
+    if (requestContext.get(MASTRA_THREAD_ID_KEY)) return;
+    const cookies = httpUtils.parseCookies(req.headers.cookie);
+    const cookieName = stringUtils.toIdentifierWithOptions(
+      { delimiter: "_", distinct: true },
+      "appkit",
+      this.config.name!,
+      "sessionId",
+    );
+    let sessionId = cookies[cookieName];
+    if (!sessionId) {
+      sessionId = randomUUID();
+      res.cookie(cookieName, sessionId, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: req.secure,
+        path: "/",
+      });
+    }
+    requestContext.set(MASTRA_THREAD_ID_KEY, sessionId);
+  }
+
+  configureRequestContextModelOverride(
+    req: express.Request,
+    requestContext: RequestContext,
+  ) {
+    // Per-request model override: only honored when the plugin
+    // opts in (default). Sources, in priority order, are
+    // `X-Mastra-Model` header, `?model=` query, and `model` /
+    // `modelId` body field; see `serving.ts`.
+    const serving = resolveServingConfig(this.config);
+    if (serving.allowOverride) {
+      const override = extractModelOverride({
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        query: req.query as Record<string, unknown>,
+        body: req.body,
+      });
+      if (override) requestContext.set(MASTRA_MODEL_OVERRIDE_KEY, override);
+    }
   }
 }
 

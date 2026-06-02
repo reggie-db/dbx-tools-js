@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import type { UIMessage } from "ai";
 import {
@@ -8,10 +8,12 @@ import {
   type ToolProgress,
 } from "@/components/chat-view";
 import {
+  fetchMastraHistory,
   useMastraClient,
   useMastraConfig,
   useMastraModels,
 } from "@/lib/mastra-client";
+import { synthesizeToolEventsFromHistory } from "@/lib/genie-history";
 
 // Same chat UI as pages/Chat.tsx, but instead of pointing useChat at the
 // chatRoute() endpoint, we drive messages by hand using @mastra/client-js.
@@ -19,6 +21,15 @@ import {
 // which pushes typed Mastra chunks (text-delta, reasoning-delta, etc.)
 // at us. We translate those into UIMessage parts so ChatView renders
 // identically to the useChat-backed page.
+//
+// On mount we hydrate the transcript with the most recent page of
+// thread history fetched from the Mastra plugin's `/history` endpoint
+// (server-side wraps `Memory.recall` and `toAISdkV5Messages`). When
+// the user scrolls back near the top of the transcript we lazy-load
+// the next older page and prepend it; ChatView preserves the visual
+// scroll position across the prepend.
+
+const HISTORY_PAGE_SIZE = 20;
 
 const makeUserMessage = (text: string): UIMessage => ({
   id: nanoid(),
@@ -42,10 +53,32 @@ const Stream = () => {
   // reads that header and overrides the per-request resolved model
   // without redeploying the agent.
   const mastraClient = useMastraClient(model);
-  const { defaultAgent } = useMastraConfig();
+  const mastraConfig = useMastraConfig();
+  // Pull stable scalar fields out of the config for hook deps. The
+  // config object reference can churn across renders (the provider
+  // returns whatever `usePluginClientConfig` hands us), and using the
+  // whole object as a dep would refire the initial-history fetch on
+  // every parent render, leading to duplicate keys when overlapping
+  // pages prepend.
+  const { historyPath, defaultAgent } = mastraConfig;
   const { models } = useMastraModels();
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("ready");
+  // History pagination UI state. The authoritative "next page to
+  // fetch" lives in `historyPageRef` so concurrent callers see the
+  // updated value synchronously; `hasMoreHistory` and `isLoadingMore`
+  // exist only to drive the spinner / load-more trigger in ChatView.
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // Atomic guards for history fetches. `historyPageRef` is the next
+  // page index to request and is bumped *before* the fetch fires so
+  // back-to-back calls never request the same page. `historyInFlightRef`
+  // gates concurrent calls so two scroll events near the top can't
+  // both pass an `isLoadingMore === false` check (state updates are
+  // async; refs are not).
+  const historyPageRef = useRef(0);
+  const historyInFlightRef = useRef(false);
   // Tool-call status keyed by the assistant message that owns them. We
   // need an out-of-band channel because `UIMessage["parts"]` doesn't
   // carry tool metadata in a way our `ChatView` reads. Indexed by
@@ -237,6 +270,103 @@ const Stream = () => {
     void runStream(trimmed);
   }, [runStream, writeMessages]);
 
+  // Hydrate the transcript with the latest page of stored messages on
+  // mount. We re-run when `historyPath` or `defaultAgent` changes
+  // (e.g. picker swaps the agent), but not on every model change
+  // since the model only affects subsequent generations, not stored
+  // history.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    historyInFlightRef.current = true;
+    setIsLoadingHistory(true);
+    fetchMastraHistory(
+      { historyPath, defaultAgent },
+      {
+        agentId: defaultAgent,
+        page: 0,
+        perPage: HISTORY_PAGE_SIZE,
+        signal: controller.signal,
+      },
+    )
+      .then((response) => {
+        if (cancelled) return;
+        writeMessages(response.uiMessages);
+        // Replay Genie tool events (SQL pills, charts, suggested
+        // questions) by synthesising them from the persisted
+        // tool-result outputs. Live stream state is gone after a
+        // reload, but the DrainResult sat in the assistant
+        // message's `tool-${name}` part the whole time.
+        const replay = synthesizeToolEventsFromHistory(response.uiMessages);
+        if (Object.keys(replay).length > 0) {
+          setToolEventsByMessage((prev) => ({ ...prev, ...replay }));
+        }
+        historyPageRef.current = 1;
+        setHasMoreHistory(response.hasMore);
+      })
+      .catch((error: unknown) => {
+        if (cancelled || (error as { name?: string }).name === "AbortError") return;
+        console.error("Mastra history load error", error);
+        setHasMoreHistory(false);
+      })
+      .finally(() => {
+        historyInFlightRef.current = false;
+        if (!cancelled) setIsLoadingHistory(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [historyPath, defaultAgent, writeMessages]);
+
+  // Lazy-load the next older page when the user scrolls near the top
+  // of the transcript. ChatView captures the pre-prepend scroll
+  // anchor before invoking us, so the visual position is preserved
+  // across the prepend; we just have to keep `messagesRef` and
+  // `messages` in sync via `writeMessages`.
+  //
+  // Concurrency: `historyInFlightRef` blocks overlapping calls and
+  // `historyPageRef` is bumped synchronously *before* the fetch
+  // fires, so two scroll events that both observe `isLoadingMore`
+  // mid-render can never request the same page twice (which would
+  // produce duplicate UIMessage ids and the React duplicate-key
+  // warning).
+  const loadOlderHistory = useCallback(() => {
+    if (historyInFlightRef.current || !hasMoreHistory) return;
+    historyInFlightRef.current = true;
+    setIsLoadingMore(true);
+    const page = historyPageRef.current;
+    historyPageRef.current = page + 1;
+    fetchMastraHistory(
+      { historyPath, defaultAgent },
+      { agentId: defaultAgent, page, perPage: HISTORY_PAGE_SIZE },
+    )
+      .then((response) => {
+        if (response.uiMessages.length > 0) {
+          writeMessages([...response.uiMessages, ...messagesRef.current]);
+          // Same synthesis as the initial load, but only for the
+          // newly-prepended page so existing live tool events for
+          // recent turns aren't clobbered.
+          const replay = synthesizeToolEventsFromHistory(response.uiMessages);
+          if (Object.keys(replay).length > 0) {
+            setToolEventsByMessage((prev) => ({ ...prev, ...replay }));
+          }
+        }
+        setHasMoreHistory(response.hasMore);
+      })
+      .catch((error: unknown) => {
+        console.error("Mastra history load-more error", error);
+        // Roll back the page so a manual retry hits the same page,
+        // and stop the trigger so we don't thrash the failed call.
+        historyPageRef.current = page;
+        setHasMoreHistory(false);
+      })
+      .finally(() => {
+        historyInFlightRef.current = false;
+        setIsLoadingMore(false);
+      });
+  }, [hasMoreHistory, historyPath, defaultAgent, writeMessages]);
+
   return (
     <ChatView
       messages={messages}
@@ -247,6 +377,10 @@ const Stream = () => {
       models={models}
       model={model}
       onModelChange={setModel}
+      onLoadMore={loadOlderHistory}
+      isLoadingMore={isLoadingMore}
+      hasMore={hasMoreHistory}
+      isLoadingHistory={isLoadingHistory}
     />
   );
 };

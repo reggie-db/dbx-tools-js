@@ -1,9 +1,14 @@
 import { MastraClient } from "@mastra/client-js";
 import { useEffect, useMemo, useState } from "react";
+import type { UIMessage } from "ai";
 import { usePluginClientConfig } from "@databricks/appkit-ui/react";
 import {
   chatUrl,
+  historyUrl,
   type MastraClientConfig,
+  type MastraHistoryResponse,
+  type RenderChartRequest,
+  type RenderChartResponse,
   type ServingEndpointSummary,
   type ServingEndpointsResponse,
 } from "@dbx-tools/appkit-mastra-shared";
@@ -95,4 +100,83 @@ export const useMastraModels = (): {
   }, [modelsPath]);
 
   return { models, loading, error };
+};
+
+/**
+ * Page of UI-formatted history messages plus the metadata needed to
+ * drive infinite-scroll-up. `uiMessages` is widened to `UIMessage[]`
+ * (from the `ai` package) since the server sends back exactly the
+ * payload `toAISdkV5Messages` produces; the dependency-free shared
+ * types use a structural shape instead of importing `ai`.
+ */
+export interface MastraHistoryPage {
+  uiMessages: UIMessage[];
+  page: number;
+  perPage: number;
+  total: number;
+  hasMore: boolean;
+}
+
+/**
+ * Fetch one page of thread history from the Mastra plugin's
+ * `/history` endpoint. Cookies travel with the request so the server
+ * can resolve the session-scoped `threadId`. Returns a typed page
+ * the UI can prepend (oldest -> newest) to its live transcript.
+ */
+/**
+ * POST a dataset to the Mastra plugin's `/render-chart` endpoint
+ * and resolve to an Echarts `EChartsOption` JSON. Used by the
+ * inline {@link ChartSlot} when it sees a `[[chart:<id>]]` marker
+ * paired with a `chart` writer event from the `render_data` tool.
+ *
+ * Cookies travel with the request so the route's middleware can
+ * resolve the session-scoped workspace user (the chart-planner
+ * agent runs under that user's OBO token).
+ */
+export const fetchRenderChart = async (
+  config: Pick<MastraClientConfig, "renderChartPath">,
+  body: RenderChartRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<RenderChartResponse> => {
+  const init: RequestInit = {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  };
+  if (options.signal) init.signal = options.signal;
+  const res = await fetch(config.renderChartPath, init);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ""}`);
+  }
+  return (await res.json()) as RenderChartResponse;
+};
+
+export const fetchMastraHistory = async (
+  config: Pick<MastraClientConfig, "historyPath" | "defaultAgent">,
+  options: {
+    agentId?: string;
+    page?: number;
+    perPage?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<MastraHistoryPage> => {
+  const url = historyUrl(config, {
+    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
+    ...(options.page !== undefined ? { page: options.page } : {}),
+    ...(options.perPage !== undefined ? { perPage: options.perPage } : {}),
+  });
+  const init: RequestInit = { credentials: "include" };
+  if (options.signal) init.signal = options.signal;
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const payload = (await res.json()) as MastraHistoryResponse;
+  return {
+    uiMessages: payload.uiMessages as unknown as UIMessage[],
+    page: payload.page,
+    perPage: payload.perPage,
+    total: payload.total,
+    hasMore: payload.hasMore,
+  };
 };

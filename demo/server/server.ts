@@ -54,11 +54,41 @@ await autopg();
 // `GET /api/mastra/models` lists the cached catalogue.
 const support = createAgent({
   name: "support",
-  instructions:
-    "You help customers with data and files. When the user asks about " +
-    "business metrics or anything that would need a SQL query, call the " +
-    "Genie toolkit (`genie.sendMessage`) to query the configured Genie " +
-    "space; quote returned numbers exactly.",
+  instructions: [
+    "You help customers with data and files. When the user asks about",
+    "business metrics or anything that would need a SQL query, call the",
+    "Genie toolkit (`genie.sendMessage`) to query the configured Genie",
+    "space.",
+    "",
+    "Genie discipline:",
+    "",
+    "- Issue exactly ONE Genie call per user turn. Do not re-query with",
+    "  rephrased intents to shop for a better answer. If the first",
+    "  Genie response is unclear, ask the user a clarifying question",
+    "  instead of retrying.",
+    "- Reuse the `conversationId` from the previous Genie response when",
+    "  following up in the same thread.",
+    "- For time-series or distribution questions, ask Genie for",
+    "  aggregated values (group by date / period / category) rather",
+    "  than raw rows. Hundreds of pre-aggregated rows render as good",
+    "  charts; thousands of raw rows do not.",
+    "",
+    "Rendering datasets:",
+    "",
+    "- Genie returns `datasets[]`, one entry per executed SQL",
+    "  statement. Each carries a short `chartId`. To display a dataset",
+    "  inline as a chart, embed `[[chart:<chartId>]]` on its own line",
+    "  (with blank lines above and below) in your markdown reply at",
+    "  the position the chart should appear.",
+    "- Do not paraphrase the rows of a dataset in prose. The chart is",
+    "  the rendering; your prose should add interpretation",
+    "  (takeaways, comparisons, anomalies) around the chart.",
+    "- Quote any specific numbers Genie called out in `genieAnswer`",
+    "  exactly when they appear in your prose.",
+    "",
+    "If a question doesn't need data (general help, definitions,",
+    "follow-up clarifications), reply directly without calling Genie.",
+  ].join("\n"),
   tools(plugins) {
     return {
       // Auto-discovered AppKit `ToolProvider` plugins. `plugins.<name>`

@@ -21,6 +21,7 @@ import { createTool } from "@mastra/core/tools";
 import type { Tool } from "@mastra/core/tools";
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
+import { buildRenderDataTool } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { buildGenieProvider } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
@@ -407,7 +408,15 @@ export async function buildAgents(opts: {
   const defaultAgentId = config.defaultAgent ?? ids[0] ?? FALLBACK_AGENT_ID;
 
   const plugins = buildPluginsMap(context);
-  const ambientTools = config.tools ?? {};
+  // System-default ambient tools every agent gets out of the box.
+  // Currently just `render_data` for inline visualizations; the
+  // user can shadow it by including a same-named tool in their own
+  // `config.tools` or per-agent `tools`. Order in {@link resolveTools}
+  // is `system -> user-ambient -> per-agent`, last write wins.
+  const systemTools: MastraTools = {
+    render_data: buildRenderDataTool(config),
+  };
+  const ambientTools = { ...systemTools, ...(config.tools ?? {}) };
   const style = resolveStyleInstructions(config);
   const agents: Record<string, Agent> = {};
 

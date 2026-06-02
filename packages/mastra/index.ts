@@ -13,6 +13,7 @@ export * from "./src/plugin.js";
 export * from "@dbx-tools/appkit-mastra-shared";
 export * from "./src/config.js";
 export * from "./src/agents.js";
+export * from "./src/chart.js";
 export * from "./src/genie.js";
 export {
   clearServingEndpointsCache,

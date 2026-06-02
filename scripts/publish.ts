@@ -1,38 +1,34 @@
 #!/usr/bin/env bun
-// Publish every non-private workspace package to npm via
-// `bunx changeset publish`.
+// Publish every non-private workspace package to npm.
 //
-// Packages on disk keep a minimal shape (just `name`, `version`,
-// `module`, `type`, dependencies). For the published tarball we want
-// the full npm convention - `main`, `types`, `exports`, `files` - so
-// consumers on raw Node, bundlers, and bun-with-source-conditions all
-// resolve correctly.
+// Design goal: the on-disk source tree is read-only during publish.
+// An earlier version of this script snapshot the publishable
+// `package.json` files, mutated them in place with the augmented
+// "npm-ready" form (main / types / exports / files / repository /
+// rewritten workspace deps), shelled out to `npm publish`, then
+// restored from the snapshot in a `finally`. Any crash, Ctrl-C, or
+// concurrent `git add -A` between mutate and restore left the source
+// tree wedged: hardcoded cross-package versions instead of
+// `workspace:*`, full publish metadata baked into the file, and a
+// follow-up `bun install` would fail with
+// `No version matching "X.Y.Z" found for @dbx-tools/appkit-shared`.
 //
-// To avoid duplicating that metadata in every on-disk `package.json`,
-// this script:
-//   1. Snapshots each publishable `package.json`'s text content.
-//   2. Mutates each file in place with the augmented npm-ready form
-//      (adds main / types / exports / files; preserves anything that
-//      was already there; rewrites `workspace:*` deps to real versions
-//      since `npm publish` doesn't do that automatically).
-//   3. Runs `bunx changeset publish` which walks each package and
-//      invokes `npm publish`, reading the augmented `package.json` so
-//      the published tarball ships the correct fields.
-//   4. Restores the original `package.json` content in a `finally`
-//      block whether publish succeeded, failed, or threw.
-//
-// If the script is killed mid-flight (Ctrl+C, machine reboot), recover
-// with `git checkout -- packages/*/package.json`.
+// The new flow stages each package into `<pkg>/.npm-publish/`
+// (gitignored), writes the augmented `package.json` there, copies the
+// files listed in `files` from the package root, runs `npm publish`
+// from inside the stage, then deletes the stage. The source tree is
+// never touched, so any failure is recoverable with `rm -rf
+// packages/*/.npm-publish` and `bun install`.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import {
-  bunx,
   discoverPackages,
   fail,
   PackageJson,
   readJson,
   ROOT,
+  run,
   type WorkspacePackage,
 } from "./util.js";
 
@@ -43,7 +39,7 @@ import {
  *
  * Bun's `bun publish` rewrites these automatically; `npm publish` does
  * not. This script reads the catalog up front so it can do the rewrite
- * before `bunx changeset publish` shells out to npm.
+ * before staging.
  */
 interface RootPackageJson extends PackageJson {
   catalog?: Record<string, string>;
@@ -64,11 +60,14 @@ const REPO_URL = `git+https://github.com/${REPO_SLUG}.git`;
 const HOMEPAGE = `https://github.com/${REPO_SLUG}#readme`;
 const BUGS_URL = `https://github.com/${REPO_SLUG}/issues`;
 
+/** Where each package's staged publish tree lives. Gitignored. */
+const STAGE_DIRNAME = ".npm-publish";
+
 /**
- * Dep keys that can carry `workspace:` specifiers. `devDependencies`
- * is included because it remains in the published `package.json`
- * (even though consumers don't install it) - leaving `workspace:*`
- * there still breaks tools that strict-validate.
+ * Dep keys that can carry `workspace:` or `catalog:` specifiers.
+ * `devDependencies` is included because it stays in the published
+ * `package.json` (even though consumers don't install it) and leaving
+ * `workspace:*` there still breaks tools that strict-validate.
  */
 const DEP_KEYS = [
   "dependencies",
@@ -78,9 +77,9 @@ const DEP_KEYS = [
 ] as const;
 
 /**
- * Fields added to every published `package.json`. The source files on
- * disk omit these to stay minimal; this script grafts them on right
- * before `npm publish` runs.
+ * Fields grafted onto every published `package.json`. Source files on
+ * disk omit these to stay minimal; this script writes them only into
+ * the staged copy.
  */
 const PUBLISH_FIELDS = {
   main: "dist/index.js",
@@ -178,7 +177,7 @@ function rewriteSpecialDeps(meta: PackageJson, workspaceVersions: Map<string, st
 /**
  * Merge `PUBLISH_FIELDS` + per-package `repository` into `original`,
  * letting `original`'s explicit fields win, then rewrite any
- * `workspace:` deps to real version ranges.
+ * `workspace:` or `catalog:` deps to real version ranges.
  */
 function augment(
   original: PackageJson,
@@ -207,54 +206,100 @@ function augment(
   return merged;
 }
 
+/**
+ * Return `true` when `name@version` is already on the public npm
+ * registry. Lets us skip re-publishing during a re-run instead of
+ * tripping over npm's `EPUBLISHCONFLICT`.
+ */
+function isAlreadyPublished(name: string, version: string): boolean {
+  const out = run("npm", ["view", `${name}@${version}`, "version"], {
+    capture: true,
+    check: false,
+  });
+  return out === version;
+}
+
+/**
+ * Stage `pkg` into `<pkg.dir>/.npm-publish`: copy every entry from
+ * `files` (defaulting to `dist`, `index.ts`, `src`) and write the
+ * augmented `package.json`. Returns the stage path.
+ */
+function stagePackage(
+  pkg: WorkspacePackage,
+  workspaceVersions: Map<string, string>,
+): { stageDir: string; meta: PackageJson } {
+  const stageDir = resolve(pkg.dir, STAGE_DIRNAME);
+  rmSync(stageDir, { recursive: true, force: true });
+  mkdirSync(stageDir, { recursive: true });
+
+  const meta = augment(pkg.meta, pkg, workspaceVersions);
+  const filesList = (meta.files as string[] | undefined) ?? PUBLISH_FIELDS.files;
+  for (const entry of filesList) {
+    const src = resolve(pkg.dir, entry);
+    if (!existsSync(src)) continue;
+    cpSync(src, resolve(stageDir, entry), { recursive: true });
+  }
+
+  writeFileSync(resolve(stageDir, "package.json"), JSON.stringify(meta, null, 2) + "\n");
+  return { stageDir, meta };
+}
+
+/**
+ * Publish one package from its staged directory. When `dryRun` is
+ * true, run `npm pack --dry-run` instead so we exercise tarball
+ * assembly and print the file list without touching the registry.
+ */
+function publishStaged(pkg: WorkspacePackage, stageDir: string, dryRun: boolean): void {
+  if (dryRun) {
+    run("npm", ["pack", "--dry-run"], { cwd: stageDir });
+    console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
+    return;
+  }
+  // Provenance only works in CI with `id-token: write`. The workflow
+  // sets `NPM_CONFIG_PROVENANCE=true` to opt in; locally we don't
+  // pass it so devs can dry-run without OIDC.
+  run("npm", ["publish", "--access=public"], { cwd: stageDir });
+  console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
+}
+
+const dryRun = process.argv.slice(2).includes("--dry-run");
 const packages = discoverPackages();
-console.log(`Publishing ${packages.length} package(s):`);
+console.log(
+  `${dryRun ? "Dry-run packing" : "Publishing"} ${packages.length} package(s):`,
+);
 for (const pkg of packages) console.log(`  - ${pkg.slug}`);
 console.log();
 
-const snapshots = new Map<string, string>();
-
-function snapshot(): void {
-  for (const pkg of packages) snapshots.set(pkg.jsonPath, readFileSync(pkg.jsonPath, "utf8"));
-}
-
-function applyAugmentation(): void {
-  // Build name -> version map from snapshots so workspace:* in any
-  // package resolves against the same version the dependee will ship.
-  const workspaceVersions = new Map<string, string>();
-  for (const pkg of packages) {
-    const meta = JSON.parse(snapshots.get(pkg.jsonPath)!) as PackageJson;
-    if (meta.name && meta.version) workspaceVersions.set(meta.name, meta.version);
-  }
-
-  for (const pkg of packages) {
-    const original = JSON.parse(snapshots.get(pkg.jsonPath)!) as PackageJson;
-    const augmented = augment(original, pkg, workspaceVersions);
-    writeFileSync(pkg.jsonPath, JSON.stringify(augmented, null, 2) + "\n");
+const workspaceVersions = new Map<string, string>();
+for (const pkg of packages) {
+  if (pkg.meta.name && pkg.meta.version) {
+    workspaceVersions.set(pkg.meta.name, pkg.meta.version);
   }
 }
 
-function restore(): void {
-  for (const [path, content] of snapshots) {
-    try {
-      writeFileSync(path, content);
-    } catch (err) {
-      console.error(`Failed to restore ${path}: ${(err as Error).message}`);
-    }
+let failures = 0;
+for (const pkg of packages) {
+  const { name, version } = pkg.meta;
+  if (!name || !version) {
+    console.log(`- skipping ${pkg.slug}: missing name or version`);
+    continue;
   }
-}
+  // Skip the registry check during dry-run so devs can pack-test
+  // versions that are already published.
+  if (!dryRun && isAlreadyPublished(name, version)) {
+    console.log(`- skipping ${name}@${version}: already on registry`);
+    continue;
+  }
 
-let exitCode = 0;
-try {
-  snapshot();
-  applyAugmentation();
+  const { stageDir } = stagePackage(pkg, workspaceVersions);
   try {
-    bunx(["changeset", "publish"]);
-  } catch {
-    exitCode = 1;
+    publishStaged(pkg, stageDir, dryRun);
+  } catch (err) {
+    failures++;
+    console.error(`✗ publish failed for ${name}@${version}: ${(err as Error).message}`);
+  } finally {
+    rmSync(stageDir, { recursive: true, force: true });
   }
-} finally {
-  restore();
 }
 
-if (exitCode !== 0) fail(`changeset publish failed (exit ${exitCode})`);
+if (failures > 0) fail(`${failures} package(s) failed to publish`);
