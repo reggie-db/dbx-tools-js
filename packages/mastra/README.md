@@ -209,29 +209,45 @@ Genie tool-result shape (LLM-bound):
 {
   conversationId?: string,        // pass back to continue the same Genie thread
   genieAnswer?: string,           // Genie's prose answer; pass through verbatim
+  datasets?: [{                   // metadata only, one per executed SQL statement
+    chartId: string,              // embed [[chart:<chartId>]] to render inline
+    title?: string,
+    description?: string,
+    columns: string[],
+    rowCount: number,
+    sql?: string,
+  }],
   suggestedFollowUps?: string[],  // UI shows as buttons; don't list in reply
   error?: string,
 }
 ```
 
-The shape is deliberately minimal: only Genie's own answer plus
-thread continuation / follow-up metadata. Row data and dataset
-metadata are intentionally absent so the LLM has no way to
-reformat them into a markdown table - if a chart is useful, the
-model calls the separate `render_data` tool (see below) which
-produces an inline visualization instead.
+`datasets[]` is metadata only - column names, row count, the SQL
+Genie ran. The actual rows ride a separate `kind: "chart"` writer
+event so the LLM never has them in context (token cost stays flat
+regardless of dataset size). The model references each dataset by
+its `chartId` via the `[[chart:<chartId>]]` marker to display the
+chart inline; see the `render_data` section below for how the
+client resolves those markers.
 
 Genie data flow:
 
 - The writer emits `kind: "started" | "status" | "sql" |
   "suggested" | "error"` events for the live loading pill. SQL
   text is shown via a small Shiki-highlighted block.
-- `query_result` events from Genie's stream (rows + manifest) are
-  silently discarded. The LLM never sees rows; the UI never
-  renders rows from Genie. Charts come from `render_data`.
+- The writer **also** emits a `kind: "chart"` event for every
+  Genie SQL statement, carrying `{chartId, title, description?,
+  data}` where `data` is the row set converted to objects keyed
+  by column name (with best-effort numeric coercion for value
+  axes). The chat client's `<ChartSlot>` resolves the matching
+  `[[chart:<chartId>]]` marker by POSTing the data to the
+  `/route/render-chart` endpoint and rendering the returned
+  Echarts spec inline. The exact same path `render_data` uses,
+  so Genie and hand-built charts are indistinguishable on the
+  client.
 - After a hard reload, `synthesizeToolEventsFromHistory` rebuilds
-  `suggested` events from the persisted tool-result; SQL pills
-  and charts are live-only and don't replay.
+  `suggested` events from the persisted tool-result; the SQL pill
+  and chart events are live-only and don't replay.
 
 ### `render_data` (system-default ambient tool)
 

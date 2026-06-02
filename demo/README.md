@@ -10,18 +10,30 @@ Generated from the AppKit `app init` template, then adapted to:
 - Spread the AppKit `genie` toolkit into the agent so the LLM can ask
   the configured Genie space (`DATABRICKS_GENIE_SPACE_ID`) for SQL-
   backed answers without any hand-written tool code. Genie streaming
-  events (status pills, SQL, row counts) are forwarded through Mastra's
-  `ToolStream` so the UI shows live progress while the model is still
-  waiting on the final result.
+  events (status pills, SQL text, row sets, suggested follow-ups) are
+  forwarded through Mastra's `ToolStream` so the UI shows live
+  progress while the model is still waiting on the final result.
+- Inline-render Genie query results as Echarts visualizations. Each
+  Genie SQL statement gets a short `chartId`; the model embeds
+  `[[chart:<chartId>]]` in its markdown reply at the position the
+  chart should appear, and the client's `<ChartSlot>` POSTs the rows
+  to `/api/mastra/route/render-chart` to fetch a pre-built
+  `EChartsOption`. The same path also serves the system-default
+  `render_data` tool, so hand-built charts and Genie charts feel
+  identical in the UI. See `packages/mastra/README.md` for the full
+  contract.
 - Render the chat UI exclusively with `@databricks/appkit-ui`
   primitives (no `ai-elements`, no vendored shadcn) plus
-  `react-markdown` + `remark-gfm` for GitHub-flavored markdown
-  rendering (tables, task lists, strikethrough).
+  `streamdown` for GitHub-flavored markdown rendering (tables, task
+  lists, strikethrough) with Shiki syntax highlighting and KaTeX
+  math.
 - Ship two pages backed by one shared `ChatView` component: a
   vanilla AI SDK `useChat` flow (`/chat`) and a Mastra `MastraClient`
   streaming flow (`/stream`). Both include a model-picker dropdown
   driven by `GET /api/mastra/models` (the live serving-endpoint
-  catalogue) and pass the selection through an `X-Mastra-Model` header.
+  catalogue) and pass the selection through an `X-Mastra-Model`
+  header. Lazy-loads older history on scroll-up via
+  `/api/mastra/route/history`.
 - Bind to `127.0.0.1` locally for the friendliest dev URL; falls back
   to `0.0.0.0` automatically when `DATABRICKS_APP_PORT` is set (i.e.
   inside a deployed Databricks App).
@@ -48,10 +60,12 @@ demo/
       ErrorBoundary.tsx
       index.css           # @import "@databricks/appkit-ui/styles.css" + tailwindcss + tw-animate-css
       lib/
-        mastra-client.ts  # useMastraClient + useMastraModels (X-Mastra-Model header wiring)
+        mastra-client.ts  # useMastraClient + useMastraModels + fetchRenderChart + fetchMastraHistory
+        genie-history.ts  # rebuild ToolEvents from /history results so reloads still show pills
         utils.ts          # cn() helper
       components/
-        chat-view.tsx     # shared chat surface (appkit-ui primitives + react-markdown)
+        chat-view.tsx     # shared chat surface: appkit-ui primitives + streamdown +
+                          # ChartSlot (Echarts via /route/render-chart) at [[chart:<id>]] markers
       pages/
         Chat.tsx          # /chat - @ai-sdk/react useChat against /api/mastra/route/chat
         Stream.tsx        # /stream - MastraClient.stream() with live tool-output events

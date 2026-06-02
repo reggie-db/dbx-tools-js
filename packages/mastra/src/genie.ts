@@ -425,14 +425,13 @@ async function drainGenieStream(
   };
 
   for await (const event of stream) {
-    // Log every raw Genie wire event before the switch routes it
-    // through the writer / DrainResult. Useful when tuning the
-    // pill / answer pipeline against real Genie payloads (status
-    // codes, attachment shapes, query_result manifests Genie
-    // surfaces only on certain question types, etc.). Keep this
-    // line; it's intentionally console-side and unconditional.
+    // Uncomment to log every raw Genie wire event before the switch
+    // routes it through the writer / DrainResult. Useful when tuning
+    // the pill / answer pipeline against real Genie payloads (status
+    // codes, attachment shapes, query_result manifests Genie surfaces
+    // only on certain question types, etc.).
     // eslint-disable-next-line no-console
-    console.log("[mastra/genie] event", event);
+    // console.log("[mastra/genie] event", event);
     switch (event.type) {
       case "message_start":
         conversationId = event.conversationId;
