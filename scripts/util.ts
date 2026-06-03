@@ -15,7 +15,14 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { execaSync, type SyncOptions, type SyncResult } from "execa";
+import {
+  execa,
+  execaSync,
+  Options,
+  Result,
+  type SyncOptions,
+  type SyncResult,
+} from "execa";
 import pMemoize from "p-memoize";
 import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
 import which from "which";
@@ -94,18 +101,18 @@ export function writeJson(path: string, value: unknown): void {
  * Returns the trimmed stdout when capturing, or the empty string when
  * inheriting (because nothing was captured).
  */
-export function run(
+export async function run(
   command: string,
   args: readonly string[],
   opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
-): string {
+): Promise<string> {
   const { capture = false, check = true, cwd = ROOT } = opts;
-  const execaOpts: SyncOptions = {
+  const execaOpts: Options = {
     cwd,
     reject: false,
     stdio: capture ? "pipe" : "inherit",
   };
-  const result: SyncResult = execaSync(command, args, execaOpts);
+  const result: Result = await execa(command, args, execaOpts);
   if (check && result.exitCode !== 0) {
     const detail = capture
       ? `: ${String(result.stderr ?? "").trim() || String(result.stdout ?? "").trim()}`
@@ -119,11 +126,11 @@ export function run(
  * Shorthand for `bun x <args>`. Resolves the Windows `bunx.cmd` shim
  * automatically. Use this instead of hard-coding the platform check.
  */
-export function bunx(
+export async function bunx(
   args: readonly string[],
   opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
-): string {
-  let bin = which.sync("bunx", { nothrow: true });
+): Promise<string> {
+  let bin = await which("bunx", { nothrow: true });
   if (!bin) {
     bin = process.platform === "win32" ? "bunx.cmd" : "bunx";
   }

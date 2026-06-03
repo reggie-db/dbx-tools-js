@@ -215,7 +215,6 @@ describe("toIdentifierWithOptions", () => {
             {
               maxLength: 9,
               truncateStrategy: "hash",
-              truncateHashAlgorithm: "sha1",
               truncateHashLength: 6,
             },
             "alpha",
@@ -233,7 +232,6 @@ describe("toIdentifierWithOptions", () => {
             {
               maxLength: 13,
               truncateStrategy: "hash",
-              truncateHashAlgorithm: "sha1",
               truncateHashLength: 6,
             },
             "alpha",

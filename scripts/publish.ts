@@ -22,10 +22,10 @@
 
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import type { PackageJson } from "./util.js";
 import {
   discoverPackages,
   fail,
-  PackageJson,
   readJson,
   ROOT,
   run,
@@ -137,7 +137,9 @@ function resolveCatalogSpecifier(name: string, spec: string): string {
   const catalogName = spec.slice("catalog:".length);
   const catalog = catalogName === "" ? DEFAULT_CATALOG : NAMED_CATALOGS[catalogName];
   if (!catalog) {
-    throw new Error(`Unknown catalog "${catalogName || "(default)"}" referenced by ${name}`);
+    throw new Error(
+      `Unknown catalog "${catalogName || "(default)"}" referenced by ${name}`,
+    );
   }
   const range = catalog[name];
   if (!range) {
@@ -152,7 +154,10 @@ function resolveCatalogSpecifier(name: string, spec: string): string {
  * workspace dep points at a package not in the publish set, or if a
  * catalog reference can't be resolved.
  */
-function rewriteSpecialDeps(meta: PackageJson, workspaceVersions: Map<string, string>): void {
+function rewriteSpecialDeps(
+  meta: PackageJson,
+  workspaceVersions: Map<string, string>,
+): void {
   for (const key of DEP_KEYS) {
     const deps = meta[key];
     if (!deps || typeof deps !== "object") continue;
@@ -240,7 +245,10 @@ function stagePackage(
     cpSync(src, resolve(stageDir, entry), { recursive: true });
   }
 
-  writeFileSync(resolve(stageDir, "package.json"), JSON.stringify(meta, null, 2) + "\n");
+  writeFileSync(
+    resolve(stageDir, "package.json"),
+    JSON.stringify(meta, null, 2) + "\n",
+  );
   return { stageDir, meta };
 }
 

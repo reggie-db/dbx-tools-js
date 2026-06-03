@@ -142,7 +142,35 @@ export type ChatViewProps = {
   hasMore?: boolean;
   /** True while the *initial* history page is loading. */
   isLoadingHistory?: boolean;
+  /**
+   * Resolve an approval-gated tool call. Fired when the user clicks
+   * Approve or Deny on the inline approval card. The handler is
+   * expected to call AI SDK V5's `addToolOutput` (or equivalent for
+   * a non-`useChat` driver) so the suspended tool part transitions
+   * to `output-available` / `output-error` and the agent loop
+   * resumes. Wired only by the `/chat` page today; `/stream` can
+   * leave it undefined and the buttons disable themselves.
+   */
+  onResolveToolApproval?: (
+    args: ApprovalDecision,
+  ) => void | Promise<void>;
 };
+
+/** Payload {@link ChatViewProps.onResolveToolApproval} receives. */
+export type ApprovalDecision =
+  | {
+      approved: true;
+      toolName: string;
+      toolCallId: string;
+      input: unknown;
+    }
+  | {
+      approved: false;
+      toolName: string;
+      toolCallId: string;
+      input: unknown;
+      reason: string;
+    };
 
 /**
  * Strip noisy provider prefixes (e.g. `genie_default_`) and turn
@@ -890,6 +918,169 @@ const MarkdownWithCharts = ({
   );
 };
 
+/**
+ * Tools that are approval-gated server-side (`requireApproval: true`).
+ * Any tool-invocation part on this list that lands in
+ * `state: 'input-available'` triggers the approval card. Add a new
+ * gated tool's id here to wire it into the same flow.
+ */
+const APPROVAL_GATED_TOOLS = new Set<string>(["send_email"]);
+
+/**
+ * Inline approval prompt rendered above the assistant's prose when
+ * a tool with `requireApproval: true` is paused in the agent loop.
+ * Approve fires {@link onResolveToolApproval} with the input the
+ * model passed in; Deny fires it with `approved: false` and a
+ * fixed reason. The parent (Chat / Stream pages) translates that
+ * into the AI-SDK-V5 `addToolOutput` call (or the equivalent for
+ * other transports), which resolves the suspended tool call and
+ * resumes the agent.
+ */
+const ToolApprovalCard = ({
+  toolName,
+  toolCallId,
+  input,
+  onResolve,
+  disabled,
+}: {
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+  onResolve?: (decision: ApprovalDecision) => void | Promise<void>;
+  disabled?: boolean;
+}) => {
+  const [pending, setPending] = useState(false);
+  const handle = (approved: boolean) => {
+    if (!onResolve || pending) return;
+    setPending(true);
+    Promise.resolve(
+      approved
+        ? onResolve({ approved: true, toolName, toolCallId, input })
+        : onResolve({
+            approved: false,
+            toolName,
+            toolCallId,
+            input,
+            reason: "User denied the request from the chat UI.",
+          }),
+    ).finally(() => setPending(false));
+  };
+
+  // Pretty preview for the known email shape; everything else falls
+  // back to a generic JSON dump so a new approval-gated tool works
+  // without touching this component.
+  const isEmail = toolName === "send_email";
+  const email = isEmail ? (input as Partial<EmailInput>) : null;
+
+  return (
+    <div className="not-prose my-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+        <MessageSquareIcon className="size-3.5" />
+        <span>Approval needed: {humanizeToolName(toolName)}</span>
+      </div>
+      {email ? (
+        <dl className="space-y-1 text-xs">
+          {email.to && (
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-muted-foreground">To</dt>
+              <dd className="truncate">{email.to}</dd>
+            </div>
+          )}
+          {email.subject && (
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-muted-foreground">Subject</dt>
+              <dd className="truncate font-medium">{email.subject}</dd>
+            </div>
+          )}
+          {email.body && (
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-muted-foreground">Body</dt>
+              <dd className="whitespace-pre-wrap break-words text-foreground">
+                {email.body}
+              </dd>
+            </div>
+          )}
+        </dl>
+      ) : (
+        <pre className="overflow-x-auto rounded bg-background/40 p-2 text-[11px]">
+          {JSON.stringify(input, null, 2)}
+        </pre>
+      )}
+      <div className="mt-3 flex items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          disabled={disabled || pending || !onResolve}
+          onClick={() => handle(true)}
+        >
+          <CheckIcon className="size-3" />
+          Approve
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || pending || !onResolve}
+          onClick={() => handle(false)}
+        >
+          <XIcon className="size-3" />
+          Deny
+        </Button>
+        {!onResolve && (
+          <span className="ml-1 text-[11px] text-muted-foreground">
+            (approval handler not wired on this page)
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/** Args shape for `send_email`. Mirrors the server tool's input schema. */
+type EmailInput = {
+  to: string;
+  subject: string;
+  body: string;
+  cc?: string[];
+  bcc?: string[];
+};
+
+/**
+ * Pull every approval-pending tool-invocation part out of an
+ * assistant message. AI SDK V5 represents a tool call paused on
+ * approval as a `tool-${name}` part with `state: 'input-available'`
+ * and no `output` yet. We additionally filter by
+ * {@link APPROVAL_GATED_TOOLS} so plain "tool is running right now"
+ * states don't render an approval card.
+ */
+type PendingApproval = {
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+};
+const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] => {
+  const out: PendingApproval[] = [];
+  for (const part of parts ?? []) {
+    const type = (part as { type?: unknown }).type;
+    if (typeof type !== "string") continue;
+    let toolName: string | undefined;
+    if (type.startsWith("tool-")) {
+      toolName = type.slice("tool-".length);
+    } else if (type === "dynamic-tool") {
+      toolName = (part as { toolName?: unknown }).toolName as string | undefined;
+    }
+    if (!toolName || !APPROVAL_GATED_TOOLS.has(toolName)) continue;
+    const state = (part as { state?: unknown }).state;
+    if (state !== "input-available") continue;
+    const toolCallId = (part as { toolCallId?: unknown }).toolCallId;
+    if (typeof toolCallId !== "string") continue;
+    const input = (part as { input?: unknown }).input;
+    out.push({ toolName, toolCallId, input });
+  }
+  return out;
+};
+
 type AssistantBubbleProps = {
   message: UIMessage;
   isLast: boolean;
@@ -898,6 +1089,8 @@ type AssistantBubbleProps = {
   regenerate?: () => void;
   /** Click handler for tool-suggested follow-up questions. */
   onSuggestionClick?: (question: string) => void;
+  /** Approve / deny handler for inline {@link ToolApprovalCard}s. */
+  onResolveToolApproval?: (decision: ApprovalDecision) => void | Promise<void>;
 };
 
 const AssistantBubble = ({
@@ -907,6 +1100,7 @@ const AssistantBubble = ({
   events,
   regenerate,
   onSuggestionClick,
+  onResolveToolApproval,
 }: AssistantBubbleProps) => {
   const reasoning = getReasoningText(message.parts);
   const isReasoningStreaming =
@@ -932,6 +1126,7 @@ const AssistantBubble = ({
   // marker render at the end as a fallback. Suggested questions
   // stay gated on settle to avoid pop-in mid-stream.
   const charts = collectCharts(events);
+  const pendingApprovals = collectPendingApprovals(message.parts);
 
   return (
     <Item className="items-start gap-3 border-none bg-transparent p-0">
@@ -958,6 +1153,15 @@ const AssistantBubble = ({
             </CollapsibleContent>
           </Collapsible>
         )}
+        {pendingApprovals.map((p) => (
+          <ToolApprovalCard
+            key={p.toolCallId}
+            toolName={p.toolName}
+            toolCallId={p.toolCallId}
+            input={p.input}
+            onResolve={onResolveToolApproval}
+          />
+        ))}
         {events && events.length > 0 && <ToolEventList events={events} />}
         {(hasText || charts.length > 0) && (
           <MarkdownWithCharts
@@ -1062,6 +1266,7 @@ export const ChatView = ({
   isLoadingMore = false,
   hasMore = false,
   isLoadingHistory = false,
+  onResolveToolApproval,
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1221,6 +1426,7 @@ export const ChatView = ({
                       events={toolEventsByMessage[message.id]}
                       regenerate={regenerate}
                       onSuggestionClick={(text) => sendMessage({ text })}
+                      onResolveToolApproval={onResolveToolApproval}
                     />
                   );
                 }

@@ -140,7 +140,10 @@ describe("memoize (by args)", () => {
         },
       };
     });
-    const [a, b] = await Promise.all([Promise.resolve(fn("t")), Promise.resolve(fn("t"))]);
+    const [a, b] = await Promise.all([
+      Promise.resolve(fn("t")),
+      Promise.resolve(fn("t")),
+    ]);
     expect(runs).toBe(1);
     expect(a).toBe("t");
     expect(b).toBe("t");
@@ -150,7 +153,12 @@ describe("memoize (by args)", () => {
 describe("memoized", () => {
   it("throws when the descriptor value is not a function", () => {
     expect(() =>
-      memoized({}, "prop", { value: 42, writable: true, enumerable: true, configurable: true }),
+      memoized({}, "prop", {
+        value: 42,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      }),
     ).toThrow("@memoized can only decorate methods");
   });
 

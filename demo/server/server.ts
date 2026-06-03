@@ -1,6 +1,11 @@
 import { createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
-import { createAgent, mastra, tool } from "@dbx-tools/appkit-mastra";
+import {
+  buildEmailTool,
+  createAgent,
+  mastra,
+  tool,
+} from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
@@ -86,6 +91,12 @@ const support = createAgent({
         schema: z.object({ city: z.string() }),
         execute: async ({ city }) => `Sunny in ${city}`,
       }),
+      // Approval-gated email tool. The model can call this freely;
+      // execution is paused until the user clicks Approve in the
+      // chat UI. The default execute body just logs the would-be
+      // email to the server console (see `buildEmailTool`'s
+      // `send` option to swap in a real provider).
+      send_email: buildEmailTool(),
     };
   },
 });

@@ -7,7 +7,7 @@
 // Stops on first failure of an individual config but still reports a
 // summary at the end with which ones passed and failed.
 
-import { resolve } from "node:path";
+import path, { resolve } from "node:path";
 import { globSync } from "tinyglobby";
 import { bunx, readJson, ROOT } from "./util.js";
 
@@ -32,7 +32,8 @@ const configs = workspaces
       ignore: ["**/node_modules/**", "**/dist/**"],
     }),
   )
-  .sort();
+  .sort()
+  .map((config) => path.relative(ROOT, config));
 
 if (configs.length === 0) {
   console.warn("No tsconfig files found.");
@@ -43,18 +44,24 @@ console.log(`Typechecking ${configs.length} config(s):`);
 for (const config of configs) console.log(`  - ${config}`);
 console.log();
 
-const failures: string[] = [];
+const tscPromises = [];
 for (const config of configs) {
-  console.log(`=== ${config} ===`);
-  try {
-    bunx(["tsc", "--noEmit", "-p", config]);
-    console.log(`✓ Passed: ${config}\n`);
-  } catch {
-    failures.push(config);
-    console.error(`✗ Failed: ${config}\n`);
-  }
+  const tscPromise = bunx(["tsc", "--noEmit", "-p", config])
+    .then(() => {
+      console.log(`✓ Passed: ${config}`);
+    })
+    .catch((e) => {
+      console.error(`✗ Failed: ${config}`);
+      throw e;
+    });
+  tscPromises.push(tscPromise);
 }
 
+const results = await Promise.allSettled(tscPromises);
+
+const failures = results
+  .map((result, i) => ({ config: configs[i], result }))
+  .filter(({ result }) => result.status === "rejected");
 console.log("=== Summary ===");
 if (failures.length === 0) {
   console.log(`✓ All ${configs.length} tsconfig(s) passed`);
