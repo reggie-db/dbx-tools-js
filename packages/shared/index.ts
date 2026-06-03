@@ -15,3 +15,4 @@
  */
 export * from "./index.client.js";
 export * as projectUtils from "./src/project.js";
+export * as apiUtils from "./src/api.js";

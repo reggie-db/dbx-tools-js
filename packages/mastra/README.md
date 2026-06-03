@@ -390,8 +390,9 @@ const saveDoc = createTool({
 ```
 
 When `tool()`'s `id` is omitted it's auto-derived from a slugified
-description plus a 6-char SHA-1 prefix - stable across runs so traces
-stay readable. Pass an explicit `id` when you want to pin one.
+description plus a 6-char FNV-1a base-32 suffix - stable across runs
+so traces stay readable. Pass an explicit `id` when you want to pin
+one.
 
 Reach for `createTool` when you need Mastra-only fields (`outputSchema`,
 `suspendSchema`, `requireApproval`, `mcp`, etc.).

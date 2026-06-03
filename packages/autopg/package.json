@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-autopg",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "module": "index.ts",
   "type": "module",
   "dependencies": {

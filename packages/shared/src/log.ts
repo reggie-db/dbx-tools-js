@@ -11,10 +11,16 @@ export interface Logger {
 /**
  * Severity ordering. A log call below the active threshold is
  * discarded entirely (no string formatting, no console call). The
- * threshold is read once from `process.env.LOG_LEVEL` at module
- * load and applies process-wide; case-insensitive, defaults to
- * `info`. Set `LOG_LEVEL=debug` for verbose dev output, `LOG_LEVEL=warn`
- * to silence info chatter in production, etc.
+ * threshold is read on every call from `process.env.LOG_LEVEL`,
+ * case-insensitive, defaulting to `info` when unset / empty /
+ * unrecognised. Set `LOG_LEVEL=debug` for verbose dev output,
+ * `LOG_LEVEL=warn` to silence info chatter in production, etc.
+ *
+ * Lazy on purpose: looking up `process.env.LOG_LEVEL` per call
+ * costs nothing meaningful, and it lets test runners (and other
+ * embedders) flip the level after `log.ts` has already been
+ * imported, without restarting the process or reaching into
+ * private state.
  */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -28,30 +34,27 @@ const LEVEL_RANK: Readonly<Record<LogLevel, number>> = {
 const DEFAULT_LEVEL: LogLevel = "info";
 
 /**
- * Read `LOG_LEVEL` once and resolve it to a {@link LogLevel}.
- * Recognises any case (`DEBUG`, `Debug`, `debug`), trims
- * whitespace, falls back to {@link DEFAULT_LEVEL} when unset /
- * empty / unrecognised. Captured at module load (env var tweaks
- * after import don't take effect; restart the process).
+ * Read the active threshold from `process.env.LOG_LEVEL`. Recognises
+ * any case (`DEBUG`, `Debug`, `debug`), trims whitespace, falls back
+ * to {@link DEFAULT_LEVEL} when unset / empty / unrecognised.
  *
- * Browser-safe: `process` is undefined in browser bundles unless
- * a polyfill or build-time replace is set up, so we guard the
- * access. In a Vite app, set `LOG_LEVEL` via `define` config or
- * just leave it - the default `info` is sane for production
- * browser code.
+ * Browser-safe: `process` is undefined in browser bundles unless a
+ * polyfill or build-time replace is set up, so we guard the access.
+ * In a Vite app, set `LOG_LEVEL` via `define` config or just leave
+ * it - the default `info` is sane for production browser code.
  */
-const LOG_LEVEL: LogLevel = (() => {
+function activeLevel(): LogLevel {
   const env = typeof process !== "undefined" ? process.env : undefined;
   const raw = env?.LOG_LEVEL?.toLowerCase().trim();
   if (raw && Object.prototype.hasOwnProperty.call(LEVEL_RANK, raw)) {
     return raw as LogLevel;
   }
   return DEFAULT_LEVEL;
-})();
+}
 
 /** True when calls at `level` should reach the console. */
 function shouldEmit(level: LogLevel): boolean {
-  return LEVEL_RANK[level] >= LEVEL_RANK[LOG_LEVEL];
+  return LEVEL_RANK[level] >= LEVEL_RANK[activeLevel()];
 }
 
 /**

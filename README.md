@@ -8,16 +8,25 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 | ------------------------------------------------------------------- | ------------------------ | -------------------- |
 | [`@dbx-tools/appkit-shared`](packages/shared)                       | `packages/shared`        | yes                  |
 | [`@dbx-tools/appkit-autopg`](packages/autopg)                       | `packages/autopg`        | yes                  |
+| [`@dbx-tools/appkit-serving`](packages/serving)                     | `packages/serving`       | yes                  |
 | [`@dbx-tools/appkit-mastra`](packages/mastra)                       | `packages/mastra`        | yes                  |
 | [`@dbx-tools/appkit-mastra-shared`](packages/mastra-shared)         | `packages/mastra-shared` | yes                  |
 | [`@dbx-tools/appkit-demo`](demo)                                    | `demo`                   | no (`private: true`) |
 
 `appkit-shared` provides small utilities (typed plugin lookup, cookie parsing,
-string case helpers, console log prefixes, memoization) without pulling AppKit
+string case helpers, console log prefixes with `LOG_LEVEL` filtering,
+memoization, and an auth-aware Databricks REST helper that resolves the
+workspace client off the AppKit execution context) without pulling AppKit
 types into every consumer. `appkit-autopg` is a one-line `autopg()` helper that
 fills in every Lakebase Postgres env var the AppKit `lakebase` plugin needs
 from whatever fragments your deployment carries (resource paths, bare hostnames,
-Postgres URIs). `appkit-mastra` is a beta AppKit plugin that mounts Mastra
+Postgres URIs). `appkit-serving` is a tiny set of typed accessors over the
+`/api/2.0/serving-endpoints` listing - `servingEndpoints()` plus
+`foundationModel{Class,Profile,Version}` helpers that pull `model_class`,
+the AI Gateway speed/quality/cost profile, and a derived semver out of
+each endpoint, so callers can rank or filter Foundation Model endpoints
+without re-implementing the parsing themselves. `appkit-mastra` is a beta
+AppKit plugin that mounts Mastra
 (`@mastra/express` + `@mastra/ai-sdk` `chatRoute`), resolves the model from the
 workspace host and `/serving-endpoints` with per-request user auth, reuses the
 `lakebase` plugin pool for Mastra Memory when `storage` / `memory` are enabled,

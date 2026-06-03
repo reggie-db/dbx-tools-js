@@ -123,8 +123,8 @@ export interface AppKitToolOptions {
 /**
  * Build a deterministic Mastra tool id from a description.
  * Delegates to {@link stringUtils.toUniqueSlug}: slug + always-on
- * SHA-1 suffix so two tools with the same leading words don't
- * collide in traces. Stable across runs.
+ * 6-char FNV-1a base-32 suffix so two tools with the same leading
+ * words don't collide in traces. Stable across runs.
  */
 function deriveToolId(description: string): string {
   return stringUtils.toUniqueSlug(description, { fallbackPrefix: "tool" });

@@ -102,3 +102,62 @@ function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
     typeof (value as Promise<T>).then === "function"
   );
 }
+
+export function fnvHash(...values: string[]): string {
+  return fnvHashWithOptions({}, ...values);
+}
+
+export function fnvHashWithOptions(
+  options: { length?: number; alphabet?: string } = {},
+  ...values: string[]
+): string {
+  const { length = 6 } = options;
+
+  let digest = 0x811c9dc5;
+
+  for (const value of values) {
+    for (let i = 0; i < value.length; i++) {
+      digest ^= value.charCodeAt(i);
+      digest = Math.imul(digest, 0x01000193);
+    }
+  }
+  const alphabet = base32Alphabet(options.alphabet);
+  return toBase32(digest, alphabet, true)
+    .padStart(7, alphabet[0])
+    .slice(0, Math.min(length, 7));
+}
+
+const BASE32_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+
+function base32Alphabet(alphabet?: string): string {
+  if (alphabet === undefined) return BASE32_ALPHABET;
+  else if (new Set(alphabet).size !== 32) {
+    throw new Error("Base32 alphabet must contain 32 unique characters");
+  }
+  return alphabet;
+}
+
+export function toBase32(
+  value: number,
+  alphabet?: string,
+  disableAlphabetValidation?: boolean,
+): string {
+  if (!disableAlphabetValidation) {
+    alphabet = base32Alphabet(alphabet);
+  }
+  if (alphabet!.length !== 32) {
+    throw new Error(
+      `Base32 alphabet must contain exactly 32 characters, got ${alphabet!.length}`,
+    );
+  }
+  value >>>= 0;
+  if (value === 0) {
+    return alphabet![0]!;
+  }
+  let result = "";
+  while (value > 0) {
+    result = alphabet![value & 31] + result;
+    value >>>= 5;
+  }
+  return result;
+}

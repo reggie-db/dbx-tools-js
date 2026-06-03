@@ -10,6 +10,7 @@ libraries:
 
 ```ts
 import {
+  apiUtils,
   commonUtils,
   httpUtils,
   logUtils,
@@ -18,6 +19,12 @@ import {
   stringUtils,
 } from "@dbx-tools/appkit-shared";
 ```
+
+> `apiUtils` and `projectUtils` import Node-only modules (`@databricks/appkit`,
+> `node:fs`) and are intentionally **not** re-exported from the browser
+> entry. Vite / Webpack / esbuild builds that honor the `browser`
+> condition will resolve `@dbx-tools/appkit-shared` to a barrel that
+> omits both - import them only from server-side code.
 
 ## `pluginUtils` - typed sibling-plugin lookup
 
@@ -46,8 +53,8 @@ need the registered name for a manifest dependency.
 
 ## `httpUtils` - framework-neutral request helpers
 
-Public surface: `toURL`, `forEachHeaderValue`, `parseCookies`. All three
-work uniformly against any of:
+Public surface: `joinUrlSegments`, `toURL`, `forEachHeaderValue`,
+`parseCookies`. The header-shaped helpers work uniformly against any of:
 
 - Express `req` (Node-style `req.headers`)
 - Web Fetch `Request` (`Headers` instance)
@@ -72,7 +79,50 @@ app.use((req, res, next) => {
 // Tolerant URL coercion - bare hostnames, partial inputs, or
 // objects with a `.url` field all round-trip through:
 const url = httpUtils.toURL("example.com");  // https://example.com/
+
+// Path-segment join: nullish/blank inputs are skipped, leading /
+// trailing slashes are normalized, nested arrays recurse.
+httpUtils.joinUrlSegments("/api/", ["v2", "items"], null); // "/api/v2/items"
 ```
+
+## `apiUtils` - authenticated Databricks REST calls (server only)
+
+Wraps `fetch` against `https://<workspace-host>/api/2.0/<path>` with the
+auth header your AppKit execution context already carries, plus an
+optional `CacheManager.getOrExecute` hook so per-user TTL'd reads are a
+single positional arg:
+
+```ts
+import { apiUtils } from "@dbx-tools/appkit-shared";
+
+// Bare GET against the workspace /api/2.0 namespace - leading /api/2.0
+// is auto-stripped so you can pass either form.
+const data = await apiUtils.fetchApi<{ endpoints?: unknown[] }>(
+  "serving-endpoints",
+);
+
+// With a per-user cache (useful for "list everything" calls):
+const cached = await apiUtils.fetchApi<{ endpoints?: unknown[] }>(
+  "serving-endpoints",
+  undefined,
+  { userKey: req.userId, options: { ttl: 300 } },
+);
+
+// POST + custom client (e.g. service-account script outside a request).
+await apiUtils.fetchApi<{ id: string }>(
+  ["serving-endpoints", endpointName, "invocations"],
+  {
+    body: JSON.stringify({ inputs }),
+    headers: { "Content-Type": "application/json" },
+  },
+  undefined,
+  serviceClient,
+);
+```
+
+Defaults to `POST` when `init.body` is set, `GET` otherwise. The wrapper
+needs an active `getExecutionContext()` to resolve the workspace client
+unless a `WorkspaceClient` is passed in explicitly, so it's server-only.
 
 ## `stringUtils` - identifier + slug helpers
 
@@ -105,17 +155,25 @@ const name = await projectUtils.name();
 projectUtils.parseGitRemote("git@github.com:org/my-repo.git"); // "my-repo"
 ```
 
-## `commonUtils` - memoize
+## `commonUtils` - memoize + hashing
 
 ```ts
 import { commonUtils } from "@dbx-tools/appkit-shared";
 
 // Memoize by all-args; sync results cache forever, async failures bust.
 const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));
+
+// Short, deterministic hash for cache keys / slug suffixes / etc.
+// Pure-JS FNV-1a in Crockford-style base-32 (digits + lowercase
+// alphabet minus i/l/o/u). Browser-safe.
+commonUtils.fnvHash("databricks-claude-sonnet-4-6"); // e.g. "k3p9q7"
+commonUtils.fnvHashWithOptions({ length: 4 }, "user@example.com");
 ```
 
 `@memoized` is a TC39 stage-1 method decorator built on the same
 `memoize` (requires `experimentalDecorators: true` in `tsconfig.json`).
+`fnvHash` is intentionally **not** cryptographically secure - use it for
+keys and slugs, never for tokens or signatures.
 
 ## `logUtils` - tagged console logger
 
@@ -136,6 +194,23 @@ class MyPlugin extends Plugin<MyConfig> {
 The logger is intentionally console-backed (no extra deps). For richer
 sinks pass your own `{ debug, info, warn, error }` object - the plugins
 in this repo accept any matching shape.
+
+### `LOG_LEVEL` filtering
+
+Each call checks `process.env.LOG_LEVEL` (case-insensitive, default
+`info`) and drops anything below the threshold *before* string
+formatting, so leaving `log.debug({...heavy details})` calls in
+production code costs nothing as long as `LOG_LEVEL` isn't `debug`.
+
+```bash
+LOG_LEVEL=debug bun dev    # full verbosity
+LOG_LEVEL=warn  bun start  # production: hide info chatter
+```
+
+The lookup is per-call (not module-load), so test runners can flip
+the threshold after the module has been imported. In browser bundles
+where `process.env.LOG_LEVEL` is undefined, the default `info`
+threshold applies.
 
 ## License
 

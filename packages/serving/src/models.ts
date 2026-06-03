@@ -1,6 +1,4 @@
-import { getExecutionContext } from "@databricks/appkit";
-import { WorkspaceClient } from "@databricks/sdk-experimental";
-import { httpUtils } from "@dbx-tools/appkit-shared";
+import { apiUtils } from "@dbx-tools/appkit-shared";
 
 // ────────────────────────────────────────────────────────────────
 // Endpoint shape
@@ -146,14 +144,30 @@ export function* foundationModelProfiles(
   }
 }
 
+/**
+ * Fetch every serving endpoint visible to the caller via
+ * `/api/2.0/serving-endpoints`. Goes through
+ * {@link apiUtils.fetchApi}, which pulls the workspace client out
+ * of the active AppKit execution context (so OBO auth is respected
+ * when called inside a per-request scope) and parses the JSON
+ * response.
+ *
+ * Must be called inside an initialized AppKit app -
+ * {@link apiUtils.fetchApi} dereferences `getExecutionContext()`
+ * for the workspace client, which throws if `createApp(...)` hasn't
+ * run yet. Tests that don't want to bootstrap AppKit should mock
+ * this function or feed a fixture directly into the consumer (see
+ * `packages/serving/test/models.test.ts` for the inline-JSON
+ * pattern).
+ *
+ * No per-user cache layer today - the call is intentionally
+ * uncached so newly-created endpoints show up immediately. Wrap
+ * with {@link apiUtils.fetchApi}'s cache hook on the caller side
+ * if you want TTL'd results.
+ */
 export async function servingEndpoints(): Promise<ServingEndpoint[]> {
-  let client: WorkspaceClient | null = null;
-  try {
-    client = getExecutionContext().client;
-  } catch (error) {
-    client = new WorkspaceClient({});
-  }
-  const data = await httpUtils.fetchApi(client, "/serving-endpoints");
-  console.log(data);
+  const data = await apiUtils.fetchApi<{ endpoints?: ServingEndpoint[] }>(
+    "serving-endpoints",
+  );
   return data?.endpoints ?? [];
 }

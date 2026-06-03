@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { createHash } from "node:crypto";
 
+import { fnvHashWithOptions } from "../src/common.js";
 import {
   firstNonEmpty,
   toIdentifier,
@@ -17,14 +17,24 @@ function take(gen: Iterable<string>): string[] {
   return [...gen];
 }
 
-function sha1(parts: string[], length = 6): string {
-  const hash = createHash("sha1");
-  for (const part of parts) {
-    hash.update(part);
-    hash.update("\0");
-  }
-  return hash.digest("hex").slice(0, length);
+// Mirror of the private `digestTokens` helper in string.ts: concat
+// each token with a `\0` separator, append the optional overflow
+// `extra` token (also `\0`-suffixed), then run the result through
+// `fnvHashWithOptions`. Used by the `truncateStrategy: "hash"`
+// branch of toIdentifierWithOptions to derive the deterministic
+// suffix appended on overflow.
+function digestTokens(length: number, tokens: string[], extra?: string): string {
+  let combined = "";
+  for (const part of tokens) combined += part + "\0";
+  if (extra !== undefined) combined += extra + "\0";
+  return fnvHashWithOptions({ length }, combined);
 }
+
+// commonUtils' fnvHash emits Crockford-style base32: digits +
+// lowercase alphabet minus the visually-confusing `i`, `l`, `o`,
+// `u`. Used by the toUniqueSlug suite below to assert the suffix
+// shape without enumerating every test alphabet inline.
+const HASH_CHAR = "[0-9a-hjkmnp-tv-z]";
 
 describe("tokenize", () => {
   it("splits camelCase by default", () => {
@@ -226,7 +236,7 @@ describe("toIdentifierWithOptions", () => {
       it("fits prefix + delimiter + hash within maxLength", () => {
         // alpha(5) + '-' + longbeta(8) = 14 > 13 overflow.
         // prefix='alpha'(5) + '-' + hash(6) = 12 <= 13 fits.
-        const hash = sha1(["alpha", "longbeta"], 6);
+        const expected = digestTokens(6, ["alpha"], "longbeta");
         expect(
           toIdentifierWithOptions(
             {
@@ -237,11 +247,13 @@ describe("toIdentifierWithOptions", () => {
             "alpha",
             "longbeta",
           ),
-        ).toBe(`alpha-${hash}`);
+        ).toBe(`alpha-${expected}`);
       });
 
       it("returns hash alone when only the first token overflows", () => {
-        const hash = sha1(["averylongtoken"], 6);
+        // No tokens accepted yet; the first token "averylongtoken" is
+        // the overflow `extra` argument.
+        const expected = digestTokens(6, [], "averylongtoken");
         expect(
           toIdentifierWithOptions(
             {
@@ -251,7 +263,7 @@ describe("toIdentifierWithOptions", () => {
             },
             "averylongtoken",
           ),
-        ).toBe(hash);
+        ).toBe(expected);
       });
 
       it("returns '' when even the hash alone does not fit", () => {
@@ -339,7 +351,7 @@ describe("firstNonEmpty", () => {
 describe("toUniqueSlug", () => {
   it("appends a hash suffix to a slugified description", () => {
     const slug = toUniqueSlug("Read uploaded file");
-    expect(slug).toMatch(/^read_uploaded_file_[0-9a-f]{6}$/);
+    expect(slug).toMatch(new RegExp(`^read_uploaded_file_${HASH_CHAR}{6}$`));
   });
 
   it("is deterministic across calls", () => {
@@ -348,7 +360,7 @@ describe("toUniqueSlug", () => {
 
   it("uses fallback prefix when the slug ends up empty", () => {
     const slug = toUniqueSlug("!!!");
-    expect(slug).toMatch(/^id_[0-9a-f]{6}$/);
+    expect(slug).toMatch(new RegExp(`^id_${HASH_CHAR}{6}$`));
   });
 
   it("honors custom delimiter, slug cap, and hash length", () => {
@@ -360,7 +372,7 @@ describe("toUniqueSlug", () => {
       slugMaxLength: 8,
       hashLength: 4,
     });
-    expect(slug).toMatch(/^very-[0-9a-f]{4}$/);
+    expect(slug).toMatch(new RegExp(`^very-${HASH_CHAR}{4}$`));
   });
 
   it("hashes the raw source so same-slug inputs still differ", () => {

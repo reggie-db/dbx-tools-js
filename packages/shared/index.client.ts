@@ -11,10 +11,15 @@
  * Node always uses `index.ts`. Don't import `./src/project.js` from
  * here, even transitively - that's the entire point of the split.
  *
- * Other utility namespaces are re-exported as-is. `string.ts` uses an
- * inlined pure-JS SHA-1 (no `node:crypto`), so it's safe in the
- * browser; `http.ts` / `plugin.ts` / `common.ts` / `log.ts` already
- * had no node-only imports.
+ * Other utility namespaces are re-exported as-is. `common.ts` ships a
+ * pure-JS FNV-1a `fnvHash` (no `node:crypto`) that `string.ts` uses
+ * for slug suffixes, so the whole barrel is safe in the browser;
+ * `http.ts` / `plugin.ts` / `log.ts` already had no node-only imports.
+ *
+ * `apiUtils` is intentionally **not** re-exported here. It wraps
+ * `getExecutionContext()` and a fetch-time auth header callback, both
+ * of which only make sense inside an AppKit server process. It lives
+ * only on `index.ts` (the server entry).
  */
 export * as commonUtils from "./src/common.js";
 export * as httpUtils from "./src/http.js";

@@ -1,6 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
 import { logger } from "../src/log.js";
+
+// log.ts reads `process.env.LOG_LEVEL` lazily on every call, so we
+// force `debug` once before the level-routing test runs. With the
+// default `info` threshold, `log.debug(...)` would be dropped and
+// the matching console mock never fires.
+beforeAll(() => {
+  process.env.LOG_LEVEL = "debug";
+});
 
 type ConsoleMethod = "debug" | "info" | "warn" | "error";
 

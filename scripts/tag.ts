@@ -47,7 +47,10 @@ interface CliArgs {
 }
 
 /** Wraps a git invocation with our standard subprocess defaults. */
-function git(args: string[], opts: { capture?: boolean; check?: boolean } = {}): string {
+async function git(
+  args: string[],
+  opts: { capture?: boolean; check?: boolean } = {},
+): Promise<string> {
   return run("git", args, opts);
 }
 
@@ -131,18 +134,24 @@ Requirements:
 Output the release notes only.`.trim();
 
 /**
- * Build the release-notes prompt from git history. Pure function so
- * it's easy to preview in dry-run without involving git side effects.
+ * Build the release-notes prompt from git history. Async because the
+ * underlying `run()` wrapper is async; the function itself is still
+ * pure-shaped (no side effects) so it's safe to preview in dry-run.
  */
-function buildReleaseNotesContext(prevTag: string | null, nextTag: string): ReleaseNotesContext {
+async function buildReleaseNotesContext(
+  prevTag: string | null,
+  nextTag: string,
+): Promise<ReleaseNotesContext> {
   const range = prevTag ? `${prevTag}..HEAD` : null;
   const commits = range
-    ? git(["log", "--no-merges", "--pretty=- %s", range], { capture: true })
+    ? (await git(["log", "--no-merges", "--pretty=- %s", range], { capture: true }))
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
-  const diffStat = range ? git(["diff", "--stat", range], { capture: true }) : "";
+  const diffStat = range
+    ? await git(["diff", "--stat", range], { capture: true })
+    : "";
 
   const prompt = [
     `Write release notes for ${nextTag}.`,
@@ -181,36 +190,38 @@ const tag = `v${nextVersion}`;
 // The script is permissive about local state: dirty files get folded
 // into the release commit and unpushed commits get pushed along with
 // it. Dry-run still skips everything that touches disk or the remote.
-const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], { capture: true });
-const dirty = git(["status", "--porcelain"], { capture: true });
+const branch = await git(["rev-parse", "--abbrev-ref", "HEAD"], { capture: true });
+const dirty = await git(["status", "--porcelain"], { capture: true });
 let ahead = "0";
 if (!dryRun) {
-  const upstream = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
-    capture: true,
-    check: false,
-  });
+  const upstream = await git(
+    ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    { capture: true, check: false },
+  );
   if (!upstream) {
     fail(`Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`);
   }
-  ahead = git(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
+  ahead = await git(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
 }
 
-if (git(["rev-parse", "--verify", `refs/tags/${tag}`], { capture: true, check: false })) {
+if (await git(["rev-parse", "--verify", `refs/tags/${tag}`], { capture: true, check: false })) {
   fail(`Tag ${tag} already exists locally. Pick a different bump.`);
 }
 
-if (git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { capture: true })) {
+if (await git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { capture: true })) {
   fail(`Tag ${tag} already exists on origin. Pick a different bump.`);
 }
 
-const prevTag = git(["describe", "--tags", "--abbrev=0"], { capture: true, check: false }) || null;
+const prevTag =
+  (await git(["describe", "--tags", "--abbrev=0"], { capture: true, check: false })) || null;
 
 console.log(`Bump:    ${bump}`);
 console.log(`Current: ${currentVersion}`);
 console.log(`Next:    ${nextVersion}`);
 console.log(`Tag:     ${tag}`);
 console.log(`Prev:    ${prevTag ?? "(none)"}`);
-console.log(`HEAD:    ${git(["rev-parse", "--short", "HEAD"], { capture: true })} (${branch})`);
+const headSha = await git(["rev-parse", "--short", "HEAD"], { capture: true });
+console.log(`HEAD:    ${headSha} (${branch})`);
 console.log(`Packages:`);
 for (const p of pkgs) console.log(`  ${p.name}`);
 if (dirty) {
@@ -222,7 +233,7 @@ if (ahead !== "0") {
 }
 console.log();
 
-const notesContext = buildReleaseNotesContext(prevTag, tag);
+const notesContext = await buildReleaseNotesContext(prevTag, tag);
 let aiSummary: string | null = null;
 if (notesContext.commits.length === 0) {
   console.log("(skipping release notes: no commits between previous tag and HEAD)");
@@ -246,17 +257,17 @@ console.log(`Writing ${nextVersion} to ${pkgs.length} package.json file(s)...`);
 for (const p of pkgs) writeVersion(p.jsonPath, nextVersion);
 
 console.log(`Committing release ${tag}...`);
-git(["add", "-A"]);
-git(["commit", "-m", `chore: release ${tag}`]);
+await git(["add", "-A"]);
+await git(["commit", "-m", `chore: release ${tag}`]);
 
 console.log(`Pushing ${branch}...`);
-git(["push", "origin", branch]);
+await git(["push", "origin", branch]);
 
 console.log(`Tagging HEAD as ${tag}...`);
-git(["tag", "-a", tag, "-m", tagMessage]);
+await git(["tag", "-a", tag, "-m", tagMessage]);
 
 console.log(`Pushing ${tag} to origin...`);
-git(["push", "origin", tag]);
+await git(["push", "origin", tag]);
 
 console.log();
 console.log(`✓ Released ${tag}.`);

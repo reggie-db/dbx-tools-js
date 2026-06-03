@@ -6,11 +6,15 @@
  * / `Headers`, Hono, and any object that exposes a `headers` field of
  * one of those shapes.
  *
- * Public API: {@link joinUrlSegments}, {@link toURL}, {@link fetchApi},
+ * Public API: {@link joinUrlSegments}, {@link toURL},
  * {@link forEachHeaderValue}, {@link parseCookies}. Everything else
  * (the header guards `isHeaders` / `isWrapped` / `unwrap`, the single
  * cookie-header parser `parseCookieString`, the slash-stripper
  * `stripBoundarySlashes`) is private to this module.
+ *
+ * The Databricks-aware REST helper that used to live here moved to
+ * `apiUtils.fetchApi` (`./api.ts`) so this module can stay
+ * dependency-free and browser-safe.
  */
 
 import type { WorkspaceClient } from "@databricks/sdk-experimental";
@@ -69,12 +73,6 @@ type HeaderValueLike = string[] | string | undefined;
 type HeaderRecord = Record<string, HeaderValueLike>;
 
 // ────────────────────────────────────────────────────────────────
-// Constants
-// ────────────────────────────────────────────────────────────────
-
-const API_PREFIX = "/api/2.0";
-
-// ────────────────────────────────────────────────────────────────
 // URL helpers
 // ────────────────────────────────────────────────────────────────
 
@@ -105,7 +103,7 @@ const API_PREFIX = "/api/2.0";
  * joinUrlSegments();                            // ""
  * joinUrlSegments(null);                        // ""
  */
-function joinUrlSegments(...urlSegments: URLSegmentLike[]): string {
+export function joinUrlSegments(...urlSegments: URLSegmentLike[]): string {
   const parts: string[] = [];
   for (const segment of urlSegments) {
     if (segment == null) continue;
@@ -187,62 +185,6 @@ export function toURL(
     return null;
   }
   return toURL(input.url, joinedPath);
-}
-
-/**
- * Issue an authenticated request against a Databricks workspace REST
- * endpoint, resolving the host from the supplied `WorkspaceClient`
- * and stamping the OAuth/PAT auth header in for you. The response
- * body is returned parsed as JSON.
- *
- * `path` may be a single string or an array of segments. A leading
- * `/api/2.0` is auto-stripped so callers can pass either style
- * (`"/api/2.0/serving-endpoints"` or `"/serving-endpoints"`) without
- * doubling it in the final URL.
- *
- * `init` is an optional WHATWG `RequestInit`. Useful fields:
- *
- *   - `body`: request payload. Strings / `Buffer` / `FormData` /
- *     `URLSearchParams` pass through; for JSON, stringify the object
- *     yourself and set `headers["Content-Type"] = "application/json"`.
- *   - `headers`: extra request headers, merged in **before** the auth
- *     header is applied so the workspace's `Authorization` always
- *     wins on conflict.
- *   - `method`: HTTP verb. If omitted, defaults to `POST` when
- *     `init.body` is present and `GET` otherwise.
- *
- * @example
- * await fetchApi(ws, "/serving-endpoints");
- *
- * await fetchApi(ws, ["/serving-endpoints", endpointName, "invocations"], {
- *   body: JSON.stringify({ inputs: [...] }),
- *   headers: { "Content-Type": "application/json" },
- * });
- */
-export async function fetchApi(
-  workspaceClient: WorkspaceClient,
-  path: string[] | string,
-  init?: RequestInit,
-): Promise<any> {
-  let joinedPath = joinUrlSegments(path);
-  if (joinedPath === API_PREFIX || joinedPath.startsWith(API_PREFIX + "/")) {
-    joinedPath = joinedPath.slice(API_PREFIX.length);
-  }
-  if (!joinedPath) {
-    throw new Error(`Invalid path: ${path}`);
-  }
-  const config = workspaceClient.config;
-  const host = await config.getHost();
-  const url = toURL(host, API_PREFIX, joinedPath)!;
-  const headers = new Headers(init?.headers);
-  await config.authenticate(headers);
-  const method = init?.method?.toUpperCase() ?? (init?.body ? "POST" : "GET");
-  const response = await fetch(url.toString(), {
-    ...init,
-    method,
-    headers,
-  });
-  return response.json() as Promise<any>;
 }
 
 // ────────────────────────────────────────────────────────────────

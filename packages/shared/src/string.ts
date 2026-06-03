@@ -1,3 +1,8 @@
+// Direct import (not via the barrel) to avoid a self-import cycle:
+// `index.client.ts` re-exports `* as stringUtils from "./src/string.js"`,
+// so going back through it would close a loop.
+import { fnvHash, fnvHashWithOptions } from "./common.js";
+
 type TokenizeOptions = {
   distinct?: boolean;
   lowerCase?: boolean;
@@ -230,8 +235,9 @@ export function toDescription(
  * @param options.delimiter - Token separator (default `"_"`).
  * @param options.slugMaxLength - Cap on the slug portion (the part
  *   before the hash). Default 32.
- * @param options.hashLength - Hex digits of SHA-1 to append.
- *   Default 6.
+ * @param options.hashLength - Length of the suffix produced by
+ *   `commonUtils.fnvHash` (Crockford-style base-32 alphabet, max 7
+ *   chars). Default 6.
  * @param options.fallbackPrefix - Prefix used when the slug is empty
  *   (e.g. punctuation-only input). Default `"id"`.
  */
@@ -252,8 +258,10 @@ export function toUniqueSlug(
     { delimiter, maxLength: slugMaxLength, truncateStrategy: "trim" },
     value,
   );
-  const hash = sha1Hex(value).slice(0, hashLength);
-  return slug ? `${slug}${delimiter}${hash}` : `${fallbackPrefix}${delimiter}${hash}`;
+  const suffix = fnvHashWithOptions({ length: hashLength }, value);
+  return slug
+    ? `${slug}${delimiter}${suffix}`
+    : `${fallbackPrefix}${delimiter}${suffix}`;
 }
 
 function digestTokens(
@@ -264,86 +272,5 @@ function digestTokens(
   let combined = "";
   for (const part of parts) combined += part + "\0";
   if (extra !== undefined) combined += extra + "\0";
-  return sha1Hex(combined).slice(0, length);
-}
-
-/**
- * Pure-JS, sync SHA-1 over a UTF-8 string. Inlined so this module
- * works identically in Node and in browser bundles (Web Crypto's
- * `subtle.digest` is async, and `node:crypto` blows up Vite's
- * browser stub - we want one implementation to avoid environment
- * branching). Standard FIPS-180-4 algorithm; correctness is exercised
- * by `tests/string.test.ts`.
- */
-function sha1Hex(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  const len = bytes.length;
-  // Pad: append 0x80, zero-fill to a 56 (mod 64) boundary, then 8
-  // bytes of bit-length (big-endian 64-bit).
-  const padded = new Uint8Array(((len + 9 + 63) & ~63) | 0);
-  padded.set(bytes);
-  padded[len] = 0x80;
-  // Bit length: SHA-1 only specifies 64 bits; we encode the low 32
-  // (`len * 8`) and leave the high 32 zero, fine for inputs under
-  // 2^29 bytes which everything here is.
-  const view = new DataView(padded.buffer);
-  view.setUint32(padded.length - 4, len * 8, false);
-
-  let h0 = 0x67452301;
-  let h1 = 0xefcdab89;
-  let h2 = 0x98badcfe;
-  let h3 = 0x10325476;
-  let h4 = 0xc3d2e1f0;
-
-  const w = new Array<number>(80);
-  for (let chunk = 0; chunk < padded.length; chunk += 64) {
-    for (let j = 0; j < 16; j++) {
-      w[j] = view.getUint32(chunk + j * 4, false);
-    }
-    for (let j = 16; j < 80; j++) {
-      const x = w[j - 3]! ^ w[j - 8]! ^ w[j - 14]! ^ w[j - 16]!;
-      w[j] = (x << 1) | (x >>> 31);
-    }
-    let a = h0;
-    let b = h1;
-    let c = h2;
-    let d = h3;
-    let e = h4;
-    for (let j = 0; j < 80; j++) {
-      let f: number;
-      let k: number;
-      if (j < 20) {
-        f = (b & c) | (~b & d);
-        k = 0x5a827999;
-      } else if (j < 40) {
-        f = b ^ c ^ d;
-        k = 0x6ed9eba1;
-      } else if (j < 60) {
-        f = (b & c) | (b & d) | (c & d);
-        k = 0x8f1bbcdc;
-      } else {
-        f = b ^ c ^ d;
-        k = 0xca62c1d6;
-      }
-      const temp = (((a << 5) | (a >>> 27)) + f + e + k + w[j]!) | 0;
-      e = d;
-      d = c;
-      c = (b << 30) | (b >>> 2);
-      b = a;
-      a = temp;
-    }
-    h0 = (h0 + a) | 0;
-    h1 = (h1 + b) | 0;
-    h2 = (h2 + c) | 0;
-    h3 = (h3 + d) | 0;
-    h4 = (h4 + e) | 0;
-  }
-
-  return (
-    toHex32(h0) + toHex32(h1) + toHex32(h2) + toHex32(h3) + toHex32(h4)
-  );
-}
-
-function toHex32(n: number): string {
-  return (n >>> 0).toString(16).padStart(8, "0");
+  return fnvHashWithOptions({ length }, combined);
 }
