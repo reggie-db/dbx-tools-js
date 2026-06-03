@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import type { UIMessage } from "ai";
+import { logUtils } from "@dbx-tools/appkit-shared";
 import {
   ChatView,
   type ChatStatus,
@@ -14,6 +15,8 @@ import {
   useMastraModels,
 } from "@/lib/mastra-client";
 import { synthesizeToolEventsFromHistory } from "@/lib/genie-history";
+
+const log = logUtils.logger("client/stream");
 
 // Same chat UI as pages/Chat.tsx, but instead of pointing useChat at the
 // chatRoute() endpoint, we drive messages by hand using @mastra/client-js.
@@ -231,7 +234,9 @@ const Stream = () => {
         });
         setStatus("ready");
       } catch (error) {
-        console.error("Mastra stream error", error);
+        log.error("stream error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
         setStatus("error");
       }
     },
@@ -306,7 +311,9 @@ const Stream = () => {
       })
       .catch((error: unknown) => {
         if (cancelled || (error as { name?: string }).name === "AbortError") return;
-        console.error("Mastra history load error", error);
+        log.error("history load error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
         setHasMoreHistory(false);
       })
       .finally(() => {
@@ -355,7 +362,10 @@ const Stream = () => {
         setHasMoreHistory(response.hasMore);
       })
       .catch((error: unknown) => {
-        console.error("Mastra history load-more error", error);
+        log.error("history load-more error", {
+          page,
+          error: error instanceof Error ? error.message : String(error),
+        });
         // Roll back the page so a manual retry hits the same page,
         // and stop the trigger so we don't thrash the failed call.
         historyPageRef.current = page;

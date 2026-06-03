@@ -52,14 +52,6 @@ export interface MastraClientConfig {
    * normally call {@link historyUrl} instead.
    */
   historyPathTemplate: string;
-  /**
-   * Chart-rendering endpoint:
-   * `${basePath}/route/render-chart`. POST a dataset; receive an
-   * Echarts `EChartsOption` JSON. Used by the chat client to fill
-   * the placeholders the model emits via `[[chart:<id>]]`
-   * markers without blocking the main agent stream.
-   */
-  renderChartPath: string;
   /** Agent id `chatRoute` binds to when the client doesn't name one. */
   defaultAgent: string;
   /** Every registered agent id in registration order. */
@@ -135,35 +127,6 @@ export interface MastraHistoryResponse {
   total: number;
   /** True when at least one older page is still available. */
   hasMore: boolean;
-}
-
-/**
- * Body accepted by `POST ${basePath}/route/render-chart`. The
- * server-side chart-planner agent picks a chart type and axis
- * encodings, then expands the result into a full
- * `EChartsOption` JSON.
- *
- * `data` is an array of objects keyed by column name (the same
- * shape every row in a SQL row set has). `title` is shown above
- * the chart; `description` is an optional one-line intent the
- * planner can use to bias chart-type selection.
- */
-export interface RenderChartRequest {
-  title: string;
-  description?: string;
-  data: Array<Record<string, unknown>>;
-}
-
-/**
- * JSON returned by `POST ${basePath}/route/render-chart`. The
- * `option` field is an Apache Echarts `EChartsOption` JSON the
- * client passes verbatim to `<ReactECharts option={...} />`.
- * `chartType` echoes the planner's pick so the caller can label
- * the chart in surrounding prose.
- */
-export interface RenderChartResponse {
-  option: Record<string, unknown>;
-  chartType: string;
 }
 
 /**

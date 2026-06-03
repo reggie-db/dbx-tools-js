@@ -16,10 +16,12 @@ Generated from the AppKit `app init` template, then adapted to:
 - Inline-render Genie query results as Echarts visualizations. Each
   Genie SQL statement gets a short `chartId`; the model embeds
   `[[chart:<chartId>]]` in its markdown reply at the position the
-  chart should appear, and the client's `<ChartSlot>` POSTs the rows
-  to `/api/mastra/route/render-chart` to fetch a pre-built
-  `EChartsOption`. The same path also serves the system-default
-  `render_data` tool, so hand-built charts and Genie charts feel
+  chart should appear. The chart-planner agent runs server-side per
+  dataset and ships its `EChartsOption` straight back through the
+  writer, so the client's `<ChartSlot>` just merges the dataset and
+  spec events by `chartId` and renders inline - no HTTP round-trip
+  to fetch chart specs. The system-default `render_data` tool uses
+  the same pipeline, so hand-built charts and Genie charts feel
   identical in the UI. See `packages/mastra/README.md` for the full
   contract.
 - Render the chat UI exclusively with `@databricks/appkit-ui`
@@ -60,12 +62,12 @@ demo/
       ErrorBoundary.tsx
       index.css           # @import "@databricks/appkit-ui/styles.css" + tailwindcss + tw-animate-css
       lib/
-        mastra-client.ts  # useMastraClient + useMastraModels + fetchRenderChart + fetchMastraHistory
+        mastra-client.ts  # useMastraClient + useMastraModels + fetchMastraHistory
         genie-history.ts  # rebuild ToolEvents from /history results so reloads still show pills
         utils.ts          # cn() helper
       components/
         chat-view.tsx     # shared chat surface: appkit-ui primitives + streamdown +
-                          # ChartSlot (Echarts via /route/render-chart) at [[chart:<id>]] markers
+                          # ChartSlot (Echarts) merging chart writer events at [[chart:<id>]] markers
       pages/
         Chat.tsx          # /chat - @ai-sdk/react useChat against /api/mastra/route/chat
         Stream.tsx        # /stream - MastraClient.stream() with live tool-output events

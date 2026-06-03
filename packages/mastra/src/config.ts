@@ -162,6 +162,19 @@ export interface MastraPluginConfig extends BasePluginConfig {
    */
   defaultModelFallbacks?: readonly string[];
   /**
+   * When `true` (default), every agent gets a built-in input
+   * processor that strips `chartId` fields from prior assistant
+   * tool-invocation results before they reach the model. This
+   * prevents the model from reusing turn-scoped chartIds it sees
+   * in memory recall (which would leave `[[chart:<id>]]` markers
+   * pointing at writer events that no longer exist).
+   *
+   * Set to `false` to opt out - useful if a non-default agent
+   * needs full visibility into prior chartIds (e.g. an audit
+   * agent reasoning about chart lineage).
+   */
+  stripStaleCharts?: boolean;
+  /**
    * Style guardrails appended to every agent's `instructions` to curb
    * common LLM-isms (em dashes, emojis, sycophantic openers, throwaway
    * closers, excessive hedging).

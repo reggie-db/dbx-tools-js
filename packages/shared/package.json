@@ -1,6 +1,13 @@
 {
   "name": "@dbx-tools/appkit-shared",
   "version": "0.1.5",
+  "type": "module",
   "module": "index.ts",
-  "type": "module"
+  "exports": {
+    ".": {
+      "browser": "./index.client.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  }
 }

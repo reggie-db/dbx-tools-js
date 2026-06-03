@@ -9,8 +9,59 @@ export interface Logger {
 }
 
 /**
+ * Severity ordering. A log call below the active threshold is
+ * discarded entirely (no string formatting, no console call). The
+ * threshold is read once from `process.env.LOG_LEVEL` at module
+ * load and applies process-wide; case-insensitive, defaults to
+ * `info`. Set `LOG_LEVEL=debug` for verbose dev output, `LOG_LEVEL=warn`
+ * to silence info chatter in production, etc.
+ */
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+const LEVEL_RANK: Readonly<Record<LogLevel, number>> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+const DEFAULT_LEVEL: LogLevel = "info";
+
+/**
+ * Read `LOG_LEVEL` once and resolve it to a {@link LogLevel}.
+ * Recognises any case (`DEBUG`, `Debug`, `debug`), trims
+ * whitespace, falls back to {@link DEFAULT_LEVEL} when unset /
+ * empty / unrecognised. Captured at module load (env var tweaks
+ * after import don't take effect; restart the process).
+ *
+ * Browser-safe: `process` is undefined in browser bundles unless
+ * a polyfill or build-time replace is set up, so we guard the
+ * access. In a Vite app, set `LOG_LEVEL` via `define` config or
+ * just leave it - the default `info` is sane for production
+ * browser code.
+ */
+const LOG_LEVEL: LogLevel = (() => {
+  const env = typeof process !== "undefined" ? process.env : undefined;
+  const raw = env?.LOG_LEVEL?.toLowerCase().trim();
+  if (raw && Object.prototype.hasOwnProperty.call(LEVEL_RANK, raw)) {
+    return raw as LogLevel;
+  }
+  return DEFAULT_LEVEL;
+})();
+
+/** True when calls at `level` should reach the console. */
+function shouldEmit(level: LogLevel): boolean {
+  return LEVEL_RANK[level] >= LEVEL_RANK[LOG_LEVEL];
+}
+
+/**
  * Build a per-plugin logger that writes to `console` with an optional
  * `[plugin-name]` prefix derived from `plugin.name` or the string you pass in.
+ *
+ * Calls below `process.env.LOG_LEVEL` are discarded before any
+ * string work happens, so leaving `log.debug({...heavy details})`
+ * in production code is free as long as `LOG_LEVEL` is `info` or
+ * higher. Default level is `info`.
  *
  * @example
  * ```ts
@@ -29,18 +80,20 @@ export interface Logger {
 export function logger(plugin: NameLike | string | undefined): Logger {
   const name = typeof plugin === "string" ? plugin : plugin?.name || undefined;
   function log(
+    level: LogLevel,
     consoleFn: (...args: unknown[]) => void,
     message: string,
     attributes?: Record<string, unknown>,
   ): void {
+    if (!shouldEmit(level)) return;
     const logMessage = name ? `[${name}] ${message}` : message;
     const logArgs = [logMessage, attributes].filter(Boolean);
     consoleFn(...logArgs);
   }
   return {
-    debug: (msg, attrs) => log(console.debug, msg, attrs),
-    info: (msg, attrs) => log(console.info, msg, attrs),
-    warn: (msg, attrs) => log(console.warn, msg, attrs),
-    error: (msg, attrs) => log(console.error, msg, attrs),
+    debug: (msg, attrs) => log("debug", console.debug, msg, attrs),
+    info: (msg, attrs) => log("info", console.info, msg, attrs),
+    warn: (msg, attrs) => log("warn", console.warn, msg, attrs),
+    error: (msg, attrs) => log("error", console.error, msg, attrs),
   };
 }

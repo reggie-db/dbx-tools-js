@@ -235,14 +235,15 @@ Genie data flow:
 - The writer emits `kind: "started" | "status" | "sql" |
   "suggested" | "error"` events for the live loading pill. SQL
   text is shown via a small Shiki-highlighted block.
-- The writer **also** emits a `kind: "chart"` event for every
-  Genie SQL statement, carrying `{chartId, title, description?,
-  data}` where `data` is the row set converted to objects keyed
-  by column name (with best-effort numeric coercion for value
-  axes). The chat client's `<ChartSlot>` resolves the matching
-  `[[chart:<chartId>]]` marker by POSTing the data to the
-  `/route/render-chart` endpoint and rendering the returned
-  Echarts spec inline. The exact same path `render_data` uses,
+- The writer **also** emits two `kind: "chart"` events per
+  executed SQL statement, sharing the same `chartId`: the first
+  carries `{chartId, title, description?, data}` (rows converted
+  to objects keyed by column name with best-effort numeric
+  coercion); the second, when the chart-planner agent finishes,
+  carries `{chartId, option}` (the resolved Echarts spec). The
+  chat client's `<ChartSlot>` merges them by `chartId` and
+  renders inline at the matching `[[chart:<chartId>]]` marker.
+  This is the exact same wire format as the `render_data` tool,
   so Genie and hand-built charts are indistinguishable on the
   client.
 - After a hard reload, `synthesizeToolEventsFromHistory` rebuilds
@@ -262,44 +263,41 @@ upstream. Input is `{ title, description?, data: Row[] }` where
 `data` is an array of objects keyed by column name (a SQL row
 set, an API response, a hand-built array, etc.).
 
-#### Async fire-and-forget design
+#### How it works (shared pipeline with Genie)
 
-The tool is intentionally a thin relay: it does **not** call the
-chart-planner inline. Instead it:
+Both `render_data` and Genie's `drainGenieStream` route through
+one helper, `emitChartWithPlanning`, so the wire format and
+trace shape are consistent everywhere:
 
-1. Mints a short `chartId` (8 hex chars).
-2. Pushes a single `{ kind: "chart", chartId, title, description?,
-   data }` event onto `ctx.writer` so the chat client receives the
-   raw rows out-of-band.
-3. Returns `{ chartId }` to the calling LLM **immediately**.
+1. Mint a short `chartId` (8 hex chars).
+2. Push a `{ kind: "chart", chartId, title, description?, data }`
+   event to `ctx.writer` immediately. The chat client mounts a
+   `<ChartSlot>` showing a "Rendering chart" skeleton.
+3. Kick off the chart-planner agent
+   (`modelForTier(ModelTier.Fast)`) with the dataset in the
+   background. The agent's `structuredOutput` schema is a compact
+   "chart plan" (chart type + axis labels + categories +
+   series); the helper expands the plan into an Echarts
+   `EChartsOption` JSON.
+4. When the planner resolves, push a follow-up
+   `{ kind: "chart", chartId, option }` event. The client's
+   `<ChartSlot>` merges it with the dataset event (last write
+   wins per field) and swaps in `<ReactECharts>`.
+5. If the planner fails, no follow-up event fires. Once the
+   parent tool finishes, the slot transitions to a "couldn't
+   render chart" fallback frame.
 
-The model never blocks on chart planning. It can call
-`render_data` for each chart it wants in parallel within a single
-turn, then keep streaming prose around the markers while the
-client is still rendering.
+The parent tool (`render_data` or Genie) `await`s the planner
+promise(s) before its `execute` returns, so chart latency shows
+up under the tool's trace span. The dataset event fires
+**immediately**, though, so the calling LLM gets back the
+`chartId` synchronously and the chat client has a layout slot
+ready before the planner resolves.
 
-Actual chart planning happens client-side via a separate HTTP
-endpoint:
-
-- `POST ${basePath}/route/render-chart` (registered by the plugin)
-  takes `{ title, description?, data }` and runs an inner Mastra
-  `Agent` configured with `modelForTier(ModelTier.Fast)`. The
-  agent's `structuredOutput` schema is a compact "chart plan"
-  (chart type + axis labels + categories + series); the route
-  expands it into an Echarts `EChartsOption` JSON and returns
-  `{ option, chartType }`.
-- The chat client's `<ChartSlot>` component fires this fetch on
-  mount when it sees a `[[chart:<id>]]` marker paired with a
-  `chart` writer event. It shows a same-sized loading frame
-  until the spec lands, then swaps in `<ReactECharts>` in place.
-  Specs are cached client-side by `chartId` so re-renders during
-  streaming don't re-fetch.
-
-Total turn-time impact: the agent's loop only pauses for the
-synchronous tool-call round trip (a few ms). Chart planning
-(2-3s of inner-agent latency) overlaps with the model's prose
-generation and the user's reading time, instead of stacking on
-top of them.
+The LLM-bound payload is just `{ chartId }` (for `render_data`)
+or `datasets[]` metadata (for Genie); row data and option JSON
+never reach the LLM, so token cost stays flat regardless of
+dataset size.
 
 #### Inline placement contract
 
@@ -325,18 +323,20 @@ drops a `<ChartSlot>` in at each spot. A marker that arrives
 before its `chart` event (rare; only during fast streaming) shows
 a "Queueing chart" skeleton; a chart whose marker the model
 forgot to place falls through to the end of the reply as a
-fallback. Both paths share the same fixed-height frame so the
-layout doesn't jump as charts resolve.
+fallback. All three states (queueing, rendering, rendered) share
+the same fixed-height frame so the layout doesn't jump as
+charts resolve.
 
 #### Trade-offs
 
-- The dataset rides a writer event, not the persisted
-  tool-result, so charts don't re-render after a hard reload.
-  The model can call `render_data` again on the next turn if the
-  user asks for it.
-- The endpoint accepts up to 5,000 rows / ~2 MB per request as a
-  guardrail. Larger datasets should be sampled or aggregated by
-  the producing tool before passing to `render_data`.
+- Both events ride the writer, not the persisted tool-result, so
+  charts don't re-render after a hard reload. The model can call
+  `render_data` again (or re-ask Genie) on the next turn if the
+  user wants the chart back.
+- The chart-planner is a separate model call per dataset (fast
+  tier, but still ~1-3s each). For an N-chart turn, latency is
+  `Genie + max(planners)` since the planners run concurrently
+  with the rest of Genie's stream and with each other.
 
 Plugins that aren't registered (or don't implement the toolkit
 interface) resolve to `undefined` at runtime, so guard with `?.` /

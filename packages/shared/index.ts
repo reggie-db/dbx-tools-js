@@ -1,16 +1,17 @@
 /**
- * Shared helpers for AppKit plugins: typed sibling lookup, HTTP header
- * and cookie parsing, string case helpers, console log prefixes, and
- * project introspection.
+ * Server-side entry point for `@dbx-tools/appkit-shared`. Re-exports
+ * everything from the browser-safe {@link ./index.client.ts} barrel
+ * and adds `projectUtils`, which imports `node:fs` /
+ * `node:child_process` / `node:path` / `node:util` and is therefore
+ * server-only.
  *
- * Each utility module is exposed as a namespace so consumers write
- * `httpUtils.parseCookies(req)` without colliding with similarly-named
- * helpers from other packages. Types come along with the namespace
- * (e.g. `httpUtils.HeaderInput`, `logUtils.Logger`).
+ * Resolution: this file is the `import` / `default` target in the
+ * package's `exports` map. Vite (and any other browser-aware
+ * bundler that honors `exports.<entry>.browser`) picks
+ * `index.client.ts` instead, so the node-only `projectUtils`
+ * branch never ships to the client. Add new browser-safe helpers
+ * to `index.client.ts` to keep this file as the thin server-only
+ * delta.
  */
-export * as commonUtils from "./src/common.js";
-export * as httpUtils from "./src/http.js";
-export * as logUtils from "./src/log.js";
-export * as pluginUtils from "./src/plugin.js";
+export * from "./index.client.js";
 export * as projectUtils from "./src/project.js";
-export * as stringUtils from "./src/string.js";

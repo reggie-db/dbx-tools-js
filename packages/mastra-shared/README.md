@@ -13,8 +13,6 @@ import {
   chatUrl,
   historyUrl,
   type MastraClientConfig,
-  type RenderChartRequest,
-  type RenderChartResponse,
   type ServingEndpointSummary,
   type ServingEndpointsResponse,
   type MastraHistoryUIMessage,
@@ -39,11 +37,17 @@ interface MastraClientConfig {
   modelsPath: string;          // ${basePath}/models
   historyPath: string;         // ${basePath}/route/history (default agent)
   historyPathTemplate: string; // ${basePath}/route/history/:agentId
-  renderChartPath: string;     // ${basePath}/route/render-chart
   defaultAgent: string;        // agent id chatRoute uses when no :agentId
   agents: string[];            // every registered agent id
 }
 ```
+
+Charts don't show up here. The chart-render pipeline lives
+entirely on the agent-stream side: the `render_data` tool and
+Genie's `drainGenieStream` both run the chart-planner
+server-side and emit `kind: "chart"` writer events with the
+resolved `EChartsOption`, so the client doesn't need a fetch
+URL for chart specs.
 
 ## URL helpers
 
@@ -128,33 +132,22 @@ interface ServingEndpointsResponse {
 }
 ```
 
-### Inline chart rendering
+### Inline charts (no wire types here)
 
-`POST ${basePath}/route/render-chart` accepts a tabular dataset and
-returns an Echarts `EChartsOption` JSON. The chat client uses this
-to fill `[[chart:<chartId>]]` markers the model emits in its
-markdown reply (paired with `kind: "chart"` writer events from
-either Genie or the `render_data` tool).
+Chart rendering does not have HTTP wire types. The producer
+tools (`render_data`, Genie) both emit `kind: "chart"` events
+on Mastra's writer channel - first an event with the dataset
+(`{chartId, title, description?, data}`), then a follow-up
+event with the resolved `EChartsOption`
+(`{chartId, option}`) once the server-side chart-planner agent
+finishes. The chat client merges them by `chartId` and renders
+inline at the model's `[[chart:<chartId>]]` marker.
 
-```ts
-interface RenderChartRequest {
-  title: string;
-  description?: string;
-  data: Array<Record<string, unknown>>;
-}
-
-interface RenderChartResponse {
-  option: Record<string, unknown>; // EChartsOption
-  chartType: string;               // "bar" | "line" | "area" | "scatter" | "pie"
-}
-```
-
-The endpoint runs a server-side Mastra agent on a fast-tier model
-(`modelForTier(ModelTier.Fast)`) and returns a pre-built
-`EChartsOption`; the client renders it verbatim with
-`<ReactECharts option={...} />`. Auth flows through the same
-session-cookie middleware as the chat / history routes, so OBO
-auth stays user-scoped.
+The exact field shape lives on the writer-event consumer side
+(see `demo/client/src/components/chat-view.tsx`'s `ToolProgress`
+union for the canonical TypeScript). This package only ships
+URL helpers and HTTP wire types - chart events ride the agent
+stream and don't need any of that.
 
 ## License
 

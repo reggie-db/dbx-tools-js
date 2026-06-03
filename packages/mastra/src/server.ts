@@ -46,6 +46,17 @@ export class MastraServer extends MastraServerExpress {
       this.configureRequestContextUser(requestContext);
       this.configureRequestContextThreadId(req, res, requestContext);
       this.configureRequestContextModelOverride(req, requestContext);
+      this.log.debug("auth:middleware", {
+        method: req.method,
+        path: req.path,
+        threadId: requestContext.get(MASTRA_THREAD_ID_KEY),
+        resourceId: requestContext.get(MASTRA_RESOURCE_ID_KEY),
+        modelOverride: requestContext.get(
+          // imported below; logged so a misrouted request shows
+          // up alongside its model selection in `LOG_LEVEL=debug`.
+          "mastra__model_override",
+        ),
+      });
       next();
     });
   }

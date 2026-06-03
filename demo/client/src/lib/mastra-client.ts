@@ -7,8 +7,6 @@ import {
   historyUrl,
   type MastraClientConfig,
   type MastraHistoryResponse,
-  type RenderChartRequest,
-  type RenderChartResponse,
   type ServingEndpointSummary,
   type ServingEndpointsResponse,
 } from "@dbx-tools/appkit-mastra-shared";
@@ -123,36 +121,6 @@ export interface MastraHistoryPage {
  * can resolve the session-scoped `threadId`. Returns a typed page
  * the UI can prepend (oldest -> newest) to its live transcript.
  */
-/**
- * POST a dataset to the Mastra plugin's `/render-chart` endpoint
- * and resolve to an Echarts `EChartsOption` JSON. Used by the
- * inline {@link ChartSlot} when it sees a `[[chart:<id>]]` marker
- * paired with a `chart` writer event from the `render_data` tool.
- *
- * Cookies travel with the request so the route's middleware can
- * resolve the session-scoped workspace user (the chart-planner
- * agent runs under that user's OBO token).
- */
-export const fetchRenderChart = async (
-  config: Pick<MastraClientConfig, "renderChartPath">,
-  body: RenderChartRequest,
-  options: { signal?: AbortSignal } = {},
-): Promise<RenderChartResponse> => {
-  const init: RequestInit = {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  };
-  if (options.signal) init.signal = options.signal;
-  const res = await fetch(config.renderChartPath, init);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ""}`);
-  }
-  return (await res.json()) as RenderChartResponse;
-};
-
 export const fetchMastraHistory = async (
   config: Pick<MastraClientConfig, "historyPath" | "defaultAgent">,
   options: {

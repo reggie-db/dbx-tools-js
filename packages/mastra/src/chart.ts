@@ -12,13 +12,11 @@
  *   never blocks on a downstream LLM call to get its identifier.
  *
  * - {@link runChartPlanner}: the chart-planner Agent + ECOption
- *   expansion as a plain async function. The HTTP route in
- *   {@link ./render-chart-route.ts} calls this when the client
- *   POSTs the dataset back; the result is an `EChartsOption` JSON
- *   the React `<ChartSlot>` renders inline. Decoupling the planner
- *   from the tool means the planning latency lives entirely
- *   client-side: the model can finish writing its report while
- *   the client is still rendering the charts.
+ *   expansion as a plain async function. Used internally by
+ *   {@link emitChartWithPlanning} (which is what the
+ *   `render_data` tool and Genie's `drainGenieStream` both call);
+ *   producers shouldn't reach for it directly so chart events
+ *   keep a single wire-format contract.
  *
  * The model wires the chart into its reply by emitting the marker
  * `[[chart:<chartId>]]` on its own line in markdown. The chat
@@ -30,7 +28,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
 import { Agent } from "@mastra/core/agent";
 import type { RequestContext } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
@@ -38,6 +36,15 @@ import { z } from "zod";
 
 import type { MastraPluginConfig } from "./config.js";
 import { ModelTier, modelForTier, buildModel } from "./model.js";
+
+/**
+ * Module-level logger tagged `[mastra/chart]`. Uses the shared
+ * {@link logUtils.logger} so calls below `LOG_LEVEL` are
+ * discarded for free. Default `LOG_LEVEL` is `info`; flip to
+ * `debug` to see the per-chart timeline (`emit:start` →
+ * `write:ok(data)` → `planner:done` → `write:ok(option)`).
+ */
+const log = logUtils.logger("mastra/chart");
 
 /**
  * Compact, model-friendly representation of an Echarts spec. The
@@ -211,10 +218,10 @@ function getPlannerAgent(config: MastraPluginConfig): Agent {
 
 /**
  * Run the chart planner against the given dataset and return a
- * full Echarts `EChartsOption` JSON. Used by the HTTP route the
- * client hits when it sees a `[[chart:<chartId>]]` marker; the
- * tool itself does not call this so the model never blocks on
- * planning latency.
+ * full Echarts `EChartsOption` JSON. Used by
+ * {@link emitChartWithPlanning}; tools and producers shouldn't
+ * call this directly (use the helper instead so chart events
+ * follow the same wire-format contract everywhere).
  */
 export async function runChartPlanner(
   opts: RunChartPlannerOptions,
@@ -243,6 +250,170 @@ export async function runChartPlanner(
   return { option, chartType: plan.chartType };
 }
 
+/**
+ * Minimal `ToolStream`-shaped writer surface. Defined locally so
+ * helpers can take any object with a `.write` method without
+ * importing Mastra's full `ToolStream` (which would also drag in
+ * agent / tool types this module doesn't otherwise need).
+ */
+interface MinimalWriter {
+  write: (chunk: unknown) => unknown;
+}
+
+/** Inputs to {@link emitChartWithPlanning}. */
+export interface EmitChartWithPlanningOptions {
+  /** Mastra `ctx.writer`; missing or closed writers are tolerated. */
+  writer?: MinimalWriter;
+  /** Plugin config; used to resolve the planner's model. */
+  config: MastraPluginConfig;
+  /** Per-request context (OBO auth). */
+  requestContext?: RequestContext;
+  /** Title shown above the rendered chart. Required. */
+  title: string;
+  /** Optional one-line intent biasing the planner. */
+  description?: string;
+  /** Tabular dataset to chart (one object per row). */
+  data: ReadonlyArray<Record<string, unknown>>;
+}
+
+/** Output of {@link emitChartWithPlanning}. */
+export interface EmitChartWithPlanningResult {
+  /** Short id matching the marker `[[chart:<chartId>]]`. */
+  chartId: string;
+  /**
+   * Promise that resolves once the planner has finished and the
+   * `kind: "chart"` event with the option has been emitted (or
+   * once the planner has failed silently). Callers that want
+   * trace observability should `await` this before returning
+   * from their tool's `execute`; callers that want pure
+   * fire-and-forget can ignore it.
+   */
+  plannerPromise: Promise<void>;
+}
+
+/**
+ * Shared chart-emission primitive used by both the `render_data`
+ * tool and Genie's `drainGenieStream`. Keeps both producers on
+ * one wire-format contract so the chat client only ever has to
+ * understand a single chart event shape.
+ *
+ * Behaviour:
+ *
+ * 1. Generates a short `chartId` (8 hex chars).
+ * 2. Immediately emits `{ kind: "chart", chartId, title,
+ *    description?, data }` via the writer so the chat client can
+ *    mount its `<ChartSlot>` with the rows in hand.
+ * 3. Kicks off the chart-planner agent in the background. On
+ *    success, emits a second `{ kind: "chart", chartId, option }`
+ *    event - same `chartId`, just the spec - so the client merges
+ *    the two into one rendered chart. On failure, no follow-up
+ *    event fires; the client falls back to whatever it can do
+ *    with the dataset alone (typically a "render failed" frame
+ *    after the parent tool finishes).
+ *
+ * Returns `chartId` synchronously so the caller can include it in
+ * the tool result (model uses it in `[[chart:<chartId>]]`
+ * markers), and `plannerPromise` so the caller can choose
+ * trace-spanning vs. snappy-return semantics.
+ */
+export async function emitChartWithPlanning(
+  opts: EmitChartWithPlanningOptions,
+): Promise<EmitChartWithPlanningResult> {
+  const { writer, config, requestContext, title, description, data } = opts;
+
+  // Short, marker-friendly id. The LLM types this verbatim into
+  // `[[chart:<id>]]`; an 8-hex-char prefix is unique within a
+  // single assistant turn (collision odds ~1 in 4 billion) and
+  // much less error-prone for the model to reproduce.
+  const chartId = randomUUID().replace(/-/g, "").slice(0, 8);
+
+  log.debug("emit:start", {
+    chartId,
+    title,
+    rows: data.length,
+    columns: data[0] ? Object.keys(data[0]) : [],
+    hasWriter: writer !== undefined,
+  });
+
+  // Initial event: rows + metadata, no option yet. The client
+  // mounts a chart slot that shows a skeleton until the option
+  // event arrives (or until the parent tool finishes without
+  // one, in which case it falls back).
+  await safeWrite(writer, chartId, "data", {
+    kind: "chart",
+    chartId,
+    title,
+    ...(description ? { description } : {}),
+    data,
+  });
+
+  // Background planner. Awaitable for trace observability via the
+  // returned `plannerPromise`; safe to ignore for pure
+  // fire-and-forget. Failures are intentionally swallowed (only
+  // logged): the dataset event already landed, so the client has
+  // enough to surface a fallback.
+  const plannerPromise = (async () => {
+    const startedAt = Date.now();
+    try {
+      const { option, chartType } = await runChartPlanner({
+        config,
+        ...(requestContext ? { requestContext } : {}),
+        title,
+        ...(description ? { description } : {}),
+        data,
+      });
+      log.debug("planner:done", {
+        chartId,
+        chartType,
+        elapsedMs: Date.now() - startedAt,
+      });
+      await safeWrite(writer, chartId, "option", { kind: "chart", chartId, option });
+    } catch (err) {
+      // No follow-up event on failure. The client treats a
+      // dataset-only chart slot as "render failed" once the
+      // parent tool's status flips to done. Surface as a `warn`
+      // so the failure is visible at the default log level
+      // without being mistaken for a fatal error.
+      log.warn("planner:error", {
+        chartId,
+        elapsedMs: Date.now() - startedAt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+
+  return { chartId, plannerPromise };
+}
+
+/**
+ * Best-effort writer.write. Failures are logged at `warn` (a
+ * persistently-closed writer is the most likely culprit when
+ * chart events go missing client-side) but swallowed so a closed
+ * downstream stream (cancelled request, client navigated away)
+ * can't take a tool down.
+ */
+async function safeWrite(
+  writer: MinimalWriter | undefined,
+  chartId: string,
+  phase: "data" | "option",
+  chunk: unknown,
+): Promise<void> {
+  if (!writer) {
+    log.debug("write:no-writer", { chartId, phase });
+    return;
+  }
+  try {
+    await writer.write(chunk);
+    log.debug("write:ok", { chartId, phase });
+  } catch (err) {
+    log.warn("write:error", {
+      chartId,
+      phase,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 const renderDataInputSchema = z.object({
   title: z.string().describe(stringUtils.toDescription`
     Title shown above the rendered chart. Use a concise
@@ -269,31 +440,28 @@ const renderDataInputSchema = z.object({
 
 const renderDataOutputSchema = z.object({
   chartId: z.string().describe(stringUtils.toDescription`
-    Identifier of the queued chart. The tool returned
-    immediately - actual chart planning happens client-side
-    asynchronously. To position the chart in your reply, embed
-    the marker \`[[chart:<chartId>]]\` on its own line (with
-    blank lines above and below) where the chart should appear.
-    The client renders a skeleton there until the chart is
-    ready, then swaps in the visualization in place. You can
-    keep writing prose around the marker; the agent does not
-    need to wait for the chart to render.
+    Identifier of the queued chart. To position the chart in
+    your reply, embed the marker \`[[chart:<chartId>]]\` on its
+    own line where the chart should appear; the client renders
+    it inline.
   `),
 });
 
 /**
  * Build the `render_data` tool bound to the given plugin config.
  *
- * Fire-and-forget by design: the tool returns immediately with a
- * short `chartId` and emits a single `kind: "chart"` event over
- * `ctx.writer` carrying the raw dataset for the client. The
- * client's chart slot then POSTs the data to
- * `/route/render-chart` to get an `EChartsOption` back from the
- * planner agent. This keeps the calling LLM unblocked - it can
- * write the report referencing the chart by id while the client
- * is still rendering it.
+ * The tool is a thin wrapper around {@link emitChartWithPlanning}:
+ * a single `kind: "chart"` writer event ships the raw rows to
+ * the client immediately, the chart-planner agent runs alongside
+ * (so the calling LLM stays unblocked while the planner thinks),
+ * and a follow-up `kind: "chart"` event with the resolved
+ * `EChartsOption` lands when it's ready. The tool's `execute`
+ * awaits the planner promise so the planner work shows up under
+ * the tool's trace span; the LLM still gets back just
+ * `{ chartId }`, so its context stays small regardless of dataset
+ * size.
  */
-export function buildRenderDataTool(_config: MastraPluginConfig) {
+export function buildRenderDataTool(config: MastraPluginConfig) {
   return createTool({
     id: "render_data",
     description: stringUtils.toDescription`
@@ -301,9 +469,8 @@ export function buildRenderDataTool(_config: MastraPluginConfig) {
       the user's view. Pass a title, the raw rows (array of
       objects keyed by column name), and an optional one-line
       description of the insight to highlight. Returns a short
-      \`chartId\` immediately - chart planning happens
-      asynchronously in the client, not in this turn, so the tool
-      does not block your prose.
+      \`chartId\`; the chart renders inline at the position you
+      embed the matching \`[[chart:<chartId>]]\` marker.
 
       Placement contract: embed \`[[chart:<chartId>]]\` on its own
       line (blank lines above and below) wherever you want the
@@ -327,28 +494,21 @@ export function buildRenderDataTool(_config: MastraPluginConfig) {
       const { title, description, data } = input as z.infer<
         typeof renderDataInputSchema
       >;
-
-      // Short, marker-friendly id. The LLM has to type this
-      // verbatim into the `[[chart:<id>]]` marker; an 8-hex-char
-      // prefix is unique within a single assistant turn (collision
-      // odds ~1 in 4 billion) and much less error-prone for the
-      // model to reproduce.
-      const chartId = randomUUID().replace(/-/g, "").slice(0, 8);
-
-      const writer = (ctx as { writer?: { write: (e: unknown) => unknown } } | undefined)
-        ?.writer;
-      try {
-        await writer?.write({
-          kind: "chart",
-          chartId,
-          title,
-          ...(description ? { description } : {}),
-          data,
-        });
-      } catch {
-        // Ignore: the parent stream may have closed downstream.
-      }
-
+      const writer = (ctx as { writer?: MinimalWriter } | undefined)?.writer;
+      const requestContext = (ctx as { requestContext?: RequestContext } | undefined)
+        ?.requestContext;
+      const { chartId, plannerPromise } = await emitChartWithPlanning({
+        ...(writer ? { writer } : {}),
+        config,
+        ...(requestContext ? { requestContext } : {}),
+        title,
+        ...(description ? { description } : {}),
+        data,
+      });
+      // Await the planner so its latency is attributed to this
+      // tool's trace span. The promise itself swallows planner
+      // failures, so this never throws.
+      await plannerPromise;
       return { chartId };
     },
   });

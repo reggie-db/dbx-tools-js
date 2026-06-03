@@ -20,7 +20,7 @@
  */
 
 import { lakebase } from "@databricks/appkit";
-import { pluginUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, pluginUtils } from "@dbx-tools/appkit-shared";
 import { fastembed } from "@mastra/fastembed";
 import { Memory } from "@mastra/memory";
 import { PgVector, PostgresStore } from "@mastra/pg";
@@ -32,6 +32,8 @@ import type {
   MastraMemoryConfigOverride,
 } from "./agents.js";
 import type { MastraPluginConfig } from "./config.js";
+
+const log = logUtils.logger("mastra/memory");
 
 /** Pool handle returned by the AppKit `lakebase` plugin `exports().pool`. */
 export type LakebasePool = ReturnType<
@@ -109,7 +111,22 @@ export class MemoryBuilder {
 
     const storage = this.buildStorage(agentId, storageSetting);
     const vector = this.buildVector(memorySetting);
-    if (!storage && !vector) return undefined;
+    if (!storage && !vector) {
+      log.debug("agent:stateless", { agentId });
+      return undefined;
+    }
+
+    log.debug("agent:configured", {
+      agentId,
+      storage: storage !== undefined,
+      vector: vector !== undefined,
+      vectorMode:
+        vector === undefined
+          ? "off"
+          : typeof memorySetting === "object"
+            ? "dedicated"
+            : "shared",
+    });
 
     return new Memory({
       ...(storage ? { storage } : {}),

@@ -1,6 +1,9 @@
 import React, { Component } from "react";
 import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@databricks/appkit-ui/react";
+import { logUtils } from "@dbx-tools/appkit-shared";
+
+const log = logUtils.logger("client/error-boundary");
 
 interface Props {
   children: ReactNode;
@@ -27,8 +30,11 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   override componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("ErrorBoundary caught an error:", error);
-    console.error("Error details:", errorInfo);
+    log.error("caught", {
+      message: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack,
+    });
     this.setState({
       error,
       errorInfo,

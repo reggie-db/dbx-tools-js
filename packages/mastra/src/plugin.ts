@@ -47,7 +47,6 @@ import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import type { MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 import type { MastraPluginConfig } from "./config.js";
 import { historyRoute } from "./history.js";
-import { renderChartRoute } from "./render-chart-route.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import {
@@ -191,7 +190,6 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       modelsPath: `${basePath}/models`,
       historyPath: `${basePath}/route/history`,
       historyPathTemplate: `${basePath}/route/history/:agentId`,
-      renderChartPath: `${basePath}/route/render-chart`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
     };
@@ -251,6 +249,11 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       ? createMemoryBuilder(this.config, this.context)
       : undefined;
 
+    this.log.debug("build:start", {
+      lakebase: memoryBuilder !== undefined,
+      stripStaleCharts: this.config.stripStaleCharts !== false,
+    });
+
     // Build every agent declared in `config.agents` (or the built-in
     // fallback when none are declared). Each agent's `model` resolves
     // workspace URL + bearer at call time so concurrent requests get
@@ -280,10 +283,14 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         chatRoute({ path: "/route/chat/:agentId" }),
         historyRoute({ path: "/route/history", agent: this.built.defaultAgentId }),
         historyRoute({ path: "/route/history/:agentId" }),
-        renderChartRoute({ path: "/route/render-chart", config: this.config }),
       ],
     });
     await this.mastraServer.init();
+    this.log.debug("build:done", {
+      agents: Object.keys(this.built.agents),
+      defaultAgent: this.built.defaultAgentId,
+      routes: ["/route/chat", "/route/history", "/models"],
+    });
   }
 }
 

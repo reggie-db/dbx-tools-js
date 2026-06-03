@@ -306,6 +306,7 @@ async function pickModelId(
   user: User,
   host: string,
 ): Promise<string> {
+  const log = logUtils.logger(config);
   const serving = resolveServingConfig(config, FALLBACK_MODEL_IDS);
   const override = serving.allowOverride
     ? (requestContext.get(MASTRA_MODEL_OVERRIDE_KEY) as string | undefined)
@@ -315,7 +316,10 @@ async function pickModelId(
 
   // Cheap exit: when the caller named a specific model and fuzzy
   // matching is off, there's no reason to touch the catalogue at all.
-  if (explicit !== undefined && !serving.fuzzy) return explicit;
+  if (explicit !== undefined && !serving.fuzzy) {
+    log.debug("model selected", { modelId: explicit, source: "explicit" });
+    return explicit;
+  }
 
   const endpoints = await listServingEndpoints(user.executionContext.client, host, {
     ttlMs: serving.ttlMs,
@@ -324,7 +328,11 @@ async function pickModelId(
     explicit !== undefined
       ? resolveModelId(explicit, endpoints, { threshold: serving.threshold }).modelId
       : pickFirstAvailable(serving.fallbacks, endpoints);
-  //logUtils.logger(config).debug(`model selected: ${modelId}`);
+  log.debug("model selected", {
+    modelId,
+    source: explicit !== undefined ? "fuzzy-match" : "fallback",
+    requestedExplicit: explicit,
+  });
   return modelId;
 }
 
@@ -369,9 +377,9 @@ interface ChatMessage {
  *   1. Rewrites the outgoing `messages` array to repair Mastra/AI SDK
  *      stream-replay quirks that Databricks-hosted Claude rejects (see
  *      {@link sanitizeServingMessages}).
- *   2. When `MASTRA_DEBUG_LLM=1`, dumps the (post-sanitize) JSON body
- *      to stderr so 4xx debugging doesn't have to fight AI SDK's
- *      `[Array]` formatter.
+ *   2. At `LOG_LEVEL=debug`, dumps the (post-sanitize) JSON body so
+ *      4xx debugging doesn't have to fight AI SDK's `[Array]`
+ *      formatter.
  *
  * Safe to call from any hot path: {@link commonUtils.memoize} ensures
  * the wrapper is installed at most once per process, so subsequent
@@ -379,7 +387,7 @@ interface ChatMessage {
  * {@link buildModel} fires on every agent step.
  */
 const setupFetchInterceptor = commonUtils.memoize((): void => {
-  const debug = Boolean(process.env.MASTRA_DEBUG_LLM);
+  const log = logUtils.logger("mastra/llm");
   const original = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input, init) => {
     const url = httpUtils.toURL(input);
@@ -394,13 +402,10 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
     if (rewritten !== init.body) {
       init = { ...init, body: rewritten };
     }
-    if (debug) {
-      try {
-        console.error("[mastra:llm-debug] -> POST", url.toString());
-        console.error(JSON.stringify(JSON.parse(rewritten), null, 2));
-      } catch {
-        console.error("[mastra:llm-debug] -> POST", url.toString(), "(non-JSON body)");
-      }
+    try {
+      log.debug("POST", { url: url.toString(), body: JSON.parse(rewritten) });
+    } catch {
+      log.debug("POST", { url: url.toString(), bodyType: "non-JSON" });
     }
     return original(input, init);
   }) as typeof globalThis.fetch;

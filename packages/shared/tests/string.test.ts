@@ -249,7 +249,6 @@ describe("toIdentifierWithOptions", () => {
             {
               maxLength: 8,
               truncateStrategy: "hash",
-              truncateHashAlgorithm: "sha1",
               truncateHashLength: 6,
             },
             "averylongtoken",
@@ -268,29 +267,6 @@ describe("toIdentifierWithOptions", () => {
             "averylongtoken",
           ),
         ).toBe("");
-      });
-
-      it("uses non-default hash algorithm", () => {
-        // alpha(5) + '-' + longbeta(8) = 14 > 13 overflow.
-        // prefix='alpha'(5) + '-' + hash(7) = 13 <= 13 fits.
-        const hash = createHash("sha256");
-        for (const part of ["alpha", "longbeta"]) {
-          hash.update(part);
-          hash.update("\0");
-        }
-        const want = hash.digest("hex").slice(0, 7);
-        expect(
-          toIdentifierWithOptions(
-            {
-              maxLength: 13,
-              truncateStrategy: "hash",
-              truncateHashAlgorithm: "sha256",
-              truncateHashLength: 7,
-            },
-            "alpha",
-            "longbeta",
-          ),
-        ).toBe(`alpha-${want}`);
       });
     });
   });

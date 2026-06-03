@@ -16,6 +16,7 @@
  * session-cookie logic stays the single source of truth in `server.ts`.
  */
 
+import { logUtils } from "@dbx-tools/appkit-shared";
 import { toAISdkV5Messages } from "@mastra/ai-sdk/ui";
 import type { Agent } from "@mastra/core/agent";
 import type {
@@ -30,6 +31,8 @@ import type {
   MastraHistoryResponse,
   MastraHistoryUIMessage,
 } from "@dbx-tools/appkit-mastra-shared";
+
+const log = logUtils.logger("mastra/history");
 
 /** Default history page size; matches the Mastra storage default. */
 const DEFAULT_PER_PAGE = 20;
@@ -69,8 +72,10 @@ export async function loadHistory(
   const page = Math.max(0, Math.trunc(opts.page ?? 0));
   const memory = await opts.agent.getMemory();
   if (!memory) {
+    log.debug("recall:no-memory", { agentId: opts.agent.id, threadId: opts.threadId });
     return { uiMessages: [], page, perPage, total: 0, hasMore: false };
   }
+  const startedAt = Date.now();
   const result = await memory.recall({
     threadId: opts.threadId,
     ...(opts.resourceId ? { resourceId: opts.resourceId } : {}),
@@ -85,6 +90,16 @@ export async function loadHistory(
   const uiMessages = toAISdkV5Messages(
     chronological,
   ) as unknown as MastraHistoryUIMessage[];
+  log.debug("recall:done", {
+    agentId: opts.agent.id,
+    threadId: opts.threadId,
+    page,
+    perPage,
+    returned: uiMessages.length,
+    total: result.total,
+    hasMore: result.hasMore,
+    elapsedMs: Date.now() - startedAt,
+  });
   return {
     uiMessages,
     page,

@@ -21,13 +21,15 @@
  */
 
 import { CacheManager, type getExecutionContext } from "@databricks/appkit";
-import { stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
 import Fuse from "fuse.js";
 
 import type { ServingEndpointSummary } from "@dbx-tools/appkit-mastra-shared";
 import type { MastraPluginConfig } from "./config.js";
 
 export type { ServingEndpointSummary };
+
+const log = logUtils.logger("mastra/serving");
 
 /**
  * Structural type for the Databricks workspace client. Derived from
@@ -111,6 +113,7 @@ export async function listServingEndpoints(
 async function fetchEndpoints(
   client: WorkspaceClientLike,
 ): Promise<ServingEndpointSummary[]> {
+  const startedAt = Date.now();
   const out: ServingEndpointSummary[] = [];
   for await (const ep of client.servingEndpoints.list()) {
     if (!ep.name) continue;
@@ -121,6 +124,7 @@ async function fetchEndpoints(
       ...(ep.description !== undefined ? { description: ep.description } : {}),
     });
   }
+  log.debug("listed", { count: out.length, elapsedMs: Date.now() - startedAt });
   return out;
 }
 
@@ -185,10 +189,12 @@ export function resolveModelId(
   opts: ResolveModelOptions = {},
 ): ResolvedModel {
   if (endpoints.length === 0) {
+    log.debug("resolve:no-endpoints", { input });
     return { modelId: input, matched: false };
   }
   for (const ep of endpoints) {
     if (ep.name === input) {
+      log.debug("resolve:exact", { input });
       return { modelId: ep.name, matched: true, score: 0 };
     }
   }
@@ -208,12 +214,25 @@ export function resolveModelId(
   const query = Array.from(
     stringUtils.tokenizeWithOptions({ lowerCase: true, camelCase: false }, input),
   ).join(" ");
-  if (!query) return { modelId: input, matched: false };
+  if (!query) {
+    log.debug("resolve:empty-tokens", { input });
+    return { modelId: input, matched: false };
+  }
   const results = fuse.search(query);
   const best = results[0];
   if (best?.item.name && (best.score ?? 0) <= threshold) {
+    log.debug("resolve:fuzzy-match", {
+      input,
+      modelId: best.item.name,
+      score: best.score,
+    });
     return { modelId: best.item.name, matched: true, score: best.score };
   }
+  log.debug("resolve:no-match", {
+    input,
+    bestScore: best?.score,
+    threshold,
+  });
   return { modelId: input, matched: false };
 }
 

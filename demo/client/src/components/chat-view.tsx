@@ -52,8 +52,6 @@ import {
   cn,
 } from "@databricks/appkit-ui/react";
 import ReactECharts from "echarts-for-react";
-import { fetchRenderChart, useMastraConfig } from "@/lib/mastra-client";
-import type { RenderChartResponse } from "@dbx-tools/appkit-mastra-shared";
 
 const DEFAULT_SUGGESTIONS = [
   "Tell me about Spirited Away",
@@ -94,18 +92,21 @@ export type ToolProgress =
   | { kind: "status"; status: string; label: string }
   | { kind: "sql"; sql: string; title?: string; description?: string; statementId?: string }
   /**
-   * Dataset queued for inline rendering by the `render_data` tool.
-   * Carries the raw rows the LLM passed in; the client POSTs them
-   * to the chart-render endpoint to get back an Echarts spec. Not
-   * persisted to the LLM-bound tool result, so the model never
-   * sees the row data echoed back.
+   * Chart event emitted by `render_data` and Genie's
+   * `drainGenieStream`. The producer fires two events per
+   * `chartId`: the first carries `data` (the raw rows), the
+   * second - on chart-planner success - carries `option` (the
+   * Echarts spec). The client merges them by `chartId`. All
+   * fields except `chartId` are optional so each event can
+   * populate just what it knows.
    */
   | {
       kind: "chart";
       chartId: string;
-      title: string;
+      title?: string;
       description?: string;
-      data: Array<Record<string, unknown>>;
+      data?: Array<Record<string, unknown>>;
+      option?: Record<string, unknown>;
     }
   | { kind: "text"; content: string }
   | { kind: "suggested"; questions: string[] }
@@ -366,29 +367,58 @@ const ToolEventList = ({ events }: { events: ToolEvent[] }) => (
  * earlier tools' suggestions still surface.
  */
 /**
- * Flatten `chart` events emitted by the `render_data` tool across
- * every tool call on this assistant turn so they render at message
- * scope (next to the markdown answer and the suggested-question
- * buttons) instead of being buried inside a tool pill. Dedupes by
- * `chartId` so a re-emitted event from a stream replay doesn't
- * double-render. Order is first-seen so charts appear in the order
- * the model requested them.
+ * Merged chart record after walking every tool's progress. Each
+ * `chartId` typically gets two writer events from the producer: a
+ * dataset event with `data` and a spec event with `option`; this
+ * record carries whichever fields have arrived so far.
+ *
+ * `sourceToolDone` flips true when the tool that emitted the
+ * dataset event has reached `done` / `error` status; the chart
+ * slot uses it to distinguish "still streaming, wait for the
+ * option" from "tool finished without an option" (planner
+ * failed - render the dataset-only fallback).
  */
-const collectCharts = (
-  events: ToolEvent[] | undefined,
-): Extract<ToolProgress, { kind: "chart" }>[] => {
+type MergedChart = Extract<ToolProgress, { kind: "chart" }> & {
+  sourceToolDone: boolean;
+};
+
+/**
+ * Flatten `chart` events emitted across every tool on this
+ * assistant turn so they render at message scope (next to the
+ * markdown answer and the suggested-question buttons) instead of
+ * being buried inside a tool pill. Two events per `chartId`
+ * (dataset, then option) are merged into one record; later
+ * events shallow-overwrite earlier ones so the option lands on
+ * top of the data. Order is first-seen by `chartId` so charts
+ * appear in the order the model requested them.
+ */
+const collectCharts = (events: ToolEvent[] | undefined): MergedChart[] => {
   if (!events || events.length === 0) return [];
-  const seen = new Set<string>();
-  const out: Extract<ToolProgress, { kind: "chart" }>[] = [];
+  const order: string[] = [];
+  const byId = new Map<string, MergedChart>();
   for (const event of events) {
+    const toolDone = event.status !== "running";
     for (const p of event.progress ?? []) {
       if (p.kind !== "chart") continue;
-      if (seen.has(p.chartId)) continue;
-      seen.add(p.chartId);
-      out.push(p);
+      const existing = byId.get(p.chartId);
+      if (!existing) {
+        order.push(p.chartId);
+        byId.set(p.chartId, { ...p, sourceToolDone: toolDone });
+      } else {
+        // Merge each arriving field; keep `chartId` stable.
+        // `sourceToolDone` is monotonic - once any contributing
+        // event's tool is done we treat the chart as finalized.
+        byId.set(p.chartId, {
+          ...existing,
+          ...p,
+          sourceToolDone: existing.sourceToolDone || toolDone,
+        });
+      }
     }
   }
-  return out;
+  return order
+    .map((id) => byId.get(id))
+    .filter((c): c is MergedChart => c !== undefined);
 };
 
 const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
@@ -574,22 +604,12 @@ const SqlBlock = ({ sql }: { sql: string }) => (
 );
 
 /**
- * Process-local cache of rendered Echarts specs keyed by `chartId`.
- * Avoids re-fetching the same chart on every component re-render
- * (assistant bubbles re-render frequently while the surrounding
- * text streams). Cleared only by a full reload, which is fine
- * because chart ids are unique per session and `render_data` is
- * re-called on follow-up turns when the model wants the chart
- * again.
- */
-const _chartCache = new Map<string, RenderChartResponse>();
-
-/**
- * Frame shared by both the loading and the rendered chart so the
- * layout doesn't jump when the spec resolves. Width tracks the
- * bubble; height is fixed so Echarts has a deterministic canvas
- * regardless of the parent's flex layout. `not-prose` opts out of
- * Tailwind Typography.
+ * Frame shared by every chart-slot state so the layout stays
+ * stable as a slot transitions from queueing → rendering →
+ * rendered (or → render-failed). Width tracks the bubble; height
+ * is fixed so Echarts has a deterministic canvas regardless of
+ * the parent's flex layout. `not-prose` opts out of Tailwind
+ * Typography.
  */
 const CHART_FRAME_CLASSES =
   "not-prose my-3 max-w-full rounded border border-border/60 bg-background/40 p-2";
@@ -598,8 +618,8 @@ const CHART_HEIGHT_PX = 320;
 /**
  * Loading state for a chart slot: dashed-border frame matching
  * the eventual rendered footprint, with a spinner + status. Used
- * both before the `chart` writer event arrives and while the
- * `/render-chart` endpoint is generating the spec.
+ * before the dataset event arrives and while the planner is
+ * still running.
  */
 const ChartLoading = ({
   chartId,
@@ -631,15 +651,18 @@ const ChartLoading = ({
   </div>
 );
 
-/** Error state for a chart slot. Keeps the same frame for layout stability. */
-const ChartError = ({
+/**
+ * Render-failed fallback. Shown when the source tool has finished
+ * but no `option` ever landed for this chartId - i.e. the
+ * server-side planner threw. Keeps the same frame footprint so
+ * the layout doesn't shift when we transition into this state.
+ */
+const ChartUnavailable = ({
   chartId,
   title,
-  message,
 }: {
   chartId: string;
   title?: string;
-  message: string;
 }) => (
   <div
     className={cn(
@@ -654,104 +677,98 @@ const ChartError = ({
       </div>
     )}
     <div className="px-2 text-center text-xs text-destructive">
-      Couldn't render chart{" "}
-      <code className="text-[10px]">{chartId}</code>: {message}
+      Couldn't render chart <code className="text-[10px]">{chartId}</code>.
     </div>
   </div>
 );
 
 /**
  * Inline chart slot. Each `[[chart:<chartId>]]` marker in the
- * assistant's reply resolves to one of these. The slot:
+ * assistant's reply resolves to one of these. The slot is purely
+ * driven by writer events the producer (Genie / `render_data`)
+ * emits via `emitChartWithPlanning`: a dataset event with rows
+ * lands first, then a follow-up event with the resolved Echarts
+ * `option` lands when the planner finishes. Both arrive
+ * pre-merged in {@link MergedChart}; this component just picks
+ * the right state.
  *
- *   1. Looks up the matching `chart` writer event from this turn's
- *      tool progress (carries `title` + raw `data`).
- *   2. POSTs `{title, description?, data}` to `/route/render-chart`
- *      and resolves to an Echarts `EChartsOption` JSON.
- *   3. Renders a loading frame while the request is in flight,
- *      then swaps in `<ReactECharts>` when the spec lands.
+ * State table (with `isMessageSettled` from the parent bubble):
  *
- * The fetch is fire-and-forget from the agent's perspective: the
- * model's `render_data` tool call already returned, so the LLM is
- * free to keep streaming prose around the marker while this slot
- * resolves in parallel. Specs are cached in {@link _chartCache} by
- * `chartId` so re-renders during streaming don't re-fetch.
+ * | chart event | option | tool done | settled | render        |
+ * | :---------: | :----: | :-------: | :-----: | ------------- |
+ * |     -       |   -    |     -     |   no    | "Queueing"    |
+ * |     -       |   -    |     -     |   yes   | unavailable * |
+ * |     ✓       |   -    |    no     |    -    | "Rendering"   |
+ * |     ✓       |   -    |   yes     |    -    | unavailable   |
+ * |     ✓       |   ✓    |    -      |    -    | full chart    |
+ *
+ * \* The "no chart event + settled" row is the hallucinated-
+ * chartId case: the model emitted `[[chart:<id>]]` referencing a
+ * chartId from a prior turn that's no longer connected to a
+ * live chart. The instructions tell the model not to do this,
+ * but the UI still degrades gracefully if it slips through.
+ *
+ * No HTTP fetching, no per-slot caching - the option is in the
+ * stream by the time the parent tool finishes (drainGenieStream
+ * awaits `Promise.allSettled` on every planner before returning).
  */
 const ChartSlot = ({
   chartId,
   chart,
+  isMessageSettled,
 }: {
   chartId: string;
-  chart?: Extract<ToolProgress, { kind: "chart" }>;
+  chart?: MergedChart;
+  /**
+   * True when the assistant message hosting this slot has
+   * stopped streaming (status returned to `ready` / `error`, or
+   * a newer message took the active streaming slot). Used to
+   * decide whether a missing chart event is "still arriving"
+   * (skeleton) or "never arrived" (unavailable).
+   */
+  isMessageSettled: boolean;
 }) => {
-  const config = useMastraConfig();
-  const cached = _chartCache.get(chartId);
-  const [option, setOption] = useState<RenderChartResponse | null>(
-    cached ?? null,
-  );
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (option || !chart) return;
-    let cancelled = false;
-    const controller = new AbortController();
-    fetchRenderChart(
-      config,
-      {
-        title: chart.title,
-        ...(chart.description ? { description: chart.description } : {}),
-        data: chart.data,
-      },
-      { signal: controller.signal },
-    )
-      .then((response) => {
-        if (cancelled) return;
-        _chartCache.set(chartId, response);
-        setOption(response);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [chartId, chart, config, option]);
-
-  if (error) {
-    return <ChartError chartId={chartId} title={chart?.title} message={error} />;
-  }
   if (!chart) {
-    // Marker arrived before the writer event - common during
-    // streaming when the model emits the marker just after the
-    // tool returns. The pending event will land on the next chunk.
-    return <ChartLoading chartId={chartId} status="Queueing chart" />;
-  }
-  if (!option) {
-    return (
-      <ChartLoading
-        chartId={chartId}
-        title={chart.title}
-        status="Rendering chart"
-      />
+    // Marker present but no chart event for this id. While the
+    // message is still streaming, this is the normal "waiting
+    // for the writer chunk" state. After the message settles,
+    // it's a stale chartId (model hallucinated it from prior
+    // turn history); show the unavailable frame instead of
+    // spinning forever.
+    return isMessageSettled ? (
+      <ChartUnavailable chartId={chartId} />
+    ) : (
+      <ChartLoading chartId={chartId} status="Queueing chart" />
     );
   }
+  if (chart.option) {
+    return (
+      <div className={CHART_FRAME_CLASSES}>
+        {chart.title && (
+          <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
+            {chart.title}
+          </div>
+        )}
+        <ReactECharts
+          option={chart.option}
+          style={{ height: CHART_HEIGHT_PX, width: "100%" }}
+          notMerge
+          lazyUpdate
+        />
+      </div>
+    );
+  }
+  if (chart.sourceToolDone) {
+    // Tool that emitted the dataset has finished without ever
+    // emitting an option - planner failed server-side.
+    return <ChartUnavailable chartId={chartId} title={chart.title} />;
+  }
   return (
-    <div className={CHART_FRAME_CLASSES}>
-      {chart.title && (
-        <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
-          {chart.title}
-        </div>
-      )}
-      <ReactECharts
-        option={option.option}
-        style={{ height: CHART_HEIGHT_PX, width: "100%" }}
-        notMerge
-        lazyUpdate
-      />
-    </div>
+    <ChartLoading
+      chartId={chartId}
+      title={chart.title}
+      status="Rendering chart"
+    />
   );
 };
 
@@ -766,16 +783,16 @@ const CHART_MARKER_RE = /\[\[chart:([A-Za-z0-9_-]+)\]\]/g;
 /** One slice of an assistant message: either prose or a chart spot. */
 type RenderSegment =
   | { kind: "text"; text: string }
-  | { kind: "chart"; chartId: string; chart: Extract<ToolProgress, { kind: "chart" }> }
+  | { kind: "chart"; chartId: string; chart: MergedChart }
   | { kind: "pending"; chartId: string };
 
 /**
  * Split the assistant's full markdown text on `[[chart:<id>]]`
  * markers, returning an ordered list of prose segments interleaved
- * with chart slots. Charts that have a matching event in
- * `chartsById` resolve to a `chart` segment; markers whose chart
- * hasn't streamed in yet become a `pending` segment so the layout
- * stays stable.
+ * with chart slots. Markers with a matching {@link MergedChart}
+ * resolve to a `chart` segment; markers whose chart hasn't
+ * streamed in yet become a `pending` segment so the layout stays
+ * stable.
  *
  * Marker matching is greedy and tolerant of partial-stream chunks:
  * an unclosed `[[chart:abc` simply falls through as plain text and
@@ -783,7 +800,7 @@ type RenderSegment =
  */
 const splitTextWithCharts = (
   text: string,
-  chartsById: Map<string, Extract<ToolProgress, { kind: "chart" }>>,
+  chartsById: Map<string, MergedChart>,
 ): RenderSegment[] => {
   const segments: RenderSegment[] = [];
   let lastIdx = 0;
@@ -817,9 +834,11 @@ const splitTextWithCharts = (
 const MarkdownWithCharts = ({
   text,
   charts,
+  isMessageSettled,
 }: {
   text: string;
-  charts: Extract<ToolProgress, { kind: "chart" }>[];
+  charts: MergedChart[];
+  isMessageSettled: boolean;
 }) => {
   const chartsById = new Map(charts.map((c) => [c.chartId, c]));
   const segments = splitTextWithCharts(text, chartsById);
@@ -843,16 +862,29 @@ const MarkdownWithCharts = ({
               key={`c-${seg.chartId}`}
               chartId={seg.chartId}
               chart={seg.chart}
+              isMessageSettled={isMessageSettled}
             />
           );
         }
-        // Marker present but no `chart` event yet (rare race; fixes
-        // itself once the writer event lands). ChartSlot with no
-        // chart shows a queueing state.
-        return <ChartSlot key={`p-${seg.chartId}`} chartId={seg.chartId} />;
+        // Marker present but no chart event for this id. While
+        // the message is still streaming, ChartSlot shows a
+        // queueing state. Once the message settles, it shows the
+        // unavailable frame (model hallucinated a stale chartId).
+        return (
+          <ChartSlot
+            key={`p-${seg.chartId}`}
+            chartId={seg.chartId}
+            isMessageSettled={isMessageSettled}
+          />
+        );
       })}
       {orphans.map((c) => (
-        <ChartSlot key={`o-${c.chartId}`} chartId={c.chartId} chart={c} />
+        <ChartSlot
+          key={`o-${c.chartId}`}
+          chartId={c.chartId}
+          chart={c}
+          isMessageSettled={isMessageSettled}
+        />
       ))}
     </>
   );
@@ -928,7 +960,11 @@ const AssistantBubble = ({
         )}
         {events && events.length > 0 && <ToolEventList events={events} />}
         {(hasText || charts.length > 0) && (
-          <MarkdownWithCharts text={fullText} charts={charts} />
+          <MarkdownWithCharts
+            text={fullText}
+            charts={charts}
+            isMessageSettled={!isStreamingThisBubble}
+          />
         )}
         {isLast && hasText && (
           <div className="flex items-center gap-1">

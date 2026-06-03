@@ -26,6 +26,7 @@ import type { MastraPluginConfig } from "./config.js";
 import { buildGenieProvider } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
 import { buildModel } from "./model.js";
+import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
 
 /**
  * Tool record accepted by every Mastra `Agent.tools` field and by the
@@ -407,7 +408,7 @@ export async function buildAgents(opts: {
   const ids = Object.keys(definitions);
   const defaultAgentId = config.defaultAgent ?? ids[0] ?? FALLBACK_AGENT_ID;
 
-  const plugins = buildPluginsMap(context);
+  const plugins = buildPluginsMap(config, context);
   // System-default ambient tools every agent gets out of the box.
   // Currently just `render_data` for inline visualizations; the
   // user can shadow it by including a same-named tool in their own
@@ -418,6 +419,12 @@ export async function buildAgents(opts: {
   };
   const ambientTools = { ...systemTools, ...(config.tools ?? {}) };
   const style = resolveStyleInstructions(config);
+  // Default-on protection against the model copying turn-scoped
+  // chartIds from prior assistant tool results into the new
+  // turn's `[[chart:<id>]]` markers. Opt out per-plugin via
+  // `config.stripStaleCharts: false`.
+  const inputProcessors =
+    config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor];
   const agents: Record<string, Agent> = {};
 
   for (const [id, def] of Object.entries(definitions)) {
@@ -431,6 +438,7 @@ export async function buildAgents(opts: {
       model: resolveModel(config, def.model),
       tools,
       ...(memory ? { memory } : {}),
+      ...(inputProcessors.length > 0 ? { inputProcessors } : {}),
     });
   }
 
@@ -581,6 +589,7 @@ async function resolveTools(
  * time instead of staring at a spinner for the full Genie round-trip.
  */
 function buildPluginsMap(
+  config: MastraPluginConfig,
   context: pluginUtils.PluginContextLike | undefined,
 ): MastraPlugins {
   const cache = new Map<string, MastraPluginToolkitProvider | null>();
@@ -588,7 +597,7 @@ function buildPluginsMap(
     get(_target, propName) {
       if (typeof propName !== "string") return undefined;
       if (cache.has(propName)) return cache.get(propName) ?? undefined;
-      const provider = resolveProvider(context, propName);
+      const provider = resolveProvider(config, context, propName);
       cache.set(propName, provider);
       return provider ?? undefined;
     },
@@ -599,16 +608,20 @@ function buildPluginsMap(
  * Pick the right {@link MastraPluginToolkitProvider} for a sibling
  * plugin lookup. Returns the streaming-aware Genie adapter when the
  * caller asks for `genie`; falls back to the generic AppKit
- * `ToolProvider` adapter for every other plugin name.
+ * `ToolProvider` adapter for every other plugin name. `config` is
+ * threaded through so Genie's tool can run the chart planner
+ * inline against the same model resolver / fallback ladder the
+ * agents use.
  */
 function resolveProvider(
+  config: MastraPluginConfig,
   context: pluginUtils.PluginContextLike | undefined,
   propName: string,
 ): MastraPluginToolkitProvider | null {
   if (propName === "genie") {
     const geniePlugin = pluginUtils.instance(context, genie);
     if (!geniePlugin) return null;
-    return buildGenieProvider(geniePlugin) as MastraPluginToolkitProvider;
+    return buildGenieProvider(geniePlugin, { config }) as MastraPluginToolkitProvider;
   }
   const plugin = context?.getPlugins().get(propName);
   return adaptPluginToolkit(plugin);

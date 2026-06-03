@@ -5,6 +5,11 @@
  * repo names. Exposed as `projectUtils.*` from the shared barrel so
  * naming inside this module drops the redundant `project` prefix:
  * `projectUtils.name()` instead of `projectName()`, etc.
+ *
+ * **Server-only.** Imports `node:fs`, `node:path`, `node:child_process`,
+ * and `node:util` at module load. Browser bundles must use
+ * `@dbx-tools/appkit-shared`'s `index.client.ts` entry point, which
+ * skips this module entirely.
  */
 
 import { execFile } from "node:child_process";

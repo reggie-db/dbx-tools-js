@@ -21,9 +21,11 @@ Postgres URIs). `appkit-mastra` is a beta AppKit plugin that mounts Mastra
 (`@mastra/express` + `@mastra/ai-sdk` `chatRoute`), resolves the model from the
 workspace host and `/serving-endpoints` with per-request user auth, reuses the
 `lakebase` plugin pool for Mastra Memory when `storage` / `memory` are enabled,
-forwards Genie streaming events through `ToolStream` for live UI feedback, and
-ships a `render_data` tool plus a `/route/render-chart` endpoint so the model
-can request inline Echarts visualizations via `[[chart:<id>]]` markers.
+forwards Genie streaming events through `ToolStream` for live UI feedback,
+and renders inline Echarts visualizations via `[[chart:<id>]]` markers - the
+chart-planner agent runs server-side per dataset and ships its `EChartsOption`
+straight back through the writer, so the client never has to round-trip for
+chart specs.
 `appkit-mastra-shared` is the dependency-free wire-format contract (types +
 `chatUrl` / `historyUrl` helpers) that the React client imports without
 dragging in `pg`, `fastembed`, or Mastra itself.

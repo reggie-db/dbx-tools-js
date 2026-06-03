@@ -20,13 +20,24 @@
  * `render_data` tool when the model decides one is useful.
  */
 
-import { randomUUID } from "node:crypto";
-
 import { genie } from "@databricks/appkit";
-import { stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import type { RequestContext } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
 import type { ToolStream } from "@mastra/core/tools";
 import { z } from "zod";
+
+import { emitChartWithPlanning } from "./chart.js";
+import type { MastraPluginConfig } from "./config.js";
+
+/**
+ * Module-level logger tagged `[mastra/genie]`. Uses the shared
+ * {@link logUtils.logger} so calls below `LOG_LEVEL` are
+ * discarded for free. Default `LOG_LEVEL` is `info`; flip to
+ * `debug` to see per-turn timing (`query_result` → planner
+ * waits → `drain:return`).
+ */
+const log = logUtils.logger("mastra/genie");
 
 /** Live AppKit `GeniePlugin` instance. */
 export type GeniePluginInstance = InstanceType<ReturnType<typeof genie>["plugin"]>;
@@ -137,17 +148,21 @@ const genieToolOutputSchema = z.object({
 });
 
 type DrainResult = z.infer<typeof genieToolOutputSchema>;
-type DatasetMeta = z.infer<typeof datasetSchema> & { statementId: string };
 
 /**
  * Normalised progress event surfaced to the UI as a Mastra
  * `tool-output` chunk. Loading pill events (`started`, `status`,
  * `sql`, `suggested`, `error`) are pure UI metadata and never reach
- * the LLM. The `chart` variant carries the rows from a Genie SQL
- * statement so the host UI's `<ChartSlot>` can render them inline
- * via the same path as the `render_data` tool; the LLM still only
- * sees the matching {@link datasetSchema} metadata in
- * `genieAnswer`'s sibling `datasets[]` field.
+ * the LLM.
+ *
+ * The `chart` variant is the wire shape emitted by
+ * {@link emitChartWithPlanning} (used by both this Genie
+ * draining loop and the system-level `render_data` tool). All
+ * fields except `chartId` are optional because two events per
+ * chartId arrive on the wire: the first carries the rows
+ * (`title` + `description?` + `data`); the second, on planner
+ * success, carries just the resolved Echarts spec (`option`).
+ * The host UI's `<ChartSlot>` merges them by `chartId`.
  */
 export type GenieProgress =
   | { kind: "started"; conversationId: string; messageId: string; spaceId: string }
@@ -162,9 +177,10 @@ export type GenieProgress =
   | {
       kind: "chart";
       chartId: string;
-      title: string;
+      title?: string;
       description?: string;
-      data: Array<Record<string, unknown>>;
+      data?: Array<Record<string, unknown>>;
+      option?: Record<string, unknown>;
     }
   | { kind: "text"; content: string }
   | { kind: "suggested"; questions: string[] }
@@ -302,10 +318,16 @@ export function defaultGenieToolName(alias: string): string {
  * Build one `sendMessage` tool per configured Genie alias plus a single
  * `getConversation` tool. Returns a record keyed by tool id, ready to
  * spread into an `Agent`'s `tools` map.
+ *
+ * `config` must be the active plugin config; Genie's
+ * `query_result` events are routed through
+ * {@link emitChartWithPlanning} which uses it to resolve the
+ * chart-planner's model.
  */
 export function buildGenieTools(opts: {
   aliases: string[];
   exports: GenieExports;
+  config: MastraPluginConfig;
   signal?: AbortSignal;
 }): Record<string, ReturnType<typeof createTool>> {
   const tools: Record<string, ReturnType<typeof createTool>> = {};
@@ -317,23 +339,17 @@ export function buildGenieTools(opts: {
       description: stringUtils.toDescription`
         Ask the Databricks Genie space "${alias}" a single
         natural-language question. Genie translates it to SQL,
-        runs the SQL against the configured datasets, and returns
-        \`genieAnswer\` (its prose answer) plus \`datasets[]\`
-        (one metadata entry per executed query). Each dataset
-        carries a short \`chartId\`; embed
-        \`[[chart:<chartId>]]\` on its own line in your reply at
-        the position where you want that data rendered as an
-        inline chart. Do not paraphrase row values - the chart is
-        the rendering. Add interpretation around the chart
-        (highlights, deltas, anomalies, takeaways) instead of
-        repeating numbers.
+        runs it, and returns \`genieAnswer\` (prose) plus
+        \`datasets[]\` (one entry per executed query, each with
+        a short \`chartId\`). Embed \`[[chart:<chartId>]]\` on
+        its own line at the position you want that data rendered
+        as an inline chart. Add interpretation around the chart
+        (deltas, anomalies, takeaways); do not paraphrase row
+        values.
 
-        Calling this tool is expensive; issue **one** focused
-        question per user turn. If the first answer doesn't fit,
-        ask the user a clarifying question rather than
-        re-querying with rephrased intent. Prefer aggregated
-        questions over raw-row queries (e.g. ask for "monthly
-        averages" instead of "all rows" for time-series).
+        Issue ONE focused question per user turn. Prefer
+        aggregated queries over raw-row queries for time-series
+        and distributions.
       `,
       inputSchema: sendMessageSchema,
       outputSchema: genieToolOutputSchema,
@@ -341,7 +357,12 @@ export function buildGenieTools(opts: {
         const stream = opts.exports.sendMessage(alias, content, conversationId, {
           signal: opts.signal,
         });
-        return drainGenieStream(stream, ctx.writer);
+        const requestContext = (ctx as { requestContext?: RequestContext } | undefined)
+          ?.requestContext;
+        return drainGenieStream(stream, ctx.writer, {
+          config: opts.config,
+          ...(requestContext ? { requestContext } : {}),
+        });
       },
     });
   }
@@ -363,6 +384,12 @@ export function buildGenieTools(opts: {
   return tools;
 }
 
+/** Inputs to {@link drainGenieStream}. */
+interface DrainGenieStreamOptions {
+  config: MastraPluginConfig;
+  requestContext?: RequestContext;
+}
+
 /**
  * Drain the genie `sendMessage` AsyncGenerator into a flat result
  * the agent's calling LLM can reason about, while forwarding
@@ -373,26 +400,33 @@ export function buildGenieTools(opts: {
  * 1. {@link GenieProgress} pill events on the writer (`started`,
  *    `status`, `sql`, `suggested`, `error`) drive the loading
  *    pill in the chat bubble.
- * 2. `kind: "chart"` events on the writer carry the row payload
- *    from each Genie SQL statement so the host UI's
- *    `<ChartSlot>` can render the chart inline at the marker
- *    position the model picked. The data never reaches the LLM.
- * 3. The `DrainResult` returned to the LLM contains
- *    Genie's prose answer plus a `datasets[]` array of metadata
- *    (chartId, title, columns, rowCount, sql) the model uses to
- *    cite charts via `[[chart:<chartId>]]` markers.
+ * 2. `kind: "chart"` events on the writer (emitted via
+ *    {@link emitChartWithPlanning}) carry the row payload from
+ *    each Genie SQL statement and, on planner success, a
+ *    follow-up event with the rendered Echarts spec. The host
+ *    UI's `<ChartSlot>` merges the two by `chartId` and
+ *    renders inline at the marker position the model picked.
+ *    The data never reaches the LLM.
+ * 3. The `DrainResult` returned to the LLM contains Genie's
+ *    prose answer plus a `datasets[]` array of metadata
+ *    (chartId, title, columns, rowCount, sql) the model uses
+ *    to cite charts via `[[chart:<chartId>]]` markers.
  *
  * `query_result` and `message_result` events arrive in either
- * order; we buffer per-statement metadata in
- * {@link DatasetMeta} so each half can fill in the bits it knows
- * about and we emit the chart event once `query_result` lands
- * (with whatever title was already set, falling back to a
- * generic label otherwise).
+ * order; we buffer per-statement scratch keyed by `statementId`
+ * so each half can fill in what it knows. The chart event
+ * fires the moment `query_result` lands; the planner runs in
+ * the background. We `Promise.allSettled` every planner promise
+ * before returning so all chart work is attributed to the tool's
+ * trace span and so the LLM's `datasets[]` includes every
+ * chartId that has actually been queued.
  */
 async function drainGenieStream(
   stream: AsyncGenerator<GenieStreamEvent>,
-  writer?: ToolStream,
+  writer: ToolStream | undefined,
+  opts: DrainGenieStreamOptions,
 ): Promise<DrainResult> {
+  const { config, requestContext } = opts;
   let conversationId: string | undefined;
   let genieAnswer: string | undefined;
   let suggestedFollowUps: string[] | undefined;
@@ -406,15 +440,37 @@ async function drainGenieStream(
   let lastStatus: string | undefined;
 
   // Per-statement scratch keyed by Genie's `statementId`. Filled in
-  // by both `query_result` (rows + columns) and `message_result`
-  // (sql + title + description); the LLM-bound `datasets[]` is
-  // built from this at end-of-stream, and chart writer events fire
-  // when `query_result` lands.
-  const datasetsByStatementId = new Map<string, DatasetMeta>();
+  // by both `query_result` (chartId + columns + rows) and
+  // `message_result` (sql + title + description). The LLM-bound
+  // `datasets[]` is built from this at end-of-stream, after all
+  // planner promises settle.
+  type Scratch = {
+    statementId: string;
+    chartId?: string;
+    title?: string;
+    description?: string;
+    sql?: string;
+    columns: string[];
+    rowCount: number;
+  };
+  const scratchByStatementId = new Map<string, Scratch>();
+  const getScratch = (statementId: string): Scratch => {
+    let s = scratchByStatementId.get(statementId);
+    if (!s) {
+      s = { statementId, columns: [], rowCount: 0 };
+      scratchByStatementId.set(statementId, s);
+    }
+    return s;
+  };
+  /**
+   * Planner promises kicked off per `query_result`. Awaited
+   * (Promise.allSettled) before drainGenieStream returns so the
+   * Genie tool's trace span covers the chart work and the LLM's
+   * `datasets[]` accurately reflects every chartId that's been
+   * queued for rendering.
+   */
+  const plannerPromises: Promise<void>[] = [];
 
-  // Best-effort progress emission. Awaited so the underlying agent
-  // stream sees events in order; write failures are swallowed so a
-  // dead writer (e.g. closed downstream) can't take the tool down.
   const emit = async (event: GenieProgress) => {
     if (!writer) return;
     try {
@@ -425,13 +481,12 @@ async function drainGenieStream(
   };
 
   for await (const event of stream) {
-    // Uncomment to log every raw Genie wire event before the switch
-    // routes it through the writer / DrainResult. Useful when tuning
-    // the pill / answer pipeline against real Genie payloads (status
-    // codes, attachment shapes, query_result manifests Genie surfaces
-    // only on certain question types, etc.).
-    // eslint-disable-next-line no-console
-    // console.log("[mastra/genie] event", event);
+    // Per-event raw payload for tuning the pill / answer pipeline
+    // against real Genie traffic. At `info` (the default) this is
+    // discarded for free; flip `LOG_LEVEL=debug` to see every
+    // raw wire event before the switch routes it through writer
+    // and DrainResult.
+    log.debug("event", { type: event.type, payload: event });
     switch (event.type) {
       case "message_start":
         conversationId = event.conversationId;
@@ -459,16 +514,29 @@ async function drainGenieStream(
           Array<string | null>
         >;
         const rows = genieRowsToObjects(columns, dataArray);
-        const meta = upsertDatasetMeta(datasetsByStatementId, event.statementId, {
-          columns,
-          rowCount: rows.length,
-        });
-        await emit({
-          kind: "chart",
-          chartId: meta.chartId,
-          title: meta.title ?? `Genie query`,
-          ...(meta.description ? { description: meta.description } : {}),
+        const scratch = getScratch(event.statementId);
+        // emitChartWithPlanning emits the dataset event immediately
+        // and kicks off the chart-planner agent in the background.
+        // It returns the chartId synchronously; the plannerPromise
+        // is awaited at end-of-stream so chart work shows up under
+        // this tool's trace span.
+        const { chartId, plannerPromise } = await emitChartWithPlanning({
+          ...(writer ? { writer } : {}),
+          config,
+          ...(requestContext ? { requestContext } : {}),
+          title: scratch.title ?? `Genie query`,
+          ...(scratch.description ? { description: scratch.description } : {}),
           data: rows,
+        });
+        scratch.chartId = chartId;
+        scratch.columns = columns;
+        scratch.rowCount = rows.length;
+        plannerPromises.push(plannerPromise);
+        log.debug("query_result", {
+          statementId: event.statementId,
+          chartId,
+          rows: rows.length,
+          columns,
         });
         break;
       }
@@ -477,14 +545,13 @@ async function drainGenieStream(
         for (const attachment of event.message.attachments ?? []) {
           const sqlText = attachment.query?.query;
           const stmtId = attachment.query?.statementId;
-          if (sqlText && stmtId) {
-            upsertDatasetMeta(datasetsByStatementId, stmtId, {
-              sql: sqlText,
-              ...(attachment.query?.title ? { title: attachment.query.title } : {}),
-              ...(attachment.query?.description
-                ? { description: attachment.query.description }
-                : {}),
-            });
+          if (stmtId) {
+            const scratch = getScratch(stmtId);
+            if (sqlText) scratch.sql = sqlText;
+            if (attachment.query?.title) scratch.title = attachment.query.title;
+            if (attachment.query?.description) {
+              scratch.description = attachment.query.description;
+            }
           }
           if (sqlText) {
             await emit({
@@ -519,20 +586,41 @@ async function drainGenieStream(
     }
   }
 
-  // Strip statementId / row-only fields when handing the LLM the
-  // datasets - the model never references statementId, and the
-  // chartId is what the marker uses.
+  // Wait for all chart planners to settle before returning so the
+  // tool's trace span covers chart work and the LLM's
+  // `datasets[]` reflects only chartIds the client has actually
+  // received writer events for. Failures in `emitChartWithPlanning`
+  // are already swallowed inside the helper, so this never
+  // throws.
+  log.debug("planners:awaiting", { count: plannerPromises.length });
+  await Promise.allSettled(plannerPromises);
+  log.debug("planners:settled", { count: plannerPromises.length });
+
+  // Build the LLM-bound `datasets[]` from scratch entries that
+  // actually ran a query (chartId is assigned at `query_result`
+  // time). Entries that only saw `message_result` metadata
+  // without a row payload are skipped.
   const datasets: Array<z.infer<typeof datasetSchema>> = [];
-  for (const meta of datasetsByStatementId.values()) {
+  for (const scratch of scratchByStatementId.values()) {
+    if (!scratch.chartId) continue;
     datasets.push({
-      chartId: meta.chartId,
-      ...(meta.title ? { title: meta.title } : {}),
-      ...(meta.description ? { description: meta.description } : {}),
-      columns: meta.columns,
-      rowCount: meta.rowCount,
-      ...(meta.sql ? { sql: meta.sql } : {}),
+      chartId: scratch.chartId,
+      ...(scratch.title ? { title: scratch.title } : {}),
+      ...(scratch.description ? { description: scratch.description } : {}),
+      columns: scratch.columns,
+      rowCount: scratch.rowCount,
+      ...(scratch.sql ? { sql: scratch.sql } : {}),
     });
   }
+
+  log.debug("drain:return", {
+    conversationId,
+    hasAnswer: typeof genieAnswer === "string",
+    answerLength: genieAnswer?.length ?? 0,
+    chartIds: datasets.map((d) => d.chartId),
+    suggestedCount: suggestedFollowUps?.length ?? 0,
+    error,
+  });
 
   return {
     ...(conversationId ? { conversationId } : {}),
@@ -541,35 +629,6 @@ async function drainGenieStream(
     ...(suggestedFollowUps ? { suggestedFollowUps } : {}),
     ...(error ? { error } : {}),
   };
-}
-
-/**
- * Get-or-create-and-merge the per-statement scratch entry. Both
- * `query_result` and `message_result` paths call this with their
- * partial bag of fields; the resulting record is the union of
- * everything we know about that statement so far.
- */
-function upsertDatasetMeta(
-  store: Map<string, DatasetMeta>,
-  statementId: string,
-  patch: Partial<Omit<DatasetMeta, "chartId" | "statementId">>,
-): DatasetMeta {
-  const existing = store.get(statementId);
-  const merged: DatasetMeta = {
-    chartId: existing?.chartId ?? randomUUID().replace(/-/g, "").slice(0, 8),
-    statementId,
-    columns: patch.columns ?? existing?.columns ?? [],
-    rowCount: patch.rowCount ?? existing?.rowCount ?? 0,
-    ...(patch.title ?? existing?.title
-      ? { title: patch.title ?? existing?.title }
-      : {}),
-    ...(patch.description ?? existing?.description
-      ? { description: patch.description ?? existing?.description }
-      : {}),
-    ...(patch.sql ?? existing?.sql ? { sql: patch.sql ?? existing?.sql } : {}),
-  };
-  store.set(statementId, merged);
-  return merged;
 }
 
 /**
@@ -626,7 +685,10 @@ function coerceCell(cell: string | null): unknown {
  * all-or-nothing bundle. Wire `only` / `except` / `prefix` / `rename`
  * later if a caller needs them.
  */
-export function buildGenieProvider(plugin: GeniePluginInstance): {
+export function buildGenieProvider(
+  plugin: GeniePluginInstance,
+  opts: { config: MastraPluginConfig },
+): {
   toolkit(opts?: unknown): Record<string, ReturnType<typeof createTool>>;
 } {
   return {
@@ -638,6 +700,7 @@ export function buildGenieProvider(plugin: GeniePluginInstance): {
           sendMessage: plugin.sendMessage.bind(plugin),
           getConversation: plugin.getConversation.bind(plugin),
         },
+        config: opts.config,
       });
     },
   };
