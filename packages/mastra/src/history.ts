@@ -19,14 +19,13 @@
 import { logUtils } from "@dbx-tools/appkit-shared";
 import { toAISdkV5Messages } from "@mastra/ai-sdk/ui";
 import type { Agent } from "@mastra/core/agent";
-import type {
-  MastraDBMessage,
-} from "@mastra/core/agent/message-list";
+import type { MastraDBMessage } from "@mastra/core/agent/message-list";
 import {
   MASTRA_RESOURCE_ID_KEY,
   MASTRA_THREAD_ID_KEY,
 } from "@mastra/core/request-context";
 import { registerApiRoute } from "@mastra/core/server";
+import type { ContextWithMastra } from "@mastra/core/server";
 import type {
   MastraHistoryResponse,
   MastraHistoryUIMessage,
@@ -137,7 +136,7 @@ export function historyRoute(options: HistoryRouteOptions) {
   }
   return registerApiRoute(path, {
     method: "GET",
-    handler: async (c) => {
+    handler: async (c: ContextWithMastra) => {
       const mastra = c.get("mastra");
       const requestContext = c.get("requestContext");
       const agentId = fixedAgent ?? c.req.param("agentId");
@@ -148,9 +147,7 @@ export function historyRoute(options: HistoryRouteOptions) {
       if (!agent) {
         return c.json({ error: `Unknown agent "${agentId}"` }, 404);
       }
-      const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as
-        | string
-        | undefined;
+      const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as string | undefined;
       if (!threadId) {
         return c.json({ error: "thread id missing from request context" }, 400);
       }
