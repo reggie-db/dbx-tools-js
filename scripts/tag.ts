@@ -35,16 +35,11 @@
 //   no Databricks profile, etc.) the script falls back to a bare
 //   `Release v<version>` message - no failure.
 
+import { Command, InvalidArgumentError } from "commander";
 import semver from "semver";
 import { aiQuery, discoverPackages, fail, run, writeJson } from "./util.js";
 
 type Bump = "major" | "minor" | "patch";
-
-/** Parsed CLI arguments. */
-interface CliArgs {
-  bump: Bump;
-  dryRun: boolean;
-}
 
 /** Wraps a git invocation with our standard subprocess defaults. */
 async function git(
@@ -52,28 +47,6 @@ async function git(
   opts: { capture?: boolean; check?: boolean } = {},
 ): Promise<string> {
   return run("git", args, opts);
-}
-
-function parseArgs(argv: string[]): CliArgs {
-  let bump: Bump = "patch";
-  let dryRun = false;
-  let bumpSeen = false;
-  for (const arg of argv) {
-    if (arg === "--dry-run" || arg === "-n") {
-      dryRun = true;
-      continue;
-    }
-    if (arg === "patch" || arg === "minor" || arg === "major") {
-      if (bumpSeen) fail(`Bump argument given twice: ${arg}`);
-      bump = arg;
-      bumpSeen = true;
-      continue;
-    }
-    fail(
-      `Unknown argument: ${arg}. Expected one of: patch | minor | major | --dry-run`,
-    );
-  }
-  return { bump, dryRun };
 }
 
 /**
@@ -185,7 +158,25 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
   }
 }
 
-const { bump, dryRun } = parseArgs(process.argv.slice(2));
+const program = new Command()
+  .name("tag")
+  .description("Bump every workspace, commit, tag HEAD, and push to origin.")
+  .argument(
+    "[bump]",
+    "version bump (patch | minor | major)",
+    (value): Bump => {
+      if (value !== "patch" && value !== "minor" && value !== "major") {
+        throw new InvalidArgumentError("expected patch, minor, or major");
+      }
+      return value;
+    },
+    "patch" as Bump,
+  )
+  .option("-n, --dry-run", "print everything, write nothing", false)
+  .parse(process.argv);
+
+const [bump] = program.processedArgs as [Bump];
+const { dryRun } = program.opts<{ dryRun: boolean }>();
 
 const { version: currentVersion, pkgs } = await findPublishables();
 const nextVersion = semver.inc(currentVersion, bump);

@@ -39,6 +39,7 @@
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { Command, InvalidArgumentError } from "commander";
 import { ROOT, writeJson } from "./util.js";
 
 const SCOPE = "@dbx-tools";
@@ -51,36 +52,38 @@ const SHARED_PKG = `${SCOPE}/${NPM_PREFIX}shared`;
 
 type Kind = "plugin" | "shared";
 
-/** Print usage and exit. */
-function usage(message?: string): never {
-  if (message) console.error(message);
-  console.error("Usage:");
-  console.error("  bun run create plugin <slug>");
-  console.error("  bun run create shared <slug>");
-  console.error("");
-  console.error("  <slug> must be lowercase kebab-case and start with a letter.");
-  process.exit(1);
-}
-
 /** Create a file (and any missing parent dirs) with the given content. */
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
 }
 
-const kindArg = process.argv[2]?.trim();
-const rawSlug = process.argv[3]?.trim();
+const program = new Command()
+  .name("create")
+  .description("Scaffold a new workspace package under packages/<slug>/.")
+  .argument(
+    "<kind>",
+    "package kind (plugin | shared)",
+    (value): Kind => {
+      if (value !== "plugin" && value !== "shared") {
+        throw new InvalidArgumentError("expected plugin or shared");
+      }
+      return value;
+    },
+  )
+  .argument(
+    "<slug>",
+    "kebab-case slug (lowercase, starts with a letter)",
+    (value) => {
+      if (!/^[a-z][a-z0-9-]*$/.test(value)) {
+        throw new InvalidArgumentError(`invalid slug "${value}"`);
+      }
+      return value;
+    },
+  )
+  .parse(process.argv);
 
-if (kindArg !== "plugin" && kindArg !== "shared") {
-  usage(`First arg must be "plugin" or "shared" (got "${kindArg ?? ""}").`);
-}
-const kind: Kind = kindArg;
-
-if (!rawSlug || !/^[a-z][a-z0-9-]*$/.test(rawSlug)) {
-  usage(`Invalid slug "${rawSlug ?? ""}".`);
-}
-
-const slug = rawSlug;
+const [kind, slug] = program.processedArgs as [Kind, string];
 const pkgDir = resolve(ROOT, "packages", slug);
 if (existsSync(pkgDir)) {
   console.error(`packages/${slug} already exists; aborting.`);
