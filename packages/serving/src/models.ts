@@ -47,6 +47,19 @@ export interface ServingEndpoint extends Record<string, unknown> {
   };
 }
 
+/**
+ * Best-effort sortable version string derived from the endpoint's
+ * `name`. Returns `undefined` for non-FOUNDATION_MODEL endpoints or
+ * names that contain no digit chunks.
+ *
+ * Each `<digits>[<letters>]` chunk in the name contributes its
+ * numeric prefix to the version (up to 3 slots, MAJOR.MINOR.PATCH).
+ * Chunks with trailing letters - and any overflow chunks past the
+ * 3rd - contribute their full form to a 4th dotted component. So
+ * `databricks-claude-opus-4-7` is `"4.7.0"`,
+ * `databricks-gpt-oss-120b` is `"120.0.0.120b"`, and
+ * `databricks-bge-large-en` (no digits) is `undefined`.
+ */
 export function foundationModelVersion(endpoint: ServingEndpoint): string | undefined {
   if (!foundationModels(endpoint).next().value) return undefined;
   // Pull all `<digits>[<letters>]` runs out of the endpoint name.
@@ -97,6 +110,12 @@ export function foundationModelVersion(endpoint: ServingEndpoint): string | unde
   return undefined;
 }
 
+/**
+ * Iterate every `served_entities[*].foundation_model` record on
+ * `endpoint` whose entity `type` is `"FOUNDATION_MODEL"`. Most
+ * Databricks-hosted Foundation Model endpoints have exactly one
+ * served entity, but the schema is `[]` so this stays a generator.
+ */
 export function* foundationModels(
   endpoint: ServingEndpoint,
 ): Generator<FoundationModel> {
@@ -111,9 +130,18 @@ export function* foundationModels(
   }
 }
 
+/**
+ * First non-empty `model_class` (e.g. `"claude"`, `"gpt-oss"`,
+ * `"gemini"`) from the endpoint's served entities, or `undefined`
+ * when none of them have one set.
+ */
 export const foundationModelClass = (endpoint: ServingEndpoint): string | undefined =>
   foundationModelClasses(endpoint).next().value;
 
+/**
+ * Iterate every `model_class` declared by the endpoint's served
+ * Foundation Models. Skips entities whose `model_class` is unset.
+ */
 export function* foundationModelClasses(endpoint: ServingEndpoint): Generator<string> {
   for (const foundationModel of foundationModels(endpoint)) {
     const modelClass = foundationModel.model_class;
@@ -121,10 +149,23 @@ export function* foundationModelClasses(endpoint: ServingEndpoint): Generator<st
   }
 }
 
+/**
+ * First non-empty `ai_gateway_model_profile` (`{ speed, quality, cost }`)
+ * from the endpoint's served entities, with each axis defaulted to
+ * `0` so callers don't have to null-check before sorting. Returns
+ * `undefined` when no profile has any of the three fields set.
+ */
 export const foundationModelProfile = (
   endpoint: ServingEndpoint,
 ): AiGatewayModelProfile | undefined => foundationModelProfiles(endpoint).next().value;
 
+/**
+ * Iterate every `ai_gateway_model_profile` on the endpoint's served
+ * Foundation Models that has at least one numeric axis set. Each
+ * yielded profile has `speed`, `quality`, and `cost` filled in (zero
+ * when the upstream record omitted them) so a downstream ranker can
+ * sort without per-axis null checks.
+ */
 export function* foundationModelProfiles(
   endpoint: ServingEndpoint,
 ): Generator<AiGatewayModelProfile> {

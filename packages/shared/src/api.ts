@@ -39,13 +39,27 @@ type GetOrExecuteParams = Parameters<CacheManager["getOrExecute"]>;
  *   - `method`: HTTP verb. If omitted, defaults to `POST` when
  *     `init.body` is present and `GET` otherwise.
  *
- * @example
- * await fetchApi(ws, "/serving-endpoints");
+ * `cache` is an optional handle to `CacheManager.getOrExecute`: pass
+ * `{ options: { ttl: 300 } }` for a per-user, time-boxed cache; the
+ * `userId` from the active execution context becomes part of the
+ * cache key by default.
  *
- * await fetchApi(ws, ["/serving-endpoints", endpointName, "invocations"], {
+ * `workspaceClient` is optional; when omitted the request uses the
+ * caller's `getExecutionContext().client` (i.e. the per-request
+ * OBO client). Pass an explicit client for service-account work
+ * outside a request.
+ *
+ * @example
+ * await fetchApi("/serving-endpoints");
+ *
+ * await fetchApi(["/serving-endpoints", endpointName, "invocations"], {
  *   body: JSON.stringify({ inputs: [...] }),
  *   headers: { "Content-Type": "application/json" },
  * });
+ *
+ * await fetchApi("/serving-endpoints", undefined,
+ *   { options: { ttl: 300 } }
+ * );
  */
 export async function fetchApi<T>(
   target: URL | string[] | string,
@@ -87,6 +101,15 @@ export async function fetchApi<T>(
   return response.json() as Promise<T>;
 }
 
+/**
+ * Build the absolute `URL` for a Databricks workspace REST endpoint
+ * without issuing a request. Mirrors {@link fetchApi}'s path handling
+ * (single string or array of segments, leading `/api/2.0` stripped)
+ * so callers can construct request URLs that match what `fetchApi`
+ * would have used. Resolves the host from the supplied
+ * `WorkspaceClient` or, when omitted, from the active
+ * `getExecutionContext().client`.
+ */
 export async function apiUrl(
   path: string[] | string,
   workspaceClient?: WorkspaceClient,

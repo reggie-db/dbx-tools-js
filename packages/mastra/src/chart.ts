@@ -1,29 +1,37 @@
 /**
  * Chart-rendering primitives.
  *
- * Two surfaces, one shared brain:
+ * Three surfaces, one shared brain:
  *
  * - {@link buildRenderDataTool}: a Mastra tool the model calls
- *   ("here is a dataset, render it as a chart"). The tool is
- *   fire-and-forget by design - it generates a short `chartId`,
- *   pushes a single `kind: "chart"` event onto `ctx.writer` carrying
- *   the raw rows, and returns the id to the model immediately. No
- *   chart planning happens inside the agentic loop, so the model
- *   never blocks on a downstream LLM call to get its identifier.
+ *   ("here is a dataset, render it as a chart"). The tool's
+ *   `execute` emits a `kind: "chart"` event with the raw rows to
+ *   `ctx.writer` synchronously, kicks off the chart-planner agent,
+ *   and `await`s the planner promise before returning so the
+ *   planner's latency is attributed to this tool's trace span.
+ *   The LLM-bound output is just `{ chartId }`, so its context
+ *   stays flat regardless of dataset size.
+ *
+ * - {@link emitChartWithPlanning}: the underlying helper that both
+ *   `render_data` and Genie's `drainGenieStream` call. Mints the
+ *   `chartId`, fires the dataset event immediately, runs the
+ *   planner in the background, and returns `{ chartId,
+ *   plannerPromise }` so callers can choose to await for trace
+ *   shape or fire-and-forget.
  *
  * - {@link runChartPlanner}: the chart-planner Agent + ECOption
  *   expansion as a plain async function. Used internally by
- *   {@link emitChartWithPlanning} (which is what the
- *   `render_data` tool and Genie's `drainGenieStream` both call);
- *   producers shouldn't reach for it directly so chart events
- *   keep a single wire-format contract.
+ *   {@link emitChartWithPlanning}; producers shouldn't reach for
+ *   it directly so chart events keep a single wire-format
+ *   contract.
  *
  * The model wires the chart into its reply by emitting the marker
  * `[[chart:<chartId>]]` on its own line in markdown. The chat
  * client splits the assistant text on these markers and drops a
  * `<ChartSlot>` in at the position the model placed it; the slot
- * then fires the render-chart endpoint on mount and shows a
- * skeleton until the option lands.
+ * shows a skeleton until the second `kind: "chart"` event (with
+ * the resolved `EChartsOption`) arrives, then swaps in the
+ * rendered Echarts visualisation.
  */
 
 import { randomUUID } from "node:crypto";

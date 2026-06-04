@@ -14,38 +14,42 @@
 //                               (org-wide constants).
 //
 // Why a stage directory instead of mutating `package.json` in place:
-// `bun publish` (and npm publish) only ever read `package.json` from
+// `bun pm pack` and `npm publish` only ever read `package.json` from
 // the cwd - there's no `--manifest <path>` flag - so we can't just
-// hand it a `package.generated.json`. Mutating the source file in
+// hand them a `package.generated.json`. Mutating the source file in
 // place during publish would briefly dirty the working tree (a
 // SIGKILL between mutate and revert leaves the source modified). To
 // keep `git status` clean throughout, we stage each package into
 // `<pkg>/.publish/` (gitignored), copy the publishable files in, and
-// run `bun publish` from inside the stage. The stage's `package.json`
-// is the "generated" file the user asked for; it's just at
-// `.publish/package.json` instead of `package.generated.json`,
-// because that's what bun is willing to read.
+// run the publish command from inside the stage. The stage's
+// `package.json` is the "generated" file the user asked for; it's
+// just at `.publish/package.json` instead of
+// `package.generated.json`, because that's what npm/bun are willing
+// to read.
 //
-// One catch: a stage dir isn't a workspace member, so `bun publish`
+// One catch: a stage dir isn't a workspace member, so the tooling
 // inside it can't rewrite `workspace:*` and `catalog:` specifiers on
 // our behalf. We pre-resolve those in `mergeForRelease()` from the
 // workspace's own version map and the root manifest's `catalog`/
 // `catalogs` fields before writing the staged manifest.
 //
-// Dry runs use `bun pm pack --dry-run` because `bun publish
-// --dry-run` still requires npm auth today.
+// Why `npm publish` instead of `bun publish` for the upload:
+// `bun publish` (as of 1.3.13) ships the tarball but does not embed
+// the package README into the registry manifest payload. npm's web
+// UI reads `manifest.readme` to render the package page, so packages
+// published with `bun publish` show up with an empty page even
+// though the README file is in the tarball. `npm publish`
+// serializes the README into the manifest correctly, so that's what
+// we use for the actual upload. Dry-runs still use `bun pm pack
+// --dry-run` because it's faster and doesn't need npm installed.
 //
 // Local-registry shortcut: when `--registry` points at a loopback
 // host (Verdaccio in docker, the default), we drop a stage-local
-// `bunfig.toml` carrying a placeholder token under
-// `[install.scopes]`. `bun publish` refuses to upload without an
-// auth token configured, but Verdaccio is set to `publish: $$all`
-// and accepts any token. Result: local publishes work with zero
-// `bun login` and the user's real `~/.npmrc` (with real registry
-// tokens) is never touched. We use `bunfig.toml` rather than
-// `.npmrc` because bun reads `bunfig.toml` from cwd; its `.npmrc`
-// resolution stops higher up the tree and doesn't pick up a
-// stage-local file.
+// `.npmrc` carrying a placeholder `_authToken`. `npm publish`
+// refuses to upload without auth configured, but Verdaccio is set
+// to `publish: $$all` and accepts any token. Result: local
+// publishes work with zero `npm login` / `bun login` and the user's
+// real `~/.npmrc` (with real registry tokens) is never touched.
 
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -102,7 +106,7 @@ const DEP_KEYS = [
 
 /**
  * Hostnames we treat as "the developer's machine" for the purposes
- * of skipping the `bun login` requirement. Matches loopback addresses
+ * of skipping the `npm login` requirement. Matches loopback addresses
  * and `*.local` so things like `http://verdaccio.local` work too.
  */
 function isLocalRegistry(registry: string): boolean {
@@ -122,7 +126,7 @@ function isLocalRegistry(registry: string): boolean {
 
 const program = new Command()
   .name("publish")
-  .description("Publish every public workspace package to npm via `bun publish`.")
+  .description("Publish every public workspace package to npm via `npm publish`.")
   .addOption(
     new Option("-r, --registry <url>", "registry to publish to")
       .env("NPM_REGISTRY")
@@ -166,9 +170,10 @@ for (const pkg of packages) {
 /**
  * Resolve a `workspace:` specifier (e.g. `workspace:*`,
  * `workspace:^`, `workspace:1.2.3`) using the in-monorepo version of
- * `name`. Mirrors what `bun publish` does internally when run from a
- * workspace member; we replicate it here because the stage dir is
- * outside the workspace tree.
+ * `name`. Mirrors what bun does internally when run from a workspace
+ * member; we replicate it here because the stage dir is outside the
+ * workspace tree (and `npm publish`, which we use for the actual
+ * upload, doesn't understand `workspace:` specifiers at all).
  */
 function resolveWorkspaceDep(name: string, spec: string): string {
   const target = workspaceVersions.get(name);
@@ -303,10 +308,13 @@ async function copyPublishableFiles(
 
 /**
  * Stage `pkg` into a gitignored `<pkg>/.publish/` directory and run
- * `bun publish` (or `bun pm pack` for dry-runs) from there. The
- * stage gets recreated from scratch on every call and always wiped
- * by the `finally` block, so a failed publish never leaves a stale
- * directory behind.
+ * `npm publish` (or `bun pm pack --dry-run` for dry-runs) from
+ * there. The stage gets recreated from scratch on every call and
+ * always wiped by the `finally` block, so a failed publish never
+ * leaves a stale directory behind. We use `npm publish` rather than
+ * `bun publish` because bun (1.3.13) doesn't embed the README into
+ * the registry manifest payload, which leaves the npm web UI
+ * showing an empty package page.
  */
 async function publishOne(pkg: WorkspacePackage): Promise<void> {
   const stageDir = resolve(pkg.dir, STAGE_DIRNAME);
@@ -319,12 +327,11 @@ async function publishOne(pkg: WorkspacePackage): Promise<void> {
     await writeJson(resolve(stageDir, "package.json"), merged);
 
     if (isLocalRegistry(registry)) {
-      const scope = pkg.meta.name?.split("/")[0] ?? "";
-      const url = registry.endsWith("/") ? registry : `${registry}/`;
-      const bunfig =
-        `[install.scopes]\n` +
-        `${JSON.stringify(scope)} = { token = "anonymous", url = ${JSON.stringify(url)} }\n`;
-      await Bun.write(resolve(stageDir, "bunfig.toml"), bunfig);
+      const { host } = new URL(registry);
+      await Bun.write(
+        resolve(stageDir, ".npmrc"),
+        `//${host}/:_authToken=anonymous\n`,
+      );
     }
 
     if (dryRun) {
@@ -334,7 +341,7 @@ async function publishOne(pkg: WorkspacePackage): Promise<void> {
     }
     const args = ["publish", "--access=public", `--registry=${registry}`];
     if (otp) args.push(`--otp=${otp}`);
-    await run("bun", args, { cwd: stageDir });
+    await run("npm", args, { cwd: stageDir });
     console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
