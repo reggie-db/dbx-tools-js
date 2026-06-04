@@ -1,8 +1,8 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.7",
-  "module": "index.ts",
+  "version": "0.1.8",
   "type": "module",
+  "module": "index.ts",
   "dependencies": {
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
     "@dbx-tools/appkit-shared": "workspace:*",

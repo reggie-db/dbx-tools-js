@@ -1,0 +1,15 @@
+{
+  "files": ["dist", "index*.ts", "src"],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/reggie-db/dbx-tools-appkit#readme",
+  "bugs": {
+    "url": "https://github.com/reggie-db/dbx-tools-appkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reggie-db/dbx-tools-appkit.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

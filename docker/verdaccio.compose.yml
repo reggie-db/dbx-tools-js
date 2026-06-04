@@ -1,0 +1,41 @@
+services:
+  verdaccio:
+    image: verdaccio/verdaccio:latest
+    ports:
+      - "4873:4873"
+    volumes:
+      - verdaccio-storage:/verdaccio/storage
+    configs:
+      - source: verdaccio_config
+        target: /verdaccio/conf/config.yaml
+
+configs:
+  verdaccio_config:
+    content: |
+      storage: /verdaccio/storage
+
+      publish:
+        allow_offline: true
+
+      uplinks:
+        corp:
+          url: https://npm-proxy.dev.databricks.com/
+
+      packages:
+        "@*/*":
+          access: $$all
+          publish: $$all
+          proxy: corp
+
+        "**":
+          access: $$all
+          publish: $$all
+          proxy: corp
+
+      log:
+        type: stdout
+        format: pretty
+        level: http
+
+volumes:
+  verdaccio-storage:

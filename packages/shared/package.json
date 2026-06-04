@@ -1,13 +1,26 @@
 {
   "name": "@dbx-tools/appkit-shared",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "module": "index.ts",
   "exports": {
     ".": {
-      "browser": "./index.client.ts",
-      "import": "./index.ts",
-      "default": "./index.ts"
+      "source": {
+        "browser": "./index.client.ts",
+        "default": "./index.ts"
+      },
+      "browser": {
+        "types": "./dist/index.client.d.ts",
+        "default": "./dist/index.client.js"
+      },
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "default": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
     }
   },
   "peerDependencies": {

@@ -12,14 +12,22 @@ name: Release
 #   bun run tag                           # create + push v<version>
 #
 # The tag push fires this workflow. `bun run release` runs
-# `bun scripts/build.ts && bun scripts/publish.ts`; the publish step
-# augments each package.json with npm-ready fields (main / types /
-# exports / files / publishConfig / repository) then runs
-# `bunx changeset publish`, which compares each package.json version
-# against the registry and publishes the ones that don't exist yet.
+# `bun scripts/build.ts && bun scripts/publish.ts`. Each package's
+# `package.json` already carries its full publish-ready fields
+# (main / types / exports / files / license / repository /
+# publishConfig). The publish script just iterates the workspace
+# packages, skips ones already on the registry, and runs
+# `bun publish` from each package directory. Bun rewrites
+# `workspace:*` and `catalog:` specifiers to real version ranges
+# at pack time, so no source-tree mutation happens during release.
+#
+# Registry: the publish script defaults to a local Verdaccio
+# (`http://localhost:4873`) so dev machines can never accidentally hit
+# real npm. CI overrides via `NPM_REGISTRY` (set on the publish step
+# below).
 #
 # Auth: NPM_TOKEN secret (Automation token from npmjs.com → Access
-# Tokens) is read by npm via the auth-token line emitted by
+# Tokens) is read by bun publish via the auth-token line emitted by
 # actions/setup-node when `NODE_AUTH_TOKEN` is set on the publish
 # step. Once trusted publishing is configured per-package on
 # npmjs.com (Settings → Trusted Publishing → GitHub Actions →
@@ -60,9 +68,11 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           # Pinned to 24.x so `npm` is >= 11.5.1, the minimum for
-          # trusted publishing / OIDC auth. Bun is used for everything
-          # else; only `bunx changeset publish` (which shells out to
-          # `npm publish`) requires the system `npm`.
+          # trusted publishing / OIDC auth. Bun does the actual
+          # publishing; we only need `npm` for the `npm view` lookup
+          # in `scripts/publish.ts` and for the `~/.npmrc` auth-token
+          # line that `setup-node` writes (which `bun publish` then
+          # reads).
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org/"
 
@@ -75,5 +85,9 @@ jobs:
       - name: Publish
         run: bun run release
         env:
+          # Override the script's local-Verdaccio default and target
+          # real npm. Must match `setup-node`'s `registry-url` above
+          # so the auth-token line in `~/.npmrc` is keyed correctly.
+          NPM_REGISTRY: "https://registry.npmjs.org/"
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
