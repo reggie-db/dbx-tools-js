@@ -144,16 +144,39 @@ export type ChatViewProps = {
   isLoadingHistory?: boolean;
   /**
    * Resolve an approval-gated tool call. Fired when the user clicks
-   * Approve or Deny on the inline approval card. The handler is
-   * expected to call AI SDK V5's `addToolOutput` (or equivalent for
-   * a non-`useChat` driver) so the suspended tool part transitions
-   * to `output-available` / `output-error` and the agent loop
-   * resumes. Wired only by the `/chat` page today; `/stream` can
-   * leave it undefined and the buttons disable themselves.
+   * Approve or Deny on the inline approval card. The handler must
+   * resume the suspended Mastra workflow on its own:
+   *
+   * - With `useChat` + `chatRoute()`, call
+   *   `sendMessage(undefined, { body: { resumeData: { approved }, runId } })`
+   *   so chatRoute hits `agent.resumeStream(resumeData)` and the
+   *   suspended tool call wakes up.
+   * - With `mastraClient.getAgent(...).stream()`, call
+   *   `agent.approveToolCall({ runId, toolCallId })` /
+   *   `agent.declineToolCall({ runId, toolCallId })` to get a fresh
+   *   stream Response and pipe it through the same chunk handler.
+   *
+   * Both paths require the `runId` Mastra emitted with the approval
+   * chunk - the field is always populated when the card was rendered
+   * from a live `data-tool-call-approval` part or an out-of-band
+   * `pendingApprovalsByMessage` entry. It will be missing only for
+   * approvals reconstructed from history (where the original runId
+   * is lost), in which case the handler should surface a "this
+   * approval is stale, please re-ask the model" message rather than
+   * trying to resume a workflow that no longer exists.
    */
   onResolveToolApproval?: (
     args: ApprovalDecision,
   ) => void | Promise<void>;
+  /**
+   * Out-of-band approval requests keyed by assistant message id, for
+   * transports that don't surface approvals as `UIMessage` parts.
+   * The `/stream` page populates this from Mastra's
+   * `tool-call-approval` chunk so the same {@link ToolApprovalCard}
+   * UI works without injecting synthetic data parts. Each entry is
+   * merged with any approvals already discovered in `message.parts`.
+   */
+  pendingApprovalsByMessage?: Record<string, PendingApproval[]>;
 };
 
 /** Payload {@link ChatViewProps.onResolveToolApproval} receives. */
@@ -162,12 +185,19 @@ export type ApprovalDecision =
       approved: true;
       toolName: string;
       toolCallId: string;
+      /**
+       * Mastra run id from the approval chunk. Required to resume
+       * the suspended workflow; absent only when the card was
+       * reconstructed from history (no live runId available).
+       */
+      runId?: string;
       input: unknown;
     }
   | {
       approved: false;
       toolName: string;
       toolCallId: string;
+      runId?: string;
       input: unknown;
       reason: string;
     };
@@ -939,12 +969,14 @@ const APPROVAL_GATED_TOOLS = new Set<string>(["send_email"]);
 const ToolApprovalCard = ({
   toolName,
   toolCallId,
+  runId,
   input,
   onResolve,
   disabled,
 }: {
   toolName: string;
   toolCallId: string;
+  runId?: string;
   input: unknown;
   onResolve?: (decision: ApprovalDecision) => void | Promise<void>;
   disabled?: boolean;
@@ -955,11 +987,12 @@ const ToolApprovalCard = ({
     setPending(true);
     Promise.resolve(
       approved
-        ? onResolve({ approved: true, toolName, toolCallId, input })
+        ? onResolve({ approved: true, toolName, toolCallId, runId, input })
         : onResolve({
             approved: false,
             toolName,
             toolCallId,
+            runId,
             input,
             reason: "User denied the request from the chat UI.",
           }),
@@ -1047,48 +1080,72 @@ type EmailInput = {
 };
 
 /**
- * Pull every approval-pending tool-invocation part out of an
- * assistant message. Two states matter, depending on transport:
- *
- * - `state: 'approval-requested'` is what mastra/ai-sdk emits live
- *   while the agent loop is paused on a `requireApproval` tool call.
- *   The part also carries `approval: { id }` referencing the server
- *   suspension id. This is the in-stream case.
- * - `state: 'input-available'` is what `toAISdkV5Messages` reshapes
- *   a stored, still-pending approval into when history loads on
- *   page refresh - same paused tool call, just rehydrated through
- *   the v5-compatible converter.
- *
- * We treat both as "approval pending" so the card renders in both
- * paths, and additionally filter by {@link APPROVAL_GATED_TOOLS} so
- * plain "tool is running right now" states don't render a card.
+ * One approval-gated tool call paused mid-turn. `runId` is the
+ * Mastra workflow id needed to resume; it's always present when the
+ * card was constructed from a live source (chatRoute's
+ * `data-tool-call-approval` part or `pendingApprovalsByMessage`),
+ * and absent only for approvals reconstructed from a history load
+ * where the original runId is lost.
  */
-type PendingApproval = {
+export type PendingApproval = {
   toolName: string;
   toolCallId: string;
+  /** Mastra run id from the approval chunk. */
+  runId?: string;
   input: unknown;
 };
-const APPROVAL_PENDING_STATES = new Set(["approval-requested", "input-available"]);
+
+/**
+ * Pull every approval-pending tool call out of an assistant
+ * message's parts. Mastra's `chatRoute()` (v5 and v6) emits a
+ * dedicated `data-tool-call-approval` data part carrying
+ * `{ runId, toolCallId, toolName, args }` whenever a
+ * `requireApproval: true` tool is paused; that's what `useChat`
+ * deserializes into `message.parts`. We read those parts directly
+ * (matching the canonical Mastra UI Dojo example,
+ * `mastra-ai/ui-dojo/.../tool-approval.tsx`) and additionally filter
+ * by {@link APPROVAL_GATED_TOOLS} so unrelated `data-*` parts don't
+ * render a card.
+ */
 const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] => {
   const out: PendingApproval[] = [];
   for (const part of parts ?? []) {
     const type = (part as { type?: unknown }).type;
-    if (typeof type !== "string") continue;
-    let toolName: string | undefined;
-    if (type.startsWith("tool-")) {
-      toolName = type.slice("tool-".length);
-    } else if (type === "dynamic-tool") {
-      toolName = (part as { toolName?: unknown }).toolName as string | undefined;
-    }
-    if (!toolName || !APPROVAL_GATED_TOOLS.has(toolName)) continue;
-    const state = (part as { state?: unknown }).state;
-    if (typeof state !== "string" || !APPROVAL_PENDING_STATES.has(state)) continue;
-    const toolCallId = (part as { toolCallId?: unknown }).toolCallId;
-    if (typeof toolCallId !== "string") continue;
-    const input = (part as { input?: unknown }).input;
-    out.push({ toolName, toolCallId, input });
+    if (type !== "data-tool-call-approval") continue;
+    const data = (part as { data?: unknown }).data;
+    if (!data || typeof data !== "object") continue;
+    const d = data as {
+      toolName?: unknown;
+      toolCallId?: unknown;
+      runId?: unknown;
+      args?: unknown;
+    };
+    if (typeof d.toolName !== "string") continue;
+    if (!APPROVAL_GATED_TOOLS.has(d.toolName)) continue;
+    if (typeof d.toolCallId !== "string") continue;
+    out.push({
+      toolName: d.toolName,
+      toolCallId: d.toolCallId,
+      runId: typeof d.runId === "string" ? d.runId : undefined,
+      input: d.args,
+    });
   }
   return out;
+};
+
+/**
+ * Merge inline approvals (from `message.parts`) with out-of-band
+ * approvals supplied by the parent (used by the `/stream` page,
+ * which doesn't store approvals as data parts). De-dupes by
+ * `toolCallId` so a card never appears twice.
+ */
+const mergePendingApprovals = (
+  fromParts: PendingApproval[],
+  fromExternal: PendingApproval[] | undefined,
+): PendingApproval[] => {
+  if (!fromExternal || fromExternal.length === 0) return fromParts;
+  const seen = new Set(fromParts.map((a) => a.toolCallId));
+  return [...fromParts, ...fromExternal.filter((a) => !seen.has(a.toolCallId))];
 };
 
 type AssistantBubbleProps = {
@@ -1101,6 +1158,11 @@ type AssistantBubbleProps = {
   onSuggestionClick?: (question: string) => void;
   /** Approve / deny handler for inline {@link ToolApprovalCard}s. */
   onResolveToolApproval?: (decision: ApprovalDecision) => void | Promise<void>;
+  /**
+   * Out-of-band approvals for this specific message (Stream page).
+   * Merged with inline `data-tool-call-approval` parts.
+   */
+  externalApprovals?: PendingApproval[];
 };
 
 const AssistantBubble = ({
@@ -1111,6 +1173,7 @@ const AssistantBubble = ({
   regenerate,
   onSuggestionClick,
   onResolveToolApproval,
+  externalApprovals,
 }: AssistantBubbleProps) => {
   const reasoning = getReasoningText(message.parts);
   const isReasoningStreaming =
@@ -1136,7 +1199,10 @@ const AssistantBubble = ({
   // marker render at the end as a fallback. Suggested questions
   // stay gated on settle to avoid pop-in mid-stream.
   const charts = collectCharts(events);
-  const pendingApprovals = collectPendingApprovals(message.parts);
+  const pendingApprovals = mergePendingApprovals(
+    collectPendingApprovals(message.parts),
+    externalApprovals,
+  );
 
   return (
     <Item className="items-start gap-3 border-none bg-transparent p-0">
@@ -1168,6 +1234,7 @@ const AssistantBubble = ({
             key={p.toolCallId}
             toolName={p.toolName}
             toolCallId={p.toolCallId}
+            runId={p.runId}
             input={p.input}
             onResolve={onResolveToolApproval}
           />
@@ -1277,6 +1344,7 @@ export const ChatView = ({
   hasMore = false,
   isLoadingHistory = false,
   onResolveToolApproval,
+  pendingApprovalsByMessage = {},
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1437,6 +1505,7 @@ export const ChatView = ({
                       regenerate={regenerate}
                       onSuggestionClick={(text) => sendMessage({ text })}
                       onResolveToolApproval={onResolveToolApproval}
+                      externalApprovals={pendingApprovalsByMessage[message.id]}
                     />
                   );
                 }

@@ -24,6 +24,7 @@
     "@dbx-tools/appkit-autopg": "workspace:*",
     "@dbx-tools/appkit-mastra": "workspace:*",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
+    "@dbx-tools/appkit-phoenix": "workspace:*",
     "@dbx-tools/appkit-shared": "workspace:*",
     "@mastra/client-js": "^1.20.0",
     "ai": "^5.0.0",

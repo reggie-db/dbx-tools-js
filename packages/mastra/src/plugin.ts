@@ -48,6 +48,7 @@ import type { MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 import type { MastraPluginConfig } from "./config.js";
 import { historyRoute } from "./history.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
+import { buildPhoenixObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import {
   clearServingEndpointsCache,
@@ -271,7 +272,26 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // dev server. Since we're hosting Mastra inside our own Express
     // subapp via `@mastra/express`, custom routes must be passed to
     // the `MastraServer` constructor directly.
-    this.mastra = new Mastra({ agents: this.built.agents });
+    //
+    // `storage` here is *Mastra-instance-level* and persists workflow
+    // snapshots (where suspended `requireApproval` tool calls live).
+    // It's separate from each agent's `Memory.storage`, which only
+    // covers thread / message history. Without it,
+    // `agent.resumeStream()` errors with "could not find a suspended
+    // run" and the approval UI hangs after the user clicks Approve.
+    const instanceStorage = memoryBuilder?.instanceStorage();
+    // Auto-wire OTLP trace export to the sibling `phoenix` plugin if
+    // it's registered. Returns undefined when phoenix isn't around so
+    // the field stays off the constructor and Mastra keeps its noop
+    // observability default. The serviceName is the plugin's bound
+    // name so multiple mastra instances in one process stay
+    // distinguishable in Phoenix.
+    const observability = buildPhoenixObservability(this.context, this.name);
+    this.mastra = new Mastra({
+      agents: this.built.agents,
+      ...(instanceStorage ? { storage: instanceStorage } : {}),
+      ...(observability ? { observability } : {}),
+    });
     this.mastraApp = express();
     attachRoutePatchMiddleware(this.mastraApp);
     this.mastraServer = new MastraServer(this.config, {
@@ -290,6 +310,8 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       agents: Object.keys(this.built.agents),
       defaultAgent: this.built.defaultAgentId,
       routes: ["/route/chat", "/route/history", "/models"],
+      instanceStorage: instanceStorage !== undefined,
+      observability: observability !== undefined ? "phoenix" : "off",
     });
   }
 }

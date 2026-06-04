@@ -582,10 +582,10 @@ the moment the `lakebase` plugin is registered. Bare `mastra()` next to
 zero extra config required.
 
 
-| Knob      | Default when `lakebase()` is registered                                                                           | What it backs                                              |
-| --------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `storage` | **Per-agent** `PostgresStore` namespaced by `schemaName: "mastra_<agentId>"` so threads + messages stay isolated. | Mastra threads, messages, working memory.                  |
-| `memory`  | **Shared singleton** `PgVector` across every agent (cross-agent semantic recall on one index).                    | RAG-style recall over past messages via FastEmbed vectors. |
+| Knob      | Default when `lakebase()` is registered                                                                           | What it backs                                                                                  |
+| --------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `storage` | **Per-agent** `PostgresStore` namespaced by `schemaName: "mastra_<agentId>"` so threads + messages stay isolated, plus a Mastra-instance-level `PostgresStore` in schema `mastra_instance`. | Mastra threads, messages, working memory; Mastra-instance-level workflow snapshots (`requireApproval` / `agent.resumeStream()`). |
+| `memory`  | **Shared singleton** `PgVector` across every agent (cross-agent semantic recall on one index).                    | RAG-style recall over past messages via FastEmbed vectors.                                     |
 
 
 Override either at the plugin level, the agent level, or both. The agent
@@ -635,8 +635,15 @@ mastra({
 Notes:
 
 - `PostgresStore` runs `CREATE SCHEMA IF NOT EXISTS` on `init()`, so
-per-agent schemas spring into existence the first time an agent saves
-a message. No bundle / migration step required.
+per-agent schemas (and the shared `mastra_instance` schema) spring
+into existence the first time the agent saves anything. No bundle /
+migration step required.
+- The `mastra_instance` schema exists so that Mastra-instance-level
+artifacts (workflow snapshots used by `agent.resumeStream()`,
+`requireApproval` flows, etc.) live in their own namespace and never
+collide with per-agent thread / message tables. Disable the instance
+store by setting `storage: false` at plugin level - approval-gated
+tool calls will then error on resume.
 - Disabling `lakebase()` from your plugin list while leaving `storage` /
 `memory` truthy fails fast at setup with a clear "lakebase plugin not
 registered" error.

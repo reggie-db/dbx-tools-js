@@ -57,6 +57,20 @@ function shouldEmit(level: LogLevel): boolean {
   return LEVEL_RANK[level] >= LEVEL_RANK[activeLevel()];
 }
 
+const LOGGER_NAME_REGEX = /^(?:[a-z][a-z0-9+.-]*:\/\/)?.*\/([^/.]+)(?:\.[^/]+)?$/i;
+
+function extractLoggerName(
+  loggerName: NameLike | string | undefined,
+): string | undefined {
+  if (!loggerName) return undefined;
+  else if (typeof loggerName === "string") {
+    const match = loggerName.match(LOGGER_NAME_REGEX);
+    return match?.[1] ?? loggerName;
+  } else {
+    return extractLoggerName(loggerName?.name);
+  }
+}
+
 /**
  * Build a per-plugin logger that writes to `console` with an optional
  * `[plugin-name]` prefix derived from `plugin.name` or the string you pass in.
@@ -80,8 +94,8 @@ function shouldEmit(level: LogLevel): boolean {
  * }
  * ```
  */
-export function logger(plugin: NameLike | string | undefined): Logger {
-  const name = typeof plugin === "string" ? plugin : plugin?.name || undefined;
+export function logger(loggerName: NameLike | string | undefined): Logger {
+  const name = extractLoggerName(loggerName);
   function log(
     level: LogLevel,
     consoleFn: (...args: unknown[]) => void,

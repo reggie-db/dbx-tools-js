@@ -38,55 +38,50 @@ const Chat = () => {
     [api],
   );
 
-  const { messages, sendMessage, status, regenerate, addToolOutput } = useChat({
+  const { messages, sendMessage, status, regenerate } = useChat({
     transport,
   });
 
   /**
-   * Resolve an approval-gated tool call. AI SDK V5's
-   * `addToolOutput` resolves the suspended tool part client-side
-   * (sets `state: 'output-available'` / `'output-error'`) and
-   * triggers a follow-up turn where the model sees the result.
-   * Note: the server tool's `execute` body never runs because the
-   * output is provided manually here. For demos that need to
-   * simulate "send the email" behaviour, we log the would-be email
-   * to the browser console on approve.
+   * Resolve an approval-gated tool call.
+   *
+   * Mastra's `chatRoute()` paused the agent loop and emitted a
+   * `data-tool-call-approval` part carrying `runId` + `toolCallId`.
+   * To resume we POST back to the same chatRoute with
+   * `{ resumeData, runId }` in the body; chatRoute then calls
+   * `agent.resumeStream(resumeData)`, which wakes the suspended
+   * tool call with the user's decision and the agent loop
+   * continues. This is the canonical pattern from the Mastra UI
+   * Dojo (`mastra-ai/ui-dojo/.../tool-approval.tsx`).
+   *
+   * `addToolOutput` is intentionally NOT used: it short-circuits
+   * the suspension client-side without telling Mastra the
+   * decision, so the server's persisted workflow state would still
+   * show "awaiting approval" on the next turn / refresh.
    */
   const handleApproval = useCallback(
     async (decision: ApprovalDecision) => {
-      if (decision.approved) {
-        const input = decision.input as { to?: string };
-        log.info("approved", {
-          tool: decision.toolName,
-          toolCallId: decision.toolCallId,
-          input: decision.input,
-        });
-        await addToolOutput({
-          tool: decision.toolName as never,
-          toolCallId: decision.toolCallId,
-          // Output shape mirrors the server tool's `outputSchema`
-          // so the model sees the same record it would have if the
-          // server had executed the tool.
-          output: {
-            sent: true,
-            recipient: input.to ?? "",
-          } as never,
+      const { runId, toolCallId, toolName } = decision;
+      if (!runId) {
+        log.warn("approval missing runId, cannot resume", {
+          tool: toolName,
+          toolCallId,
         });
         return;
       }
-      log.info("denied", {
-        tool: decision.toolName,
-        toolCallId: decision.toolCallId,
-        reason: decision.reason,
+      const resumeData = decision.approved
+        ? { approved: true }
+        : { approved: false, reason: decision.reason };
+      log.info(decision.approved ? "approved" : "denied", {
+        tool: toolName,
+        toolCallId,
+        runId,
       });
-      await addToolOutput({
-        state: "output-error",
-        tool: decision.toolName as never,
-        toolCallId: decision.toolCallId,
-        errorText: decision.reason,
+      await sendMessage(undefined, {
+        body: { resumeData, runId },
       });
     },
-    [addToolOutput],
+    [sendMessage],
   );
 
   return (

@@ -4,7 +4,9 @@ import type { UIMessage } from "ai";
 import { logUtils } from "@dbx-tools/appkit-shared";
 import {
   ChatView,
+  type ApprovalDecision,
   type ChatStatus,
+  type PendingApproval,
   type ToolEvent,
   type ToolProgress,
 } from "@/components/chat-view";
@@ -24,6 +26,14 @@ const log = logUtils.logger("client/stream");
 // which pushes typed Mastra chunks (text-delta, reasoning-delta, etc.)
 // at us. We translate those into UIMessage parts so ChatView renders
 // identically to the useChat-backed page.
+//
+// Approval gates ride on the same channel: when the agent pauses on a
+// `requireApproval: true` tool call, Mastra emits a `tool-call-approval`
+// chunk carrying `{ runId, payload: { toolCallId, toolName, args } }`.
+// We surface that as an out-of-band entry in `pendingApprovalsByMessage`
+// (the same map ChatView already accepts), and wire `onResolveToolApproval`
+// to call `agent.approveToolCall` / `declineToolCall` - both return a
+// fresh stream Response we run through the same chunk handler.
 //
 // On mount we hydrate the transcript with the most recent page of
 // thread history fetched from the Mastra plugin's `/history` endpoint
@@ -90,6 +100,14 @@ const Stream = () => {
   const [toolEventsByMessage, setToolEventsByMessage] = useState<
     Record<string, ToolEvent[]>
   >({});
+  // Approval-gated tool calls keyed by assistant message. Populated
+  // from `tool-call-approval` chunks during streaming and consumed by
+  // ChatView's inline `ToolApprovalCard`. Each entry persists until
+  // the user approves/denies (or the tool run completes another way),
+  // at which point we drop the assistant key so the card disappears.
+  const [pendingApprovalsByMessage, setPendingApprovalsByMessage] = useState<
+    Record<string, PendingApproval[]>
+  >({});
   // We mirror `messages` into a ref so sendMessage / regenerate can read
   // the latest history without putting side effects (the agent.stream
   // call) inside a state updater. State updaters get invoked twice in
@@ -103,12 +121,36 @@ const Stream = () => {
     setMessages(next);
   }, []);
 
-  const runStream = useCallback(
-    async (history: UIMessage[]) => {
-      setStatus("submitted");
-      const assistantId = nanoid();
+  /**
+   * Pipe a Mastra stream Response through the same chunk handler used
+   * for the initial turn. `assistantId` identifies the in-progress
+   * assistant message so resumed streams (from approveToolCall /
+   * declineToolCall) keep mutating the same bubble instead of
+   * spawning a new one. `runId` is captured in a ref so the approval
+   * handler can later resume the suspended workflow.
+   */
+  const processStream = useCallback(
+    async (
+      stream: Awaited<
+        ReturnType<ReturnType<typeof mastraClient.getAgent>["stream"]>
+      >,
+      assistantId: string,
+      runIdRef: { current: string | null },
+    ) => {
+      // Replay carries forward whatever text / reasoning was already
+      // accumulated for `assistantId` so resuming after approval
+      // appends rather than overwrites.
+      const existing = messagesRef.current.find((m) => m.id === assistantId);
       let assistantText = "";
       let assistantReasoning = "";
+      if (existing) {
+        for (const part of existing.parts) {
+          if (part.type === "text") assistantText += part.text;
+          else if (part.type === "reasoning") {
+            assistantReasoning += (part as { text?: string }).text ?? "";
+          }
+        }
+      }
 
       const upsertAssistant = () => {
         const prev = messagesRef.current;
@@ -142,6 +184,163 @@ const Stream = () => {
         }));
       };
 
+      // Flip to "streaming" as soon as *any* visible signal lands
+      // (text, reasoning, or a tool call), so the input switch from
+      // "submitted" to "streaming" reflects real activity.
+      let started = false;
+      const markStreaming = () => {
+        if (started) return;
+        started = true;
+        setStatus("streaming");
+      };
+
+      await stream.processDataStream({
+        onChunk: async (chunk: { type: string; payload?: any; runId?: string }) => {
+          // Mastra stamps the stream's runId on most chunks. Capturing
+          // it the first time we see it (rather than relying on a
+          // separate API) keeps approve/decline calls correct even if
+          // the client-supplied runId got overridden server-side.
+          if (chunk.runId && !runIdRef.current) {
+            runIdRef.current = chunk.runId;
+          }
+          switch (chunk.type) {
+            case "text-delta":
+              assistantText += chunk.payload?.text ?? "";
+              upsertAssistant();
+              markStreaming();
+              break;
+            case "reasoning-delta":
+              assistantReasoning += chunk.payload?.text ?? "";
+              upsertAssistant();
+              markStreaming();
+              break;
+            case "tool-call": {
+              const { toolCallId, toolName } = chunk.payload ?? {};
+              if (typeof toolCallId !== "string") break;
+              patchToolEvents((list) => [
+                ...list,
+                { id: toolCallId, toolName, status: "running" },
+              ]);
+              // Make sure the assistant message exists in `messages`
+              // even when the model goes straight to a tool call with
+              // no preceding text, so the bubble (and its inline
+              // tool indicator) renders right away.
+              upsertAssistant();
+              markStreaming();
+              break;
+            }
+            case "tool-call-approval": {
+              // Mastra paused the agent loop on a `requireApproval`
+              // tool call. The chunk carries the runId we'll need to
+              // resume the suspended workflow later. We surface the
+              // approval card via `pendingApprovalsByMessage` so the
+              // existing ChatView UI lights up without us having to
+              // inject a synthetic data part.
+              const { toolCallId, toolName, args } = chunk.payload ?? {};
+              const approvalRunId = chunk.runId ?? runIdRef.current;
+              if (
+                typeof toolCallId !== "string" ||
+                typeof toolName !== "string" ||
+                !approvalRunId
+              ) {
+                log.warn("malformed tool-call-approval chunk", {
+                  toolCallId,
+                  toolName,
+                  hasRunId: Boolean(approvalRunId),
+                });
+                break;
+              }
+              setPendingApprovalsByMessage((prev) => {
+                const existing = prev[assistantId] ?? [];
+                if (existing.some((a) => a.toolCallId === toolCallId)) {
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  [assistantId]: [
+                    ...existing,
+                    {
+                      toolName,
+                      toolCallId,
+                      runId: approvalRunId,
+                      input: args,
+                    },
+                  ],
+                };
+              });
+              upsertAssistant();
+              markStreaming();
+              break;
+            }
+            case "tool-result": {
+              const toolCallId = chunk.payload?.toolCallId;
+              if (typeof toolCallId !== "string") break;
+              patchToolEvents((list) =>
+                list.map((e) =>
+                  e.id === toolCallId ? { ...e, status: "done" } : e,
+                ),
+              );
+              break;
+            }
+            case "tool-error": {
+              const toolCallId = chunk.payload?.toolCallId;
+              if (typeof toolCallId !== "string") break;
+              patchToolEvents((list) =>
+                list.map((e) =>
+                  e.id === toolCallId ? { ...e, status: "error" } : e,
+                ),
+              );
+              break;
+            }
+            case "tool-output": {
+              // Mid-flight progress pushed by a tool via `ctx.writer`
+              // (e.g. genie.ts forwarding `status`/`sql`/`data` events
+              // from the Genie space). Append to the matching pill so
+              // the user sees SQL/row info as soon as Genie publishes
+              // it, not only when the LLM call completes.
+              const { toolCallId, output } = chunk.payload ?? {};
+              if (typeof toolCallId !== "string") break;
+              if (!isToolProgress(output)) break;
+              patchToolEvents((list) =>
+                list.map((e) =>
+                  e.id === toolCallId
+                    ? { ...e, progress: [...(e.progress ?? []), output] }
+                    : e,
+                ),
+              );
+              break;
+            }
+            case "error":
+              setStatus("error");
+              break;
+            default:
+              break;
+          }
+        },
+      });
+    },
+    [writeMessages],
+  );
+
+  // The currently-active assistant turn. Refreshed on every fresh
+  // `runStream` and consumed by `handleApproval` so resumed streams
+  // attach back to the same bubble. Persists across renders because
+  // approvals can be resolved long after the originating render
+  // committed.
+  const currentAssistantIdRef = useRef<string | null>(null);
+  // Mastra runId for the active turn. Pre-seeded by `runStream`
+  // (client-supplied) and mutated in-place by `processStream` when
+  // chunks land. Read by `handleApproval` to call `approveToolCall`
+  // / `declineToolCall` against the right workflow instance.
+  const currentRunIdRef = useRef<string | null>(null);
+
+  const runStream = useCallback(
+    async (history: UIMessage[]) => {
+      setStatus("submitted");
+      const assistantId = nanoid();
+      const runId = nanoid();
+      currentAssistantIdRef.current = assistantId;
+      currentRunIdRef.current = runId;
       try {
         const agent = mastraClient.getAgent(defaultAgent);
         const messagesForAgent = history.flatMap((m) =>
@@ -149,89 +348,12 @@ const Stream = () => {
             .filter((p): p is { type: "text"; text: string } => p.type === "text")
             .map((p) => ({ role: m.role, content: p.text })),
         );
-
-        const stream = await agent.stream(messagesForAgent);
-
-        // Flip to "streaming" as soon as *any* visible signal lands
-        // (text, reasoning, or a tool call), so the input switch from
-        // "submitted" to "streaming" reflects real activity.
-        let started = false;
-        const markStreaming = () => {
-          if (started) return;
-          started = true;
-          setStatus("streaming");
-        };
-
-        await stream.processDataStream({
-          onChunk: async (chunk) => {
-            switch (chunk.type) {
-              case "text-delta":
-                assistantText += chunk.payload.text ?? "";
-                upsertAssistant();
-                markStreaming();
-                break;
-              case "reasoning-delta":
-                assistantReasoning += chunk.payload.text ?? "";
-                upsertAssistant();
-                markStreaming();
-                break;
-              case "tool-call": {
-                const { toolCallId, toolName } = chunk.payload;
-                patchToolEvents((list) => [
-                  ...list,
-                  { id: toolCallId, toolName, status: "running" },
-                ]);
-                // Make sure the assistant message exists in `messages`
-                // even when the model goes straight to a tool call with
-                // no preceding text, so the bubble (and its inline
-                // tool indicator) renders right away.
-                upsertAssistant();
-                markStreaming();
-                break;
-              }
-              case "tool-result": {
-                const { toolCallId } = chunk.payload;
-                patchToolEvents((list) =>
-                  list.map((e) =>
-                    e.id === toolCallId ? { ...e, status: "done" } : e,
-                  ),
-                );
-                break;
-              }
-              case "tool-error": {
-                const { toolCallId } = chunk.payload;
-                patchToolEvents((list) =>
-                  list.map((e) =>
-                    e.id === toolCallId ? { ...e, status: "error" } : e,
-                  ),
-                );
-                break;
-              }
-              case "tool-output": {
-                // Mid-flight progress pushed by a tool via `ctx.writer`
-                // (e.g. genie.ts forwarding `status`/`sql`/`data` events
-                // from the Genie space). Append to the matching pill so
-                // the user sees SQL/row info as soon as Genie publishes
-                // it, not only when the LLM call completes.
-                const { toolCallId, output } = chunk.payload;
-                if (!isToolProgress(output)) break;
-                patchToolEvents((list) =>
-                  list.map((e) =>
-                    e.id === toolCallId
-                      ? { ...e, progress: [...(e.progress ?? []), output] }
-                      : e,
-                  ),
-                );
-                break;
-              }
-              case "error":
-                setStatus("error");
-                break;
-              default:
-                break;
-            }
-          },
-        });
+        // Pre-seed the runId so chatRoute / approveToolCall stay
+        // anchored to the same workflow even if the first chunk is
+        // delayed. Server is authoritative; if it overrides we'll
+        // pick that up via `runIdRef` inside `processStream`.
+        const stream = await agent.stream(messagesForAgent, { runId });
+        await processStream(stream, assistantId, currentRunIdRef);
         setStatus("ready");
       } catch (error) {
         log.error("stream error", {
@@ -240,7 +362,62 @@ const Stream = () => {
         setStatus("error");
       }
     },
-    [writeMessages, mastraClient, defaultAgent],
+    [mastraClient, defaultAgent, processStream],
+  );
+
+  /**
+   * Approve or deny an in-flight `requireApproval` tool call. The
+   * suspended workflow lives on the server keyed by `runId`; we
+   * call `agent.approveToolCall` / `declineToolCall` to resume it
+   * and pipe the resulting chunk stream back into the same bubble
+   * `runStream` was building.
+   */
+  const handleApproval = useCallback(
+    async (decision: ApprovalDecision) => {
+      const { runId, toolCallId, toolName } = decision;
+      const assistantId = currentAssistantIdRef.current;
+      if (!runId || !assistantId) {
+        log.warn("approval missing runId or assistantId, cannot resume", {
+          tool: toolName,
+          toolCallId,
+          hasRunId: Boolean(runId),
+          hasAssistantId: Boolean(assistantId),
+        });
+        return;
+      }
+      // Drop the card immediately so the user gets feedback even if
+      // the resume request takes a moment.
+      setPendingApprovalsByMessage((prev) => {
+        const existing = prev[assistantId];
+        if (!existing) return prev;
+        const next = existing.filter((a) => a.toolCallId !== toolCallId);
+        if (next.length === 0) {
+          const { [assistantId]: _drop, ...rest } = prev;
+          return rest;
+        }
+        return { ...prev, [assistantId]: next };
+      });
+      log.info(decision.approved ? "approved" : "denied", {
+        tool: toolName,
+        toolCallId,
+        runId,
+      });
+      setStatus("submitted");
+      try {
+        const agent = mastraClient.getAgent(defaultAgent);
+        const stream = decision.approved
+          ? await agent.approveToolCall({ runId, toolCallId })
+          : await agent.declineToolCall({ runId, toolCallId });
+        await processStream(stream, assistantId, currentRunIdRef);
+        setStatus("ready");
+      } catch (error) {
+        log.error("approval resume error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setStatus("error");
+      }
+    },
+    [mastraClient, defaultAgent, processStream],
   );
 
   const sendMessage = useCallback<React.ComponentProps<typeof ChatView>["sendMessage"]>(
@@ -259,15 +436,19 @@ const Stream = () => {
     if (!lastUserTextRef.current) return;
     // Drop the last assistant message before regenerating so the new
     // stream replaces it instead of appending alongside. Clear the
-    // tool events for that turn too so the regenerated bubble starts
-    // with a blank slate.
+    // tool events and pending approvals for that turn too so the
+    // regenerated bubble starts with a blank slate.
     const prev = messagesRef.current;
     const lastAssistant =
       prev.length > 0 && prev.at(-1)?.role === "assistant" ? prev.at(-1) : null;
     const trimmed = lastAssistant ? prev.slice(0, -1) : prev;
     if (lastAssistant) {
       setToolEventsByMessage((map) => {
-        const { [lastAssistant.id]: _, ...rest } = map;
+        const { [lastAssistant.id]: _events, ...rest } = map;
+        return rest;
+      });
+      setPendingApprovalsByMessage((map) => {
+        const { [lastAssistant.id]: _approvals, ...rest } = map;
         return rest;
       });
     }
@@ -384,6 +565,8 @@ const Stream = () => {
       sendMessage={sendMessage}
       regenerate={regenerate}
       toolEventsByMessage={toolEventsByMessage}
+      pendingApprovalsByMessage={pendingApprovalsByMessage}
+      onResolveToolApproval={handleApproval}
       models={models}
       model={model}
       onModelChange={setModel}

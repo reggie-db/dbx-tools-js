@@ -66,9 +66,7 @@ export function memoize<TArgs extends readonly unknown[], TReturn>(
       return syncCache.get(key)!;
     }
 
-    const result = (fn as (...args: TArgs) => TReturn | PromiseLike<TReturn>)(
-      ...args,
-    );
+    const result = (fn as (...args: TArgs) => TReturn | PromiseLike<TReturn>)(...args);
     if (isThenable(result)) {
       const pending = Promise.resolve(result);
       asyncCache.set(key, pending);
@@ -171,4 +169,34 @@ export function toBase32(
     value >>>= 5;
   }
   return result;
+}
+
+export function isDatabricksAppEnv(env?: Record<string, string | undefined>): boolean {
+  env ??= typeof process !== "undefined" && process.env ? process.env : undefined;
+  if (!env) {
+    return false;
+  }
+  const appName = env.DATABRICKS_APP_NAME?.trim();
+  const host = env.DATABRICKS_HOST?.trim();
+  const port = env.DATABRICKS_APP_PORT?.trim();
+
+  if (!appName || !host || !port) {
+    return false;
+  }
+
+  try {
+    const url = new URL(host);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  const portNumber = Number(port);
+  if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+    return false;
+  }
+
+  return true;
 }

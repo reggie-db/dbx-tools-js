@@ -1,0 +1,21 @@
+{
+  "name": "@dbx-tools/appkit-phoenix",
+  "version": "0.1.13",
+  "module": "index.ts",
+  "type": "module",
+  "dependencies": {
+    "@dbx-tools/appkit-shared": "workspace:*",
+    "proper-lockfile": "^4.1.2",
+    "which": "^7.0.0"
+  },
+  "peerDependencies": {
+    "@databricks/appkit": "catalog:",
+    "@types/which": "catalog:",
+    "express": "catalog:"
+  },
+  "devDependencies": {
+    "@types/express": "catalog:",
+    "@types/proper-lockfile": "^4.1.4",
+    "express": "catalog:"
+  }
+}

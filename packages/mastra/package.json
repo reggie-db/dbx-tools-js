@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "module": "index.ts",
   "dependencies": {
@@ -11,6 +11,8 @@
     "@mastra/express": "^1.3",
     "@mastra/fastembed": "^1.0",
     "@mastra/memory": "^1.17",
+    "@mastra/observability": "^0.0.0-graph-crash-v3-20260528202217",
+    "@mastra/otel-exporter": "^0.0.0-graph-crash-v3-20260528202217",
     "@mastra/pg": "^1.10",
     "fuse.js": "^7.0.0",
     "zod": "catalog:"

@@ -14,6 +14,14 @@
  *   index is almost always what users want; opt into per-agent recall
  *   by passing a {@link MastraMemoryConfigOverride} on the agent.
  *
+ * Additionally, {@link MemoryBuilder.instanceStorage} returns a
+ * **Mastra-instance-level** `PostgresStore` (schema `mastra_instance`)
+ * used for workflow snapshots - the persistence layer
+ * `agent.resumeStream()` reads from when waking a suspended
+ * `requireApproval` tool call. Per-agent stores are not enough for
+ * this: workflow runs are scoped to the Mastra instance, not an
+ * individual agent's `Memory`.
+ *
  * Plugin-level `config.storage` / `config.memory` act as the baseline
  * (auto-defaulted to `true` in `plugin.ts` when the `lakebase` plugin
  * is registered); per-agent settings cascade on top of that.
@@ -105,6 +113,34 @@ export class MemoryBuilder {
    * vector store enabled - Mastra accepts a missing `memory` field
    * and treats the agent as stateless.
    */
+  /**
+   * Build the Mastra-instance-level storage used for workflow
+   * snapshots. Returns `undefined` when plugin-level `storage` is
+   * disabled, in which case `agent.resumeStream()` (and therefore
+   * the `requireApproval` flow) will not be available.
+   *
+   * The store lives in a dedicated `mastra_instance` schema so it
+   * never collides with per-agent `mastra_<agentId>` namespaces.
+   * Workflow snapshots are not per-agent state; they belong to the
+   * `Mastra` instance that owns the workflow execution.
+   */
+  instanceStorage(): PostgresStore | undefined {
+    const setting = this.config.storage;
+    if (!setting) return undefined;
+    if (typeof setting === "object") {
+      return new PostgresStore(
+        withId(setting, "mastra-store__instance") as ConstructorParameters<
+          typeof PostgresStore
+        >[0],
+      );
+    }
+    return new PostgresStore({
+      id: "mastra-store__instance",
+      schemaName: "mastra_instance",
+      pool: this.requirePool() as Pool,
+    });
+  }
+
   forAgent(agentId: string, def: MastraAgentDefinition): Memory | undefined {
     const storageSetting = def.storage ?? this.config.storage;
     const memorySetting = def.memory ?? this.config.memory;

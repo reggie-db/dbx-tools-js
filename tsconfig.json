@@ -14,6 +14,9 @@
       "path": "./packages/mastra/tsconfig.build.json"
     },
     {
+      "path": "./packages/phoenix/tsconfig.build.json"
+    },
+    {
       "path": "./packages/serving/tsconfig.build.json"
     },
     {

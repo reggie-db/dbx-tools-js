@@ -12,6 +12,7 @@
     "@types/express": "^5",
     "@types/bun": "latest",
     "@types/node": "latest",
+    "@types/which": "latest",
     "express": "^5",
     "zod": "^4.3.6"
   },
@@ -46,5 +47,8 @@
   },
   "overrides": {
     "zod": "4.3.6"
+  },
+  "dependencies": {
+    "http-proxy-middleware": "^4.0.0"
   }
 }

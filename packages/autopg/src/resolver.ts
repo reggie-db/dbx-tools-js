@@ -289,7 +289,7 @@ export async function resolveConnection(
         log,
       );
       host = ep.status?.hosts?.host;
-      log.info("autopg: resolved host from endpoint", { host });
+      log.debug("autopg: resolved host from endpoint", { host });
     }
   }
 
@@ -456,7 +456,7 @@ async function findEndpointByHost(
       const endpoints = await listEndpoints(ws, projectId, branchId);
       const match = endpoints.find((e) => e.status?.hosts?.host === host);
       if (match?.name) {
-        log.info("autopg: matched endpoint by host", {
+        log.debug("autopg: matched endpoint by host", {
           host,
           endpoint: match.name,
         });
@@ -492,7 +492,7 @@ async function pickOrCreateProject(
   if (projects.length === 1) {
     const id = projectIdFromName(projects[0]!.name);
     if (id) {
-      log.info("autopg: using only project", { project: id });
+      log.debug("autopg: using only project", { project: id });
       return id;
     }
   }
@@ -697,7 +697,7 @@ async function pickBranch(
       `autopg: project '${project}' has multiple branches and none marked default; set LAKEBASE_BRANCH or config.branch. Candidates: ${candidates}`,
     );
   }
-  log.info("autopg: resolved branch", { project, branch: choice });
+  log.debug("autopg: resolved branch", { project, branch: choice });
   return choice;
 }
 
@@ -730,7 +730,7 @@ async function pickEndpoint(
     );
   }
   const host = primary.status?.hosts?.host;
-  log.info("autopg: resolved endpoint", { endpoint: primary.name, host });
+  log.debug("autopg: resolved endpoint", { endpoint: primary.name, host });
   return { name: primary.name, host };
 }
 
@@ -766,6 +766,6 @@ async function pickDatabase(
       `autopg: multiple databases and no 'databricks_postgres'; set PGDATABASE or config.database. Candidates: ${names.join(", ")}`,
     );
   }
-  log.info("autopg: resolved database", { database: choice });
+  log.debug("autopg: resolved database", { database: choice });
   return choice;
 }
