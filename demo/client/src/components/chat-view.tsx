@@ -1048,17 +1048,27 @@ type EmailInput = {
 
 /**
  * Pull every approval-pending tool-invocation part out of an
- * assistant message. AI SDK V5 represents a tool call paused on
- * approval as a `tool-${name}` part with `state: 'input-available'`
- * and no `output` yet. We additionally filter by
- * {@link APPROVAL_GATED_TOOLS} so plain "tool is running right now"
- * states don't render an approval card.
+ * assistant message. Two states matter, depending on transport:
+ *
+ * - `state: 'approval-requested'` is what mastra/ai-sdk emits live
+ *   while the agent loop is paused on a `requireApproval` tool call.
+ *   The part also carries `approval: { id }` referencing the server
+ *   suspension id. This is the in-stream case.
+ * - `state: 'input-available'` is what `toAISdkV5Messages` reshapes
+ *   a stored, still-pending approval into when history loads on
+ *   page refresh - same paused tool call, just rehydrated through
+ *   the v5-compatible converter.
+ *
+ * We treat both as "approval pending" so the card renders in both
+ * paths, and additionally filter by {@link APPROVAL_GATED_TOOLS} so
+ * plain "tool is running right now" states don't render a card.
  */
 type PendingApproval = {
   toolName: string;
   toolCallId: string;
   input: unknown;
 };
+const APPROVAL_PENDING_STATES = new Set(["approval-requested", "input-available"]);
 const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] => {
   const out: PendingApproval[] = [];
   for (const part of parts ?? []) {
@@ -1072,7 +1082,7 @@ const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] =
     }
     if (!toolName || !APPROVAL_GATED_TOOLS.has(toolName)) continue;
     const state = (part as { state?: unknown }).state;
-    if (state !== "input-available") continue;
+    if (typeof state !== "string" || !APPROVAL_PENDING_STATES.has(state)) continue;
     const toolCallId = (part as { toolCallId?: unknown }).toolCallId;
     if (typeof toolCallId !== "string") continue;
     const input = (part as { input?: unknown }).input;
