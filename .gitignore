@@ -5,9 +5,12 @@ dist
 client/dist
 tmp
 
-# Staging directory built by scripts/publish.ts when packing each
-# workspace package for npm. Always recreated, always cleaned up.
-.npm-publish
+# Per-package staging directory built by scripts/publish.ts when
+# packing each workspace package for npm. Holds the merged
+# (default + own + enforced) package.json plus copies of the files
+# matched by the publish-time `files` glob. Always recreated, always
+# cleaned up; never commit it.
+.publish
 
 # bun.lock is uncommitted because it bakes in the registry URLs of whoever
 # ran `bun install` (e.g. a corporate npm proxy), which we don't want

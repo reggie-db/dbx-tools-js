@@ -19,11 +19,13 @@
     "pretypecheck": "bun run scripts/pretypecheck.ts",
     "typecheck": "bunx --bun tsc --noEmit",
     "clean": "bun scripts/clean.ts",
+    "prebuild": "bun run typecheck",
     "build": "bun scripts/build.ts",
-    "create": "bun scripts/create-package.ts",
+    "create": "bun scripts/create.ts",
     "version": "bunx --bun changeset version",
+    "prerelease": "bun run build",
+    "release": "bun scripts/release.ts",
     "tag": "bun scripts/tag.ts",
-    "release": "bun scripts/build.ts && bun scripts/publish.ts",
     "dev": "bun --elide-lines=0 run --filter '@dbx-tools/appkit-demo' dev"
   },
   "peerDependencies": {

@@ -8,8 +8,5 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/reggie-db/dbx-tools-appkit.git"
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }
