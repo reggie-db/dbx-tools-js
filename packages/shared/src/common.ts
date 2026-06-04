@@ -14,27 +14,36 @@ export interface MemoizeOptions<TArgs extends readonly unknown[]> {
  * Run a zero-argument factory once; later calls return the same result.
  *
  * Concurrent callers share one in-flight promise until the factory settles.
+ * Thenable returns (anything with a `.then` method) are accepted; the
+ * cached value is always a native `Promise<T>` because we route through
+ * `Promise.resolve().then(factory)`.
  */
-export function memoize<T>(factory: () => T | Promise<T>): () => Promise<T>;
+export function memoize<T>(factory: () => T | PromiseLike<T>): () => Promise<T>;
 
 /**
- * Memoize by call arguments. Sync `fn` returns values directly; if `fn` is
- * async (or returns a promise), concurrent calls for the same key share one
- * in-flight promise.
+ * Memoize by call arguments. Sync `fn` returns values directly; if `fn`
+ * returns a thenable (`Promise` or any object with a `.then` method),
+ * concurrent calls for the same key share one in-flight promise.
+ *
+ * Input is `T | PromiseLike<T>` so foreign thenables (e.g. third-party
+ * promise libraries, hand-rolled `{ then }` shims) are accepted; the
+ * async branch wraps them with `Promise.resolve(...)` so the cached
+ * entry is always a native `Promise<T>` even when the caller hands us a
+ * non-spec-compliant thenable.
  */
 export function memoize<TArgs extends readonly unknown[], TReturn>(
-  fn: (...args: TArgs) => TReturn | Promise<TReturn>,
+  fn: (...args: TArgs) => TReturn | PromiseLike<TReturn>,
   options?: MemoizeOptions<TArgs>,
 ): (...args: TArgs) => TReturn | Promise<TReturn>;
 
 export function memoize<TArgs extends readonly unknown[], TReturn>(
   fn:
-    | ((...args: TArgs) => TReturn | Promise<TReturn>)
-    | (() => TReturn | Promise<TReturn>),
+    | ((...args: TArgs) => TReturn | PromiseLike<TReturn>)
+    | (() => TReturn | PromiseLike<TReturn>),
   options?: MemoizeOptions<TArgs>,
 ): ((...args: TArgs) => TReturn | Promise<TReturn>) | (() => Promise<TReturn>) {
   if (fn.length === 0) {
-    const factory = fn as () => TReturn | Promise<TReturn>;
+    const factory = fn as () => TReturn | PromiseLike<TReturn>;
     let cache: Promise<TReturn> | undefined;
     return () => {
       if (cache === undefined) {
@@ -57,8 +66,10 @@ export function memoize<TArgs extends readonly unknown[], TReturn>(
       return syncCache.get(key)!;
     }
 
-    const result = (fn as (...args: TArgs) => TReturn | Promise<TReturn>)(...args);
-    if (isPromise(result)) {
+    const result = (fn as (...args: TArgs) => TReturn | PromiseLike<TReturn>)(
+      ...args,
+    );
+    if (isThenable(result)) {
       const pending = Promise.resolve(result);
       asyncCache.set(key, pending);
       void pending.catch(() => {
@@ -94,12 +105,12 @@ function defaultMemoizeKey<TArgs extends readonly unknown[]>(...args: TArgs): st
   return JSON.stringify(args);
 }
 
-function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
+function isThenable<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
   return (
     value !== null &&
     typeof value === "object" &&
     "then" in value &&
-    typeof (value as Promise<T>).then === "function"
+    typeof (value as PromiseLike<T>).then === "function"
   );
 }
 

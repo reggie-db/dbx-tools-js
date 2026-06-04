@@ -7,27 +7,23 @@
 // Run from the monorepo root via `bun run clean`.
 
 import { rmSync } from "node:fs";
-import { globSync } from "tinyglobby";
-import { ROOT } from "./util.js";
+import { dirname, resolve } from "node:path";
+import { discoverPackageJsons, ROOT } from "./util.js";
 
-const targets = globSync(
-  ["**/node_modules", "bun.lock", "bun.lockb"],
-  {
-    cwd: ROOT,
-    absolute: true,
-    onlyFiles: false,
-    // Don't recurse into node_modules looking for nested node_modules
-    // dirs; the outer match captures the whole tree to delete.
-    ignore: ["**/node_modules/**/node_modules"],
-  },
-);
-
-if (targets.length === 0) {
-  console.log("Nothing to clean.");
-  process.exit(0);
+const targets: string[] = [];
+for await (const jsonPath of discoverPackageJsons(true)) {
+  targets.push(resolve(dirname(jsonPath), "node_modules"));
+}
+for (const lockfile of ["bun.lock", "bun.lockb"]) {
+  targets.push(resolve(ROOT, lockfile));
 }
 
+let removed = 0;
 for (const target of targets) {
+  if (!(await Bun.file(target).exists())) continue;
   rmSync(target, { recursive: true, force: true });
   console.log(`Removed ${target}`);
+  removed++;
 }
+
+if (removed === 0) console.log("Nothing to clean.");

@@ -22,13 +22,12 @@
 
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import type { PackageJson } from "./util.js";
 import {
   discoverPackages,
   fail,
-  readJson,
   ROOT,
   run,
+  type PackageJson,
   type WorkspacePackage,
 } from "./util.js";
 
@@ -46,7 +45,7 @@ interface RootPackageJson extends PackageJson {
   catalogs?: Record<string, Record<string, string>>;
 }
 
-const rootMeta = readJson<RootPackageJson>(resolve(ROOT, "package.json"));
+const rootMeta = (await Bun.file(resolve(ROOT, "package.json")).json()) as RootPackageJson;
 const DEFAULT_CATALOG = rootMeta.catalog ?? {};
 const NAMED_CATALOGS = rootMeta.catalogs ?? {};
 
@@ -216,8 +215,8 @@ function augment(
  * registry. Lets us skip re-publishing during a re-run instead of
  * tripping over npm's `EPUBLISHCONFLICT`.
  */
-function isAlreadyPublished(name: string, version: string): boolean {
-  const out = run("npm", ["view", `${name}@${version}`, "version"], {
+async function isAlreadyPublished(name: string, version: string): Promise<boolean> {
+  const out = await run("npm", ["view", `${name}@${version}`, "version"], {
     capture: true,
     check: false,
   });
@@ -257,21 +256,25 @@ function stagePackage(
  * true, run `npm pack --dry-run` instead so we exercise tarball
  * assembly and print the file list without touching the registry.
  */
-function publishStaged(pkg: WorkspacePackage, stageDir: string, dryRun: boolean): void {
+async function publishStaged(
+  pkg: WorkspacePackage,
+  stageDir: string,
+  dryRun: boolean,
+): Promise<void> {
   if (dryRun) {
-    run("npm", ["pack", "--dry-run"], { cwd: stageDir });
+    await run("npm", ["pack", "--dry-run"], { cwd: stageDir });
     console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
     return;
   }
   // Provenance only works in CI with `id-token: write`. The workflow
   // sets `NPM_CONFIG_PROVENANCE=true` to opt in; locally we don't
   // pass it so devs can dry-run without OIDC.
-  run("npm", ["publish", "--access=public"], { cwd: stageDir });
+  await run("npm", ["publish", "--access=public"], { cwd: stageDir });
   console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
 }
 
 const dryRun = process.argv.slice(2).includes("--dry-run");
-const packages = discoverPackages();
+const packages = await discoverPackages();
 console.log(
   `${dryRun ? "Dry-run packing" : "Publishing"} ${packages.length} package(s):`,
 );
@@ -294,14 +297,14 @@ for (const pkg of packages) {
   }
   // Skip the registry check during dry-run so devs can pack-test
   // versions that are already published.
-  if (!dryRun && isAlreadyPublished(name, version)) {
+  if (!dryRun && (await isAlreadyPublished(name, version))) {
     console.log(`- skipping ${name}@${version}: already on registry`);
     continue;
   }
 
   const { stageDir } = stagePackage(pkg, workspaceVersions);
   try {
-    publishStaged(pkg, stageDir, dryRun);
+    await publishStaged(pkg, stageDir, dryRun);
   } catch (err) {
     failures++;
     console.error(`✗ publish failed for ${name}@${version}: ${(err as Error).message}`);

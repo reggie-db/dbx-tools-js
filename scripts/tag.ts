@@ -36,7 +36,7 @@
 //   `Release v<version>` message - no failure.
 
 import semver from "semver";
-import { aiQuery, discoverPackages, fail, readJson, run, writeJson } from "./util.js";
+import { aiQuery, discoverPackages, fail, run, writeJson } from "./util.js";
 
 type Bump = "major" | "minor" | "patch";
 
@@ -69,7 +69,9 @@ function parseArgs(argv: string[]): CliArgs {
       bumpSeen = true;
       continue;
     }
-    fail(`Unknown argument: ${arg}. Expected one of: patch | minor | major | --dry-run`);
+    fail(
+      `Unknown argument: ${arg}. Expected one of: patch | minor | major | --dry-run`,
+    );
   }
   return { bump, dryRun };
 }
@@ -79,8 +81,13 @@ function parseArgs(argv: string[]): CliArgs {
  * version (the changesets `fixed` policy). Returns the shared version
  * and the package list.
  */
-function findPublishables(): { version: string; pkgs: { name: string; jsonPath: string }[] } {
-  const all = discoverPackages().filter((pkg) => pkg.meta.name && pkg.meta.version);
+async function findPublishables(): Promise<{
+  version: string;
+  pkgs: { name: string; jsonPath: string }[];
+}> {
+  const all = (await discoverPackages()).filter(
+    (pkg) => pkg.meta.name && pkg.meta.version,
+  );
   if (all.length === 0) fail("No publishable packages found under packages/");
 
   const versions = new Set(all.map((p) => p.meta.version!));
@@ -98,10 +105,10 @@ function findPublishables(): { version: string; pkgs: { name: string; jsonPath: 
 }
 
 /** Mutate just the `version` field of a package.json on disk. */
-function writeVersion(jsonPath: string, nextVersion: string): void {
-  const meta = readJson<Record<string, unknown>>(jsonPath);
+async function writeVersion(jsonPath: string, nextVersion: string): Promise<void> {
+  const meta = (await Bun.file(jsonPath).json()) as Record<string, unknown>;
   meta.version = nextVersion;
-  writeJson(jsonPath, meta);
+  await writeJson(jsonPath, meta);
 }
 
 /** Context passed to the `releaseNotes()` hook. */
@@ -149,9 +156,7 @@ async function buildReleaseNotesContext(
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
-  const diffStat = range
-    ? await git(["diff", "--stat", range], { capture: true })
-    : "";
+  const diffStat = range ? await git(["diff", "--stat", range], { capture: true }) : "";
 
   const prompt = [
     `Write release notes for ${nextTag}.`,
@@ -182,9 +187,10 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
 
 const { bump, dryRun } = parseArgs(process.argv.slice(2));
 
-const { version: currentVersion, pkgs } = findPublishables();
+const { version: currentVersion, pkgs } = await findPublishables();
 const nextVersion = semver.inc(currentVersion, bump);
-if (!nextVersion) fail(`Cannot ${bump}-bump version "${currentVersion}" (semver.inc returned null)`);
+if (!nextVersion)
+  fail(`Cannot ${bump}-bump version "${currentVersion}" (semver.inc returned null)`);
 const tag = `v${nextVersion}`;
 
 // The script is permissive about local state: dirty files get folded
@@ -199,21 +205,31 @@ if (!dryRun) {
     { capture: true, check: false },
   );
   if (!upstream) {
-    fail(`Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`);
+    fail(
+      `Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`,
+    );
   }
   ahead = await git(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
 }
 
-if (await git(["rev-parse", "--verify", `refs/tags/${tag}`], { capture: true, check: false })) {
+if (
+  await git(["rev-parse", "--verify", `refs/tags/${tag}`], {
+    capture: true,
+    check: false,
+  })
+) {
   fail(`Tag ${tag} already exists locally. Pick a different bump.`);
 }
 
-if (await git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { capture: true })) {
+if (
+  await git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { capture: true })
+) {
   fail(`Tag ${tag} already exists on origin. Pick a different bump.`);
 }
 
 const prevTag =
-  (await git(["describe", "--tags", "--abbrev=0"], { capture: true, check: false })) || null;
+  (await git(["describe", "--tags", "--abbrev=0"], { capture: true, check: false })) ||
+  null;
 
 console.log(`Bump:    ${bump}`);
 console.log(`Current: ${currentVersion}`);
@@ -254,7 +270,7 @@ if (dryRun) {
 }
 
 console.log(`Writing ${nextVersion} to ${pkgs.length} package.json file(s)...`);
-for (const p of pkgs) writeVersion(p.jsonPath, nextVersion);
+for (const p of pkgs) await writeVersion(p.jsonPath, nextVersion);
 
 console.log(`Committing release ${tag}...`);
 await git(["add", "-A"]);
@@ -272,4 +288,6 @@ await git(["push", "origin", tag]);
 console.log();
 console.log(`✓ Released ${tag}.`);
 console.log("  The Release workflow will fire on the tag push:");
-console.log("  https://github.com/reggie-db/dbx-tools-appkit/actions/workflows/release.yml");
+console.log(
+  "  https://github.com/reggie-db/dbx-tools-appkit/actions/workflows/release.yml",
+);

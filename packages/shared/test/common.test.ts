@@ -134,16 +134,18 @@ describe("memoize (by args)", () => {
     let runs = 0;
     const fn = memoize((id: string) => {
       runs += 1;
-      return {
+      // Intentionally non-spec-compliant thenable (single-arg `then`,
+      // returns void) cast to `PromiseLike<string>` so we can prove
+      // `isThenable` duck-types purely on the `.then` method and routes
+      // through `Promise.resolve(...)` regardless of shape.
+      const thenable = {
         then(onFulfilled: (value: string) => void) {
           onFulfilled(id);
         },
-      };
+      } as unknown as PromiseLike<string>;
+      return thenable;
     });
-    const [a, b] = await Promise.all([
-      Promise.resolve(fn("t")),
-      Promise.resolve(fn("t")),
-    ]);
+    const [a, b] = await Promise.all([fn("t"), fn("t")]);
     expect(runs).toBe(1);
     expect(a).toBe("t");
     expect(b).toBe("t");

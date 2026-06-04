@@ -1,3 +1,13 @@
 {
-  "extends": "../../tsconfig.build.json"
+  "extends": "../../tsconfig.build.json",
+  // Override the inherited `include` to add `index.client.ts`, the
+  // browser-safe entry point referenced from `index.ts` and exposed
+  // separately via this package's `exports.<entry>.browser` map.
+  // `composite: true` (set on the parent build config) requires every
+  // file in the program to be listed by `files` or `include`.
+  "include": [
+    "${configDir}/index.ts",
+    "${configDir}/index.client.ts",
+    "${configDir}/src"
+  ]
 }

@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "checkJs": true,
-    "types": ["node"],
-    "module": "NodeNext"
+    "module": "NodeNext",
+    "types": ["node", "bun"]
   },
   "include": ["**/*.ts", "**/*.js"]
 }

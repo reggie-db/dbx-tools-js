@@ -2,45 +2,44 @@
 // duplicated across more than one script lives here.
 //
 // Conventions:
-//   - `ROOT` is the monorepo root; `PACKAGES_DIR` is `<root>/packages`.
+//   - `ROOT` is the monorepo root.
 //   - `discoverPackages()` is the single source of truth for "what's a
-//     workspace package?" - every script that walks `packages/` goes
-//     through it instead of re-implementing the readdir + filter loop.
-//   - JSON read/write helpers preserve the trailing newline so we don't
-//     trigger spurious diffs against `prettier --write`.
-//   - `run(...)` wraps `execa.execaSync` for one-shot subprocess calls
-//     (git, bunx, tsc) with consistent error handling.
+//     workspace package?" - every script that walks the workspace goes
+//     through it (or its lower-level sibling `discoverPackageJsons()`)
+//     instead of re-implementing the readdir + filter loop.
+//   - File I/O goes through `Bun.file` / `Bun.write` so we lean on
+//     Bun's built-in primitives instead of pulling in `node:fs` for
+//     every read.
+//   - `writeJson()` preserves the trailing newline of the original
+//     file so we don't trigger spurious diffs against `prettier
+//     --write`.
+//   - `run(...)` is a thin async wrapper over `Bun.spawn` for one-shot
+//     subprocess calls (git, npm, tsc, ...) with consistent error
+//     handling. We use Bun's built-in spawner directly because every
+//     script in this directory runs under `bun`, so reaching for
+//     `execa` / `node:child_process` would just add a dependency for
+//     no benefit.
 //   - `aiQuery()` keeps the Databricks model-serving wiring in one
 //     place so any script that wants an LLM summary just calls it.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-import {
-  execa,
-  execaSync,
-  Options,
-  Result,
-  type SyncOptions,
-  type SyncResult,
-} from "execa";
-import pMemoize from "p-memoize";
 import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
-import which from "which";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
+import pMemoize from "p-memoize";
 
 export const ROOT = resolve(import.meta.dirname, "..");
-export const PACKAGES_DIR = resolve(ROOT, "packages");
 
 /** Minimal package.json shape we care about across scripts. */
 export interface PackageJson {
   name?: string;
   version?: string;
   private?: boolean;
+  workspaces?: string[];
   [key: string]: unknown;
 }
 
 /** A workspace package discovered under `packages/`. */
 export interface WorkspacePackage {
-  /** Directory name under `packages/` (e.g. `"autopg"`). */
+  /** Path of the package directory relative to ROOT (e.g. `"packages/autopg"`). */
   slug: string;
   /** Absolute path to the package directory. */
   dir: string;
@@ -50,33 +49,79 @@ export interface WorkspacePackage {
   meta: PackageJson;
 }
 
+export function toAbsolute(path: string): string {
+  return isAbsolute(path) ? path : resolve(ROOT, path);
+}
+
+export function toRelative(path: string): string {
+  const rel = relative(ROOT, path);
+  return rel !== "" &&
+    !rel.startsWith("..") &&
+    !rel.startsWith("/") &&
+    !rel.startsWith("\\")
+    ? rel
+    : resolve(path);
+}
+
 /**
- * Walk `packages/*`, parse each `package.json`, and return the ones
- * that pass `filter`. The default filter keeps every package that
- * isn't marked `"private": true`.
+ * Yield the absolute path of every workspace `package.json` listed in
+ * the root manifest's `workspaces` field. Lower-level than
+ * `discoverPackages()`; use this when you only need the paths (e.g.
+ * `clean.ts` deleting each workspace's `node_modules`) and want to
+ * include private workspaces (`includeRoot` adds the root package
+ * itself).
+ */
+export async function* discoverPackageJsons(
+  includeRoot = false,
+): AsyncIterableIterator<string> {
+  const rootJson = resolve(ROOT, "package.json");
+  if (includeRoot) yield rootJson;
+  const { workspaces = [] } = (await Bun.file(rootJson).json()) as PackageJson;
+  for (const ws of workspaces) {
+    yield* new Bun.Glob(`${ws}/package.json`).scan({ cwd: ROOT, absolute: true });
+  }
+}
+
+export async function* discoverTsconfigs(
+  includeRoot = false,
+): AsyncIterableIterator<string> {
+  for await (const pjson of discoverPackageJsons(includeRoot)) {
+    const dir = dirname(pjson);
+    for (const globPattern of ["tsconfig.json", "tsconfig.build.json"]) {
+      const glob = new Bun.Glob(globPattern);
+      const tsconfigs = glob.scan({ cwd: dir, absolute: true });
+      for await (const tsconfig of tsconfigs) {
+        yield tsconfig;
+      }
+    }
+  }
+}
+
+/**
+ * Walk every workspace package, parse each `package.json`, and return
+ * the ones that pass `filter`. The default filter keeps every package
+ * that isn't marked `"private": true`.
  *
  * Scripts that need extra criteria (e.g. "must have a
  * `tsconfig.build.json`") pass a custom `filter`.
  */
-export function discoverPackages(
+export async function discoverPackages(
   filter: (pkg: WorkspacePackage) => boolean = (pkg) => pkg.meta.private !== true,
-): WorkspacePackage[] {
-  const { globSync } = require("tinyglobby") as typeof import("tinyglobby");
-  const jsonPaths = globSync("packages/*/package.json", { cwd: ROOT, absolute: true });
-  return jsonPaths
-    .map((jsonPath) => {
-      const dir = resolve(jsonPath, "..");
-      const slug = dir.slice(PACKAGES_DIR.length + 1);
-      const meta = readJson<PackageJson>(jsonPath);
-      return { slug, dir, jsonPath, meta };
-    })
-    .filter(filter)
-    .sort((a, b) => a.slug.localeCompare(b.slug));
-}
-
-/** Parse a JSON file. Throws on missing or invalid JSON. */
-export function readJson<T = unknown>(path: string): T {
-  return JSON.parse(readFileSync(path, "utf8")) as T;
+): Promise<WorkspacePackage[]> {
+  const wsPackages: WorkspacePackage[] = [];
+  for await (const jsonPath of discoverPackageJsons()) {
+    const dir = dirname(jsonPath);
+    const meta = (await Bun.file(jsonPath).json()) as PackageJson;
+    const wsPackage: WorkspacePackage = {
+      slug: relative(ROOT, dir),
+      dir,
+      jsonPath,
+      meta,
+    };
+    if (filter(wsPackage)) wsPackages.push(wsPackage);
+  }
+  wsPackages.sort((a, b) => a.slug.localeCompare(b.slug));
+  return wsPackages;
 }
 
 /**
@@ -84,19 +129,19 @@ export function readJson<T = unknown>(path: string): T {
  * file's trailing newline (or adding one if the file is new). Prevents
  * formatter churn against `prettier --write`.
  */
-export function writeJson(path: string, value: unknown): void {
-  const trailingNewline = existsSync(path)
-    ? readFileSync(path, "utf8").endsWith("\n")
+export async function writeJson(path: string, value: unknown): Promise<void> {
+  const file = Bun.file(path);
+  const trailingNewline = (await file.exists())
+    ? (await file.text()).endsWith("\n")
     : true;
-  writeFileSync(path, JSON.stringify(value, null, 2) + (trailingNewline ? "\n" : ""));
+  await Bun.write(path, JSON.stringify(value, null, 2) + (trailingNewline ? "\n" : ""));
 }
 
 /**
- * Run a subprocess synchronously. Thin wrapper over `execaSync` that
- * defaults `stdio: "inherit"` so output streams to the user, captures
- * stdout/stderr instead when `capture: true`, and aborts the script
- * with a clear message when the child exits non-zero (set
- * `check: false` to opt out of that behavior).
+ * Run a subprocess. Defaults `stdio: "inherit"` so output streams to
+ * the user, captures stdout/stderr instead when `capture: true`, and
+ * aborts the script with a clear message when the child exits non-zero
+ * (set `check: false` to opt out of that behavior).
  *
  * Returns the trimmed stdout when capturing, or the empty string when
  * inheriting (because nothing was captured).
@@ -107,34 +152,34 @@ export async function run(
   opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
 ): Promise<string> {
   const { capture = false, check = true, cwd = ROOT } = opts;
-  const execaOpts: Options = {
+  const proc = Bun.spawn([command, ...args], {
     cwd,
-    reject: false,
-    stdio: capture ? "pipe" : "inherit",
-  };
-  const result: Result = await execa(command, args, execaOpts);
-  if (check && result.exitCode !== 0) {
-    const detail = capture
-      ? `: ${String(result.stderr ?? "").trim() || String(result.stdout ?? "").trim()}`
-      : "";
-    fail(`\`${command} ${args.join(" ")}\` failed (exit ${result.exitCode})${detail}`);
+    stdout: capture ? "pipe" : "inherit",
+    stderr: capture ? "pipe" : "inherit",
+    stdin: "inherit",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    capture && proc.stdout ? new Response(proc.stdout).text() : Promise.resolve(""),
+    capture && proc.stderr ? new Response(proc.stderr).text() : Promise.resolve(""),
+  ]);
+  if (check && exitCode !== 0) {
+    const detail = capture ? `: ${stderr.trim() || stdout.trim()}` : "";
+    fail(`\`${command} ${args.join(" ")}\` failed (exit ${exitCode})${detail}`);
   }
-  return String(result.stdout ?? "").trim();
+  return stdout.trim();
 }
 
 /**
- * Shorthand for `bun x <args>`. Resolves the Windows `bunx.cmd` shim
- * automatically. Use this instead of hard-coding the platform check.
+ * Shorthand for `bun x <args>`. Bun is on the PATH because these
+ * scripts run under `bun`, so we don't need the `which` lookup or the
+ * Windows `.cmd` shim that a node-based runner would.
  */
 export async function bunx(
   args: readonly string[],
   opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
 ): Promise<string> {
-  let bin = await which("bunx", { nothrow: true });
-  if (!bin) {
-    bin = process.platform === "win32" ? "bunx.cmd" : "bunx";
-  }
-  return run(bin, args, opts);
+  return run("bun", ["x", ...args], opts);
 }
 
 /** Print `message` to stderr and exit the script with code 1. */

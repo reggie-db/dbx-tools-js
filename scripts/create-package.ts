@@ -39,7 +39,7 @@
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { PACKAGES_DIR, writeJson } from "./util.js";
+import { ROOT, writeJson } from "./util.js";
 
 const SCOPE = "@dbx-tools";
 const NPM_PREFIX = "appkit-";
@@ -81,7 +81,7 @@ if (!rawSlug || !/^[a-z][a-z0-9-]*$/.test(rawSlug)) {
 }
 
 const slug = rawSlug;
-const pkgDir = resolve(PACKAGES_DIR, slug);
+const pkgDir = resolve(ROOT, "packages", slug);
 if (existsSync(pkgDir)) {
   console.error(`packages/${slug} already exists; aborting.`);
   process.exit(1);
@@ -118,12 +118,12 @@ const pluginPackageJson = {
 const packageJson = kind === "plugin" ? pluginPackageJson : basePackageJson;
 const tsconfigBuild = { extends: "../../tsconfig.build.json" };
 
-// `writeJson` also creates the parent dir via `mkdirSync({ recursive: true })`
-// implicitly because we touch it through `write()` for the other files; do
-// it explicitly here so the package.json write isn't order-dependent.
+// `Bun.write` (used inside `writeJson`) creates the parent dir for us,
+// but we touch siblings via `write()` (mkdirSync) below, so call
+// `mkdirSync` explicitly to make the writes order-independent.
 mkdirSync(pkgDir, { recursive: true });
-writeJson(resolve(pkgDir, "package.json"), packageJson);
-writeJson(resolve(pkgDir, "tsconfig.build.json"), tsconfigBuild);
+await writeJson(resolve(pkgDir, "package.json"), packageJson);
+await writeJson(resolve(pkgDir, "tsconfig.build.json"), tsconfigBuild);
 
 if (kind === "plugin") {
   // Root barrel: one line that re-exports the plugin and its factory

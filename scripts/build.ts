@@ -15,8 +15,9 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { bunx, discoverPackages, fail } from "./util.js";
 
-const packages = discoverPackages(
-  (pkg) => pkg.meta.private !== true && existsSync(resolve(pkg.dir, "tsconfig.build.json")),
+const packages = await discoverPackages(
+  (pkg) =>
+    pkg.meta.private !== true && existsSync(resolve(pkg.dir, "tsconfig.build.json")),
 );
 
 console.log(`Building ${packages.length} package(s):`);
