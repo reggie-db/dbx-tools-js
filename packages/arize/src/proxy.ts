@@ -1,5 +1,5 @@
 /**
- * Express middleware that reverse-proxies the Phoenix daemon.
+ * Express middleware that reverse-proxies the Arize Phoenix daemon.
  *
  * Built on `http-proxy-middleware` instead of hand-rolled
  * `node:http` plumbing. The library handles the things we kept
@@ -9,7 +9,7 @@
  *   `Transfer-Encoding`, ...). Forwarding these verbatim to a
  *   fresh upstream socket caused `socket hang up` on otherwise
  *   healthy responses.
- * - WebSocket upgrade negotiation for Phoenix's GraphQL
+ * - WebSocket upgrade negotiation for the daemon's GraphQL
  *   subscriptions (`ws: true`). Full WS upgrade routing also
  *   requires the host HTTP server's `upgrade` event to dispatch
  *   through this middleware; Express's router doesn't do that
@@ -24,7 +24,7 @@
  *   `res.end` and don't destroy half-read upstream sockets.
  *
  * Path handling:
- * - Phoenix is spawned with `PHOENIX_HOST_ROOT_PATH=/api/phoenix`
+ * - The daemon is spawned with `PHOENIX_HOST_ROOT_PATH=/api/arize`
  *   (see `serve.ts`), matching the official traefik example:
  *   https://github.com/Arize-ai/phoenix/tree/main/examples/reverse-proxy
  *   The contract is: the reverse proxy STRIPS the prefix before
@@ -32,8 +32,8 @@
  *   URLs (HTML asset paths, GraphQL endpoint, etc.).
  * - Express already strips the plugin mount path off `req.url` by
  *   the time we run, so the request hits the upstream at the bare
- *   path Phoenix expects. `http-proxy-middleware` forwards `req.url`
- *   verbatim - no extra `pathRewrite` needed.
+ *   path the daemon expects. `http-proxy-middleware` forwards
+ *   `req.url` verbatim - no extra `pathRewrite` needed.
  */
 
 import { createProxyMiddleware, fixRequestBody } from "http-proxy-middleware";

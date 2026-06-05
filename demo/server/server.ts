@@ -1,7 +1,7 @@
 import { createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
 import { buildEmailTool, createAgent, mastra, tool } from "@dbx-tools/appkit-mastra";
-import { phoenix } from "@dbx-tools/appkit-phoenix";
+import { arize } from "@dbx-tools/appkit-arize";
 import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
@@ -97,14 +97,14 @@ const support = createAgent({
   },
 });
 
-// Bind to loopback (`127.0.0.1`) locally so a dev server isn't
+// Bind to loopback (`127.0.0.1`) locally so the dev server isn't
 // exposed on the LAN, but fall back to `0.0.0.0` when the Databricks
 // Apps platform is running us (it sets `DATABRICKS_APP_PORT` and
 // reaches the container over the LAN-bound interface, so anything
-// else won't accept traffic). Override with `FLASK_RUN_HOST=...` if
-// you need a different bind address for a local tunnel.
+// else won't accept traffic). Override with `HOST=...` if you need a
+// different bind address for a local tunnel.
 const isDatabricksApp = Boolean(process.env.DATABRICKS_APP_PORT);
-const host = process.env.FLASK_RUN_HOST ?? (isDatabricksApp ? "0.0.0.0" : "127.0.0.1");
+const host = process.env.HOST ?? (isDatabricksApp ? "0.0.0.0" : "127.0.0.1");
 
 await createApp({
   plugins: [
@@ -114,7 +114,7 @@ await createApp({
     // `genie({ spaces: { sales: "...", ops: "..." } })` to register
     // multiple aliases; each becomes a separate tool the LLM can pick.
     genie(),
-    phoenix(),
+    arize(),
     lakebase(),
     mastra({
       storage: true,

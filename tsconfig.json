@@ -5,6 +5,9 @@
       "path": "./demo/tsconfig.json"
     },
     {
+      "path": "./packages/arize/tsconfig.build.json"
+    },
+    {
       "path": "./packages/autopg/tsconfig.build.json"
     },
     {
@@ -12,9 +15,6 @@
     },
     {
       "path": "./packages/mastra/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/phoenix/tsconfig.build.json"
     },
     {
       "path": "./packages/serving/tsconfig.build.json"

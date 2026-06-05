@@ -1,10 +1,11 @@
 {
-  "name": "@dbx-tools/appkit-phoenix",
+  "name": "@dbx-tools/appkit-arize",
   "version": "0.1.13",
   "module": "index.ts",
   "type": "module",
   "dependencies": {
     "@dbx-tools/appkit-shared": "workspace:*",
+    "http-proxy-middleware": "^4.0.0",
     "proper-lockfile": "^4.1.2",
     "which": "^7.0.0"
   },

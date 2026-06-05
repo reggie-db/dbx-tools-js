@@ -87,10 +87,7 @@ const datasetSchema = z.object({
     Total rows in this dataset. Mention only if it adds context
     (e.g. "across the last 90 days").
   `),
-  sql: z
-    .string()
-    .optional()
-    .describe(stringUtils.toDescription`
+  sql: z.string().optional().describe(stringUtils.toDescription`
       SQL Genie generated and executed. The host UI shows this on
       demand; you do not need to repeat it.
     `),
@@ -103,25 +100,16 @@ const datasetSchema = z.object({
  * not in the model's context.
  */
 const genieToolOutputSchema = z.object({
-  conversationId: z
-    .string()
-    .optional()
-    .describe(stringUtils.toDescription`
+  conversationId: z.string().optional().describe(stringUtils.toDescription`
       Pass back on the next call to continue the same Genie thread.
     `),
-  genieAnswer: z
-    .string()
-    .optional()
-    .describe(stringUtils.toDescription`
+  genieAnswer: z.string().optional().describe(stringUtils.toDescription`
       Genie's natural-language answer to the question. Pass this
       through to the user (verbatim, or as the basis of your
       reply). Genie may have run multiple SQL queries and tools to
       produce this; the full text is the answer.
     `),
-  datasets: z
-    .array(datasetSchema)
-    .optional()
-    .describe(stringUtils.toDescription`
+  datasets: z.array(datasetSchema).optional().describe(stringUtils.toDescription`
       Datasets Genie produced for this turn (one per executed SQL
       statement). Each entry is metadata only; the rows are
       streamed to the host UI out-of-band. To render any of these
@@ -131,18 +119,12 @@ const genieToolOutputSchema = z.object({
       should see; your prose should add interpretation
       (highlights, deltas, anomalies) around the chart.
     `),
-  suggestedFollowUps: z
-    .array(z.string())
-    .optional()
-    .describe(stringUtils.toDescription`
+  suggestedFollowUps: z.array(z.string()).optional().describe(stringUtils.toDescription`
       Follow-up question suggestions Genie produced. The host UI
       renders these as clickable buttons; you do not need to list
       them in your reply.
     `),
-  error: z
-    .string()
-    .optional()
-    .describe(stringUtils.toDescription`
+  error: z.string().optional().describe(stringUtils.toDescription`
       Genie-side error message if the request failed.
     `),
 });
@@ -190,10 +172,7 @@ const sendMessageSchema = z.object({
   content: z.string().describe(stringUtils.toDescription`
     Natural-language question to send to the Genie space.
   `),
-  conversationId: z
-    .string()
-    .optional()
-    .describe(stringUtils.toDescription`
+  conversationId: z.string().optional().describe(stringUtils.toDescription`
       Optional Genie conversation id to continue an earlier thread.
       Omit on the first call; pass the id returned in the previous
       result's \`conversationId\` to follow up.
@@ -230,8 +209,7 @@ const genieAttachmentSchema = z.object({
         Statement-execution id; internal bookkeeping.
       `),
     })
-    .optional()
-    .describe(stringUtils.toDescription`
+    .optional().describe(stringUtils.toDescription`
       SQL Genie attached to this message, if it ran any.
     `),
   text: z
@@ -240,15 +218,11 @@ const genieAttachmentSchema = z.object({
         Genie's natural-language answer text for this attachment.
       `),
     })
-    .optional()
-    .describe(stringUtils.toDescription`
+    .optional().describe(stringUtils.toDescription`
       Per-attachment text content (independent of the message-level
       \`content\` field).
     `),
-  suggestedQuestions: z
-    .array(z.string())
-    .optional()
-    .describe(stringUtils.toDescription`
+  suggestedQuestions: z.array(z.string()).optional().describe(stringUtils.toDescription`
       Follow-up question suggestions Genie generated for this turn.
     `),
 });
@@ -270,9 +244,7 @@ const genieMessageSchema = z.object({
   content: z.string().describe(stringUtils.toDescription`
     Outer message-level natural-language content Genie wrote.
   `),
-  attachments: z
-    .array(genieAttachmentSchema)
-    .optional()
+  attachments: z.array(genieAttachmentSchema).optional()
     .describe(stringUtils.toDescription`
       Attachments (SQL queries, text blocks, suggested follow-ups)
       Genie produced for this message.

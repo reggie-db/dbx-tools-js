@@ -7,8 +7,8 @@
  * each other into spawning two daemons, the port readiness probe, and
  * the SIGINT / SIGHUP teardown hooks.
  *
- * The plugin layer (`./plugin.ts`) imports {@link startPhoenix},
- * {@link stopPhoenix}, and {@link installShutdownHooks} and otherwise
+ * The plugin layer (`./plugin.ts`) imports {@link startArize},
+ * {@link stopArize}, and {@link installShutdownHooks} and otherwise
  * stays free of any process / fs / `child_process` concerns.
  *
  * Restart-survival mechanics:
@@ -43,10 +43,10 @@ import path from "node:path";
 import * as lockfile from "proper-lockfile";
 import which from "which";
 
-const log = logUtils.logger("phoenix/serve");
+const log = logUtils.logger("arize/serve");
 
 /** On-disk state written by the spawner and read by every later parent. */
-type PhoenixState = {
+type ArizeState = {
   pid: number;
   httpPort: number;
   grpcPort: number;
@@ -63,9 +63,9 @@ type PhoenixState = {
 };
 
 /** Options forwarded from the plugin layer at start time. */
-export type StartPhoenixOptions = {
+export type StartArizeOptions = {
   /**
-   * Root path Phoenix should serve under (e.g. `/api/phoenix`).
+   * Root path the daemon should serve under (e.g. `/api/arize`).
    * Wired into the daemon via `PHOENIX_HOST_ROOT_PATH` so static
    * assets and GraphQL endpoints render at the prefixed URL.
    * Defaults to `""` (serve at root).
@@ -74,16 +74,16 @@ export type StartPhoenixOptions = {
 };
 
 /** Public context returned to the plugin layer / its `exports()`. */
-export type PhoenixContext = {
+export type ArizeContext = {
   httpPort: number;
   grpcPort: number;
-  /** `http://localhost:<httpPort>` - Phoenix UI. */
+  /** `http://127.0.0.1:<httpPort>` - Arize Phoenix UI. */
   baseUrl: string;
   /** OTLP/HTTP traces endpoint - `${baseUrl}/v1/traces`. */
   collectorEndpoint: string;
-  /** OTLP/gRPC endpoint - `http://localhost:<grpcPort>`. */
+  /** OTLP/gRPC endpoint - `http://127.0.0.1:<grpcPort>`. */
   grpcEndpoint: string;
-  /** Absolute path to the file Phoenix is writing stdout/stderr to. */
+  /** Absolute path to the file the daemon is writing stdout/stderr to. */
   logFile: string;
   /** True when this parent reattached to an already-running daemon. */
   reused: boolean;
@@ -102,25 +102,25 @@ const LOCK_RETRY_OPTIONS = {
 // `stale` must be >= 5000 per `proper-lockfile`; this also covers
 // the case where a previous parent crashed mid-spawn.
 const LOCK_STALE_MS = 10_000;
-// Phoenix usually boots in 2-5s on a warm cache. 30s gives slow CI
-// boxes / cold uv caches headroom without hanging dev forever.
+// The daemon usually boots in 2-5s on a warm cache. 30s gives slow
+// CI boxes / cold uv caches headroom without hanging dev forever.
 const PORT_WAIT_TIMEOUT_MS = 30_000;
 
 /**
- * Start (or reuse) the Phoenix daemon for this workspace and return
- * its connection info. Serialised behind a `proper-lockfile` mutex so
- * concurrent calls (a stale tsx-watch child and the new one taking
- * its place) can never spawn two daemons.
+ * Start (or reuse) the Arize Phoenix daemon for this workspace and
+ * return its connection info. Serialised behind a `proper-lockfile`
+ * mutex so concurrent calls (a stale tsx-watch child and the new
+ * one taking its place) can never spawn two daemons.
  *
  * When `pathPrefix` changes between calls (e.g. the plugin name was
  * renamed) the existing daemon is killed and respawned with the new
- * `PHOENIX_HOST_ROOT_PATH`. Phoenix bakes the prefix into its served
- * HTML at boot, so we can't keep an old daemon running with a stale
- * prefix - its asset URLs would 404 through the proxy.
+ * `PHOENIX_HOST_ROOT_PATH`. The daemon bakes the prefix into its
+ * served HTML at boot, so we can't keep an old daemon running with a
+ * stale prefix - its asset URLs would 404 through the proxy.
  */
-export async function startPhoenix(
-  opts: StartPhoenixOptions = {},
-): Promise<PhoenixContext> {
+export async function startArize(
+  opts: StartArizeOptions = {},
+): Promise<ArizeContext> {
   const pathPrefix = normalizePrefix(opts.pathPrefix);
   const dir = stateDir();
   mkdirSync(dir, { recursive: true });
@@ -132,33 +132,33 @@ export async function startPhoenix(
   const lockTarget = path.join(dir, ".lock-target");
   const lockDir = `${lockTarget}.lock`;
   if (!existsSync(lockTarget)) writeFileSync(lockTarget, "");
-  log.debug("Phoenix lock paths", { stateDir: dir, lockTarget, lockDir });
+  log.debug("Arize lock paths", { stateDir: dir, lockTarget, lockDir });
 
-  log.info("Acquiring Phoenix lock", { lockTarget });
+  log.info("Acquiring Arize lock", { lockTarget });
   const release = await lockfile.lock(lockTarget, {
     retries: LOCK_RETRY_OPTIONS,
     stale: LOCK_STALE_MS,
   });
-  log.debug("Acquired Phoenix lock", { lockTarget, lockDir });
+  log.debug("Acquired Arize lock", { lockTarget, lockDir });
   try {
     const existing = readState(dir);
     if (existing && isProcessAlive(existing.pid)) {
       if ((existing.pathPrefix ?? "") === pathPrefix) {
-        log.info("Reusing Phoenix daemon", {
+        log.info("Reusing Arize daemon", {
           pid: existing.pid,
           httpPort: existing.httpPort,
           pathPrefix,
         });
         return makeContext(existing, /*reused*/ true);
       }
-      log.warn("Phoenix daemon's path prefix changed - respawning", {
+      log.warn("Arize daemon's path prefix changed - respawning", {
         pid: existing.pid,
         old: existing.pathPrefix,
         next: pathPrefix,
       });
       killDaemon(existing.pid);
     } else if (existing) {
-      log.warn("Stale Phoenix state, respawning", { pid: existing.pid });
+      log.warn("Stale Arize state, respawning", { pid: existing.pid });
     }
     if (existing) clearState(dir);
     const spawned = await spawnDaemon(dir, pathPrefix);
@@ -166,16 +166,16 @@ export async function startPhoenix(
     return makeContext(spawned, /*reused*/ false);
   } finally {
     await release();
-    log.info("Released Phoenix lock", { lockTarget, lockDir });
+    log.info("Released Arize lock", { lockTarget, lockDir });
   }
 }
 
 /**
- * Best-effort kill the running Phoenix daemon and clear the state
- * file. Safe to call multiple times; missing PID / already-dead
- * process counts as success.
+ * Best-effort kill the running daemon and clear the state file.
+ * Safe to call multiple times; missing PID / already-dead process
+ * counts as success.
  */
-export function stopPhoenix(): void {
+export function stopArize(): void {
   const dir = stateDir();
   const state = readState(dir);
   if (state) killDaemon(state.pid);
@@ -189,7 +189,7 @@ function killDaemon(pid: number): void {
   } catch (err) {
     // ESRCH = already gone, which is exactly what we wanted.
     if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
-      log.warn("Failed to SIGTERM Phoenix daemon", {
+      log.warn("Failed to SIGTERM Arize daemon", {
         pid,
         err: (err as Error).message,
       });
@@ -198,10 +198,10 @@ function killDaemon(pid: number): void {
 }
 
 /**
- * Wire `SIGINT` / `SIGHUP` to {@link stopPhoenix} so a real Ctrl+C
+ * Wire `SIGINT` / `SIGHUP` to {@link stopArize} so a real Ctrl+C
  * shutdown cleans up the daemon. `SIGTERM` is intentionally NOT
  * hooked: `tsx watch` (and most file watchers) send it during a
- * restart, and we want Phoenix to outlive those.
+ * restart, and we want the daemon to outlive those.
  *
  * Re-raises the original signal after cleanup so the host process
  * can take its normal exit path (Node's default for SIGINT is exit
@@ -211,8 +211,8 @@ export function installShutdownHooks(): void {
   if (shutdownInstalled) return;
   shutdownInstalled = true;
   const handler = (signal: NodeJS.Signals) => {
-    log.info("Real shutdown - stopping Phoenix daemon", { signal });
-    stopPhoenix();
+    log.info("Real shutdown - stopping Arize daemon", { signal });
+    stopArize();
     process.kill(process.pid, signal);
   };
   process.once("SIGINT", handler);
@@ -228,13 +228,13 @@ let shutdownInstalled = false;
  * can exit without breaking the pipe.
  *
  * `pathPrefix`, when non-empty, is forwarded as
- * `PHOENIX_HOST_ROOT_PATH` so Phoenix renders its HTML with
+ * `PHOENIX_HOST_ROOT_PATH` so the daemon renders its HTML with
  * `<base href>` and asset URLs scoped to the prefix. Required when
- * the plugin will reverse-proxy Phoenix from an AppKit sub-path
- * (`/api/phoenix`, etc.) - without it, the proxied UI 404s on every
+ * the plugin will reverse-proxy the UI from an AppKit sub-path
+ * (`/api/arize`, etc.) - without it, the proxied UI 404s on every
  * asset.
  */
-async function spawnDaemon(dir: string, pathPrefix: string): Promise<PhoenixState> {
+async function spawnDaemon(dir: string, pathPrefix: string): Promise<ArizeState> {
   const uv = await which("uv");
   log.info("Installing arize-phoenix via uv (idempotent)");
   const install = spawnSync(uv, ["tool", "install", "arize-phoenix"], {
@@ -246,14 +246,14 @@ async function spawnDaemon(dir: string, pathPrefix: string): Promise<PhoenixStat
 
   const httpPort = await netUtils.getRandomPort();
   const grpcPort = await netUtils.getRandomPort();
-  const logFile = path.join(dir, "phoenix.log");
+  const logFile = path.join(dir, "arize.log");
   // Open *write* fds (not append) so each daemon starts with a fresh
   // log. The previous run's logs are otherwise interleaved with the
   // new run's, which makes debugging miserable.
   const outFd = openSync(logFile, "w");
   const errFd = openSync(logFile, "w");
 
-  log.info("Spawning Phoenix daemon", {
+  log.info("Spawning Arize daemon", {
     httpPort,
     grpcPort,
     logFile,
@@ -264,10 +264,15 @@ async function spawnDaemon(dir: string, pathPrefix: string): Promise<PhoenixStat
     stdio: ["ignore", outFd, errFd],
     env: {
       ...process.env,
+      // Bind to loopback only - the daemon is an implementation
+      // detail behind the AppKit reverse proxy, not a public
+      // listener. Phoenix's default is `0.0.0.0` which would expose
+      // it on every network interface.
+      PHOENIX_HOST: "127.0.0.1",
       PHOENIX_PORT: String(httpPort),
       PHOENIX_GRPC_PORT: String(grpcPort),
-      // Forward the AppKit mount path so Phoenix's HTML / asset
-      // URLs / GraphQL endpoint render under `/api/phoenix/...`.
+      // Forward the AppKit mount path so the daemon's HTML / asset
+      // URLs / GraphQL endpoint render under `/api/arize/...`.
       // Mirrors Phoenix's own traefik reverse-proxy example:
       //   https://github.com/Arize-ai/phoenix/tree/main/examples/reverse-proxy
       // Skipped when empty; Phoenix treats `""` as a literal "" prefix
@@ -276,14 +281,14 @@ async function spawnDaemon(dir: string, pathPrefix: string): Promise<PhoenixStat
     },
   });
   if (!child.pid) {
-    throw new Error("Failed to spawn Phoenix: no pid");
+    throw new Error("Failed to spawn Arize daemon: no pid");
   }
   // Decouple the child from the parent's event loop so the parent
   // can exit cleanly on Ctrl+C (or tsx watch's restart SIGTERM)
-  // without taking Phoenix down with it.
+  // without taking the daemon down with it.
   child.unref();
 
-  // Wait until Phoenix's HTTP listener is up before declaring
+  // Wait until the daemon's HTTP listener is up before declaring
   // success. Otherwise the first request to the collector races
   // boot and fails with ECONNREFUSED.
   await waitForPort(httpPort, PORT_WAIT_TIMEOUT_MS);
@@ -299,10 +304,10 @@ async function spawnDaemon(dir: string, pathPrefix: string): Promise<PhoenixStat
 }
 
 /**
- * Normalise a caller-supplied prefix into the canonical form Phoenix
- * expects: a single leading slash, no trailing slash, empty string
- * for "serve at root". Saves the proxy-side path math from worrying
- * about `"/"` vs `""` vs `"/api/phoenix/"`.
+ * Normalise a caller-supplied prefix into the canonical form the
+ * daemon expects: a single leading slash, no trailing slash, empty
+ * string for "serve at root". Saves the proxy-side path math from
+ * worrying about `"/"` vs `""` vs `"/api/arize/"`.
  */
 function normalizePrefix(raw: string | undefined): string {
   if (!raw) return "";
@@ -315,29 +320,29 @@ function normalizePrefix(raw: string | undefined): string {
 
 /**
  * One state dir per workspace so two repos running `bun run dev` in
- * parallel don't fight over the same Phoenix daemon. The cwd hash
- * keeps the path stable across restarts of the same workspace.
+ * parallel don't fight over the same daemon. The cwd hash keeps the
+ * path stable across restarts of the same workspace.
  */
 function stateDir(): string {
   const hash = commonUtils.fnvHash(process.cwd());
-  return path.join(os.tmpdir(), `dbx-tools-appkit-phoenix-${hash}`);
+  return path.join(os.tmpdir(), `dbx-tools-appkit-arize-${hash}`);
 }
 
 function statePath(dir: string): string {
   return path.join(dir, "state.json");
 }
 
-function readState(dir: string): PhoenixState | null {
+function readState(dir: string): ArizeState | null {
   const file = statePath(dir);
   if (!existsSync(file)) return null;
   try {
-    return JSON.parse(readFileSync(file, "utf8")) as PhoenixState;
+    return JSON.parse(readFileSync(file, "utf8")) as ArizeState;
   } catch {
     return null;
   }
 }
 
-function writeState(dir: string, state: PhoenixState): void {
+function writeState(dir: string, state: ArizeState): void {
   writeFileSync(statePath(dir), JSON.stringify(state, null, 2));
 }
 
@@ -367,8 +372,8 @@ function isProcessAlive(pid: number): boolean {
 
 /**
  * Poll a TCP port until *something* accepts a connection on it (i.e.
- * Phoenix's uvicorn process is listening), or `timeoutMs` elapses.
- * Used post-spawn to gate `startPhoenix()` resolution on the
+ * the daemon's uvicorn process is listening), or `timeoutMs`
+ * elapses. Used post-spawn to gate `startArize()` resolution on the
  * collector actually being reachable.
  */
 async function waitForPort(port: number, timeoutMs: number): Promise<void> {
@@ -377,7 +382,9 @@ async function waitForPort(port: number, timeoutMs: number): Promise<void> {
     if (await tryConnect(port)) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Phoenix did not start listening on :${port} within ${timeoutMs}ms`);
+  throw new Error(
+    `Arize daemon did not start listening on :${port} within ${timeoutMs}ms`,
+  );
 }
 
 function tryConnect(port: number): Promise<boolean> {
@@ -392,14 +399,18 @@ function tryConnect(port: number): Promise<boolean> {
   });
 }
 
-function makeContext(state: PhoenixState, reused: boolean): PhoenixContext {
-  const baseUrl = `http://localhost:${state.httpPort}`;
+function makeContext(state: ArizeState, reused: boolean): ArizeContext {
+  // Hard-code `127.0.0.1` rather than `localhost`: the daemon binds
+  // loopback v4 only (see `PHOENIX_HOST` above), and some macOS /
+  // Node setups resolve `localhost` to `::1`, which would refuse
+  // the connection.
+  const baseUrl = `http://127.0.0.1:${state.httpPort}`;
   return {
     httpPort: state.httpPort,
     grpcPort: state.grpcPort,
     baseUrl,
     collectorEndpoint: `${baseUrl}/v1/traces`,
-    grpcEndpoint: `http://localhost:${state.grpcPort}`,
+    grpcEndpoint: `http://127.0.0.1:${state.grpcPort}`,
     logFile: state.logFile,
     reused,
   };

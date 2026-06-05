@@ -48,7 +48,7 @@ import type { MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 import type { MastraPluginConfig } from "./config.js";
 import { historyRoute } from "./history.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
-import { buildPhoenixObservability } from "./observability.js";
+import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import {
   clearServingEndpointsCache,
@@ -280,13 +280,13 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // `agent.resumeStream()` errors with "could not find a suspended
     // run" and the approval UI hangs after the user clicks Approve.
     const instanceStorage = memoryBuilder?.instanceStorage();
-    // Auto-wire OTLP trace export to the sibling `phoenix` plugin if
-    // it's registered. Returns undefined when phoenix isn't around so
-    // the field stays off the constructor and Mastra keeps its noop
-    // observability default. The serviceName is the plugin's bound
-    // name so multiple mastra instances in one process stay
-    // distinguishable in Phoenix.
-    const observability = buildPhoenixObservability(this.context, this.name);
+    // Auto-wire OTLP trace export to Databricks-managed MLflow. The
+    // helper reads `MLFLOW_TRACKING_URI` / `MLFLOW_EXPERIMENT_ID` from
+    // env when present and otherwise discovers them via the workspace
+    // client. Returns undefined when nothing usable resolves, so the
+    // field stays off the constructor and Mastra keeps its noop
+    // observability default.
+    const observability = await buildObservability();
     this.mastra = new Mastra({
       agents: this.built.agents,
       ...(instanceStorage ? { storage: instanceStorage } : {}),
@@ -311,7 +311,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       defaultAgent: this.built.defaultAgentId,
       routes: ["/route/chat", "/route/history", "/models"],
       instanceStorage: instanceStorage !== undefined,
-      observability: observability !== undefined ? "phoenix" : "off",
+      observability: observability !== undefined ? "mlflow" : "off",
     });
   }
 }

@@ -7,6 +7,10 @@
 
 import type { BasePluginConfig, getExecutionContext } from "@databricks/appkit";
 import type { AgentConfig } from "@mastra/core/agent";
+import {
+  MASTRA_RESOURCE_ID_KEY,
+  MASTRA_THREAD_ID_KEY,
+} from "@mastra/core/request-context";
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import type { MastraAgentDefinition, MastraTools } from "./agents.js";
@@ -17,6 +21,49 @@ import type { MastraAgentDefinition, MastraTools } from "./agents.js";
  * Databricks tokens.
  */
 export const MASTRA_USER_KEY = "mastra__user";
+
+/**
+ * `RequestContext` keys for AppKit user metadata stamped by
+ * {@link MastraServer}. Surfaced as trace metadata via
+ * {@link TRACE_REQUEST_CONTEXT_KEYS} so traces are filterable by who
+ * issued the request without leaking the full user object.
+ */
+export const MASTRA_USER_NAME_KEY = "mastra__userName";
+export const MASTRA_USER_EMAIL_KEY = "mastra__userEmail";
+
+/**
+ * `RequestContext` key for the deployment environment label
+ * (`"production"`, `"staging"`, `"development"`, ...). Stamped by
+ * {@link MastraServer} from `MASTRA_ENVIRONMENT` env var first, then
+ * `NODE_ENV`. Read on every trace via
+ * {@link TRACE_REQUEST_CONTEXT_KEYS}.
+ */
+export const MASTRA_ENVIRONMENT_KEY = "mastra__environment";
+
+/**
+ * Canonical list of `RequestContext` keys we want Mastra to extract
+ * as metadata on every observability span (agent runs, model calls,
+ * tool invocations, workflow steps).
+ *
+ * Mirrors {@link https://mastra.ai/docs/observability/tracing/overview#automatic-metadata-from-requestcontext}:
+ * passed verbatim into `Observability.configs[*].requestContextKeys`,
+ * so any key listed here is read from `RequestContext` at trace
+ * start and attached as scalar span metadata. Keep the set to plain
+ * scalars - never include {@link MASTRA_USER_KEY} (it carries the
+ * full AppKit execution context with a `WorkspaceClient` reference).
+ *
+ * Order is purely cosmetic; Mastra de-dupes internally.
+ */
+export const TRACE_REQUEST_CONTEXT_KEYS: readonly string[] = [
+  MASTRA_RESOURCE_ID_KEY,
+  MASTRA_THREAD_ID_KEY,
+  MASTRA_USER_NAME_KEY,
+  MASTRA_USER_EMAIL_KEY,
+  MASTRA_ENVIRONMENT_KEY,
+  // Model override key is owned by `serving.ts`; spelled inline here
+  // so this module stays leaf-level (no cycles with `serving.ts`).
+  "mastra__model_override",
+];
 
 /** AppKit execution context plus the canonical user id. */
 export interface User {

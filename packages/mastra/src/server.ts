@@ -16,7 +16,14 @@ import { MastraServer as MastraServerExpress } from "@mastra/express";
 import type express from "express";
 import { randomUUID } from "node:crypto";
 
-import { MASTRA_USER_KEY, type MastraPluginConfig, type User } from "./config.js";
+import {
+  MASTRA_ENVIRONMENT_KEY,
+  MASTRA_USER_EMAIL_KEY,
+  MASTRA_USER_KEY,
+  MASTRA_USER_NAME_KEY,
+  type MastraPluginConfig,
+  type User,
+} from "./config.js";
 import {
   extractModelOverride,
   MASTRA_MODEL_OVERRIDE_KEY,
@@ -46,11 +53,15 @@ export class MastraServer extends MastraServerExpress {
       this.configureRequestContextUser(requestContext);
       this.configureRequestContextThreadId(req, res, requestContext);
       this.configureRequestContextModelOverride(req, requestContext);
+      this.configureRequestContextEnvironment(requestContext);
       this.log.debug("auth:middleware", {
         method: req.method,
         path: req.path,
         threadId: requestContext.get(MASTRA_THREAD_ID_KEY),
         resourceId: requestContext.get(MASTRA_RESOURCE_ID_KEY),
+        userName: requestContext.get(MASTRA_USER_NAME_KEY),
+        userEmail: requestContext.get(MASTRA_USER_EMAIL_KEY),
+        environment: requestContext.get(MASTRA_ENVIRONMENT_KEY),
         modelOverride: requestContext.get(
           // imported below; logged so a misrouted request shows
           // up alongside its model selection in `LOG_LEVEL=debug`.
@@ -76,6 +87,31 @@ export class MastraServer extends MastraServerExpress {
     };
     requestContext.set(MASTRA_USER_KEY, user);
     requestContext.set(MASTRA_RESOURCE_ID_KEY, user.id);
+    // AppKit's `UserContext` surfaces display name / email only on
+    // OBO requests. Service-context calls (background tasks, server
+    // start-up) leave these undefined and we skip the stamp so
+    // downstream trace metadata stays absent rather than empty.
+    if ("isUserContext" in executionContext) {
+      if (executionContext.userName) {
+        requestContext.set(MASTRA_USER_NAME_KEY, executionContext.userName);
+      }
+      if (executionContext.userEmail) {
+        requestContext.set(MASTRA_USER_EMAIL_KEY, executionContext.userEmail);
+      }
+    }
+  }
+
+  /**
+   * Stamp the deployment environment label so traces are filterable
+   * by env in the observability platform. Reads `MASTRA_ENVIRONMENT`
+   * first (explicit override), then `NODE_ENV` as the conventional
+   * fallback; leaves the key unset when both are absent rather than
+   * guessing.
+   */
+  configureRequestContextEnvironment(requestContext: RequestContext) {
+    if (requestContext.get(MASTRA_ENVIRONMENT_KEY)) return;
+    const environment = process.env.MASTRA_ENVIRONMENT ?? process.env.NODE_ENV;
+    if (environment) requestContext.set(MASTRA_ENVIRONMENT_KEY, environment);
   }
 
   configureRequestContextThreadId(

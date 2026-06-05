@@ -47,8 +47,5 @@
   },
   "overrides": {
     "zod": "4.3.6"
-  },
-  "dependencies": {
-    "http-proxy-middleware": "^4.0.0"
   }
 }
