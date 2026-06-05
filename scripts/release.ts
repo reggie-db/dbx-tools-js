@@ -65,10 +65,11 @@ import {
 } from "./util.js";
 
 /**
- * Default registry. Points at a local Verdaccio
- * (`docker compose -f docker/verdaccio.compose.yml up -d` ->
- * http://localhost:4873) so a stray `bun run release` on a dev
- * machine can never accidentally hit the public npm registry.
+ * Default registry. Points at the local Verdaccio convention
+ * (`http://localhost:4873`) so a stray `bun run release` on a dev
+ * machine can never accidentally hit the public npm registry. Start
+ * Verdaccio however you like (`npx verdaccio`, your own docker
+ * compose, etc.); the publish flow only cares that the URL resolves.
  * CI enforced via the `NPM_REGISTRY` env var (see
  * `.github/workflows/release.yml`).
  */

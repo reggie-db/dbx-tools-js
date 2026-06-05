@@ -1,0 +1,42 @@
+# Local Arize Phoenix collector for AppKit + Mastra tracing.
+#
+# Phoenix is an OTLP-compatible trace backend. Point any in-process
+# OTel SDK at it and the spans show up in its UI; no Phoenix-specific
+# client library required.
+#
+# Bring it up:
+#   docker compose -f docker/phoenix.compose.yml up -d
+#
+# Wire the demo (or any AppKit app) into it by setting one env var
+# before `bun run dev`:
+#   export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:6006/v1/traces
+# AppKit's `TelemetryManager` boots its NodeSDK on that endpoint and
+# every plugin span (including Mastra's, via `@mastra/otel-bridge`)
+# flows here.
+#
+# UI:   http://localhost:6006
+# OTLP: http://localhost:6006/v1/traces (HTTP), grpc://localhost:4317
+#
+# Ports default to the Phoenix conventions (6006 / 4317). Override on
+# the host side via the compose file's port mappings; the container
+# ports are fixed by `PHOENIX_PORT` / `PHOENIX_GRPC_PORT`.
+#
+# Persistence: trace history lives in a SQLite db under
+# `PHOENIX_WORKING_DIR` (a Docker-managed volume). Wipe the volume to
+# reset the workspace; switch the env var to a `postgresql://` URL via
+# `PHOENIX_SQL_DATABASE_URL` for a real backing store.
+
+services:
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006" # HTTP UI + OTLP HTTP collector
+      - "4317:4317" # OTLP gRPC collector
+    environment:
+      - PHOENIX_WORKING_DIR=/mnt/data
+    volumes:
+      - phoenix-data:/mnt/data
+    restart: unless-stopped
+
+volumes:
+  phoenix-data:
