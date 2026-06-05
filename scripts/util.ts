@@ -39,7 +39,7 @@ export interface PackageJson {
 
 /** A workspace package discovered under `packages/`. */
 export interface WorkspacePackage {
-  /** Path of the package directory relative to ROOT (e.g. `"packages/autopg"`). */
+  /** Path of the package directory relative to ROOT (e.g. `"packages/appkit-autopg"`). */
   slug: string;
   /** Absolute path to the package directory. */
   dir: string;

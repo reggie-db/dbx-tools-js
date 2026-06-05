@@ -18,12 +18,12 @@
  * fixture (a snapshot of a real workspace's `/api/2.0/serving-endpoints`
  * response) so the suite is offline / hermetic and doesn't need a
  * Databricks profile. The live `servingEndpoints()` helper lives at
- * `packages/serving/src/models.ts`; switch `getServingEndpoints` over
+ * `packages/appkit-serving/src/models.ts`; switch `getServingEndpoints` over
  * to it when you want to drive these against a real workspace.
  *
  * Run as a test:
  *   ```
- *   bun test packages/serving/test/models.test.ts
+ *   bun test packages/appkit-serving/test/models.test.ts
  *   ```
  */
 
@@ -1672,12 +1672,12 @@ describe("filterByDistribution", () => {
 // These aren't assertions; they exist to give a feel for what
 // each filter combo actually selects against the live workspace.
 // Bun's test runner shows `console.log` output by default, so
-// running `bun test packages/serving/test/models.test.ts`
+// running `bun test packages/appkit-serving/test/models.test.ts`
 // prints a small table per scenario right under the `(pass)` line.
 //
 // To make the output even louder (full per-test logs even on
 // pass), pass `--verbose`:
-//   bun test --verbose packages/serving/test/models.test.ts
+//   bun test --verbose packages/appkit-serving/test/models.test.ts
 //
 // To silence the examples without losing the assertions, set the
 // env var: `EXAMPLES=0 bun test ...` (the suite below skips when

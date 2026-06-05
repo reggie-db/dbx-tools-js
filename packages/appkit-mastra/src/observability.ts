@@ -34,7 +34,7 @@ import { getExecutionContext } from "@databricks/appkit";
 import type { WorkspaceClient } from "@databricks/sdk-experimental";
 import { httpUtils, logUtils, projectUtils } from "@dbx-tools/appkit-shared";
 import { Observability } from "@mastra/observability";
-import { OtelExporter } from "@mastra/otel-exporter";
+import { OtelExporter, type OtelExporterConfig } from "@mastra/otel-exporter";
 
 import { TRACE_REQUEST_CONTEXT_KEYS } from "./config.js";
 
@@ -46,6 +46,12 @@ const USERS_PATH = "/Users/";
 export interface MlflowConfig {
   trackingUri: string;
   experimentId: string;
+}
+
+export interface OtelConfig {
+  endpoint: string;
+  protocol: "http/protobuf" | "grpc";
+  headers: Record<string, string>;
 }
 
 // Minimal structural type for an MLflow experiment lookup result.
@@ -97,10 +103,7 @@ export async function buildObservability(
   });
 
   const projectName = await projectUtils.name();
-  const serviceName = [
-    projectName,
-    httpUtils.toURL(resolved.trackingUri)?.hostname,
-  ]
+  const serviceName = [projectName, httpUtils.toURL(resolved.trackingUri)?.hostname]
     .filter(Boolean)
     .join("_");
 
@@ -171,8 +174,7 @@ async function resolveMlflowConfig(
   }
 
   if (!experimentId) {
-    const lookup =
-      process.env.MLFLOW_EXPERIMENT_NAME ?? (await projectUtils.name());
+    const lookup = process.env.MLFLOW_EXPERIMENT_NAME ?? (await projectUtils.name());
     if (!lookup) return undefined;
     const experiment = await resolveExperiment(client, lookup);
     if (!experiment?.experiment_id) return undefined;
@@ -196,8 +198,7 @@ async function resolveExperiment(
 ): Promise<ExperimentLike | undefined> {
   const candidates: string[] = [lookup];
   let userName: string | undefined;
-  const isQualified =
-    lookup.startsWith(USERS_PATH) || lookup.startsWith(SHARED_PATH);
+  const isQualified = lookup.startsWith(USERS_PATH) || lookup.startsWith(SHARED_PATH);
   if (!isQualified) {
     try {
       userName = (await client.currentUser.me()).userName ?? undefined;
@@ -269,4 +270,23 @@ async function getExperiment(
   } catch {
     return undefined;
   }
+}
+
+async function buildOtelExporterConfig(
+  env?: Record<string, string>,
+): OtelExporterConfig {
+  if (env === undefined) env = process.env;
+  ["OTEL_EXPORTER_OTLP_ENDPOINT", "MLFLOW_TRACKING_URI"].map((key) => env?.[key]);
+
+  return {
+    provider: {
+      custom: {
+        endpoint: trackingUri,
+        protocol: "http/protobuf",
+        headers: {
+          "x-mlflow-experiment-id": experimentId,
+        },
+      },
+    },
+  };
 }

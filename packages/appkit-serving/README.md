@@ -43,7 +43,7 @@ AppKit execution context, so this **must be called inside an
 initialized AppKit app** (i.e. after `await createApp(...)`). Tests
 that don't want to bootstrap AppKit should mock the function or feed
 fixture JSON directly into the consumer; see
-`packages/serving/test/models.test.ts` in this repo for the
+`packages/appkit-serving/test/models.test.ts` in this repo for the
 inline-JSON pattern.
 
 The call is uncached today; wrap it on the caller side with
@@ -143,7 +143,7 @@ async function pickBestClaude() {
 }
 ```
 
-`packages/serving/test/models.test.ts` in this repo demonstrates a
+`packages/appkit-serving/test/models.test.ts` in this repo demonstrates a
 fuller `selectEndpoints({ classes, speed, quality })` ranker built on
 the same primitives - including a normalized `[min, max]` distribution
 filter that always returns at least the single top item when the

@@ -22,7 +22,7 @@ Generated from the AppKit `app init` template, then adapted to:
   spec events by `chartId` and renders inline - no HTTP round-trip
   to fetch chart specs. The system-default `render_data` tool uses
   the same pipeline, so hand-built charts and Genie charts feel
-  identical in the UI. See `packages/mastra/README.md` for the full
+  identical in the UI. See `packages/appkit-mastra/README.md` for the full
   contract.
 - Render the chat UI exclusively with `@databricks/appkit-ui`
   primitives (no `ai-elements`, no vendored shadcn) plus

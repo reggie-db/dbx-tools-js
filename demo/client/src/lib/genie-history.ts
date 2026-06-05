@@ -19,7 +19,7 @@ import type { ToolEvent, ToolProgress } from "@/components/chat-view";
 
 /**
  * Shape of the Genie tool's persisted DrainResult, mirrored from
- * `packages/mastra/src/genie.ts`. The `datasets` array is metadata
+ * `packages/appkit-mastra/src/genie.ts`. The `datasets` array is metadata
  * only (chartId, title, columns, rowCount, sql); row data rides
  * writer events that aren't persisted, so charts don't replay
  * after a hard reload.

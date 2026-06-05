@@ -198,7 +198,7 @@ export function* foundationModelProfiles(
  * for the workspace client, which throws if `createApp(...)` hasn't
  * run yet. Tests that don't want to bootstrap AppKit should mock
  * this function or feed a fixture directly into the consumer (see
- * `packages/serving/test/models.test.ts` for the inline-JSON
+ * `packages/appkit-serving/test/models.test.ts` for the inline-JSON
  * pattern).
  *
  * No per-user cache layer today - the call is intentionally
