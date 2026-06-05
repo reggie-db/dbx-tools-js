@@ -17,7 +17,6 @@ import type express from "express";
 import { randomUUID } from "node:crypto";
 
 import {
-  MASTRA_ENVIRONMENT_KEY,
   MASTRA_REQUEST_ID_KEY,
   MASTRA_USER_EMAIL_KEY,
   MASTRA_USER_KEY,
@@ -54,7 +53,6 @@ export class MastraServer extends MastraServerExpress {
       this.configureRequestContextUser(requestContext);
       this.configureRequestContextThreadId(req, res, requestContext);
       this.configureRequestContextModelOverride(req, requestContext);
-      this.configureRequestContextEnvironment(requestContext);
       this.configureRequestContextRequestId(req, res, requestContext);
       this.log.debug("auth:middleware", {
         method: req.method,
@@ -64,7 +62,6 @@ export class MastraServer extends MastraServerExpress {
         resourceId: requestContext.get(MASTRA_RESOURCE_ID_KEY),
         userName: requestContext.get(MASTRA_USER_NAME_KEY),
         userEmail: requestContext.get(MASTRA_USER_EMAIL_KEY),
-        environment: requestContext.get(MASTRA_ENVIRONMENT_KEY),
         modelOverride: requestContext.get(
           // imported below; logged so a misrouted request shows
           // up alongside its model selection in `LOG_LEVEL=debug`.
@@ -102,19 +99,6 @@ export class MastraServer extends MastraServerExpress {
         requestContext.set(MASTRA_USER_EMAIL_KEY, executionContext.userEmail);
       }
     }
-  }
-
-  /**
-   * Stamp the deployment environment label so traces are filterable
-   * by env in the observability platform. Reads `MASTRA_ENVIRONMENT`
-   * first (explicit override), then `NODE_ENV` as the conventional
-   * fallback; leaves the key unset when both are absent rather than
-   * guessing.
-   */
-  configureRequestContextEnvironment(requestContext: RequestContext) {
-    if (requestContext.get(MASTRA_ENVIRONMENT_KEY)) return;
-    const environment = process.env.MASTRA_ENVIRONMENT ?? process.env.NODE_ENV;
-    if (environment) requestContext.set(MASTRA_ENVIRONMENT_KEY, environment);
   }
 
   /**

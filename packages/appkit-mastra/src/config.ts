@@ -32,15 +32,6 @@ export const MASTRA_USER_NAME_KEY = "mastra__userName";
 export const MASTRA_USER_EMAIL_KEY = "mastra__userEmail";
 
 /**
- * `RequestContext` key for the deployment environment label
- * (`"production"`, `"staging"`, `"development"`, ...). Stamped by
- * {@link MastraServer} from `MASTRA_ENVIRONMENT` env var first, then
- * `NODE_ENV`. Read on every trace via
- * {@link TRACE_REQUEST_CONTEXT_KEYS}.
- */
-export const MASTRA_ENVIRONMENT_KEY = "mastra__environment";
-
-/**
  * `RequestContext` key for the per-HTTP-request id stamped by
  * {@link MastraServer}. Reads `X-Request-Id` from the incoming
  * headers when present (so an upstream load balancer / API gateway
@@ -71,7 +62,6 @@ export const TRACE_REQUEST_CONTEXT_KEYS: readonly string[] = [
   MASTRA_REQUEST_ID_KEY,
   MASTRA_USER_NAME_KEY,
   MASTRA_USER_EMAIL_KEY,
-  MASTRA_ENVIRONMENT_KEY,
   // Model override key is owned by `serving.ts`; spelled inline here
   // so this module stays leaf-level (no cycles with `serving.ts`).
   "mastra__model_override",

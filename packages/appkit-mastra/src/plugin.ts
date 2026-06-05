@@ -280,13 +280,12 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // `agent.resumeStream()` errors with "could not find a suspended
     // run" and the approval UI hangs after the user clicks Approve.
     const instanceStorage = memoryBuilder?.instanceStorage();
-    // Auto-wire OTLP trace export to Databricks-managed MLflow. The
-    // helper reads `MLFLOW_TRACKING_URI` / `MLFLOW_EXPERIMENT_ID` from
-    // env when present and otherwise discovers them via the workspace
-    // client. Returns undefined when nothing usable resolves, so the
-    // field stays off the constructor and Mastra keeps its noop
-    // observability default.
-    const observability = await buildObservability();
+    // Wire Mastra's tracer into AppKit's global OTel pipeline via
+    // `@mastra/otel-bridge`. Mastra spans become native OTel spans on
+    // whatever tracer provider `TelemetryManager` registered during
+    // `createApp`, so the OTLP endpoint / headers / sampling are
+    // env-driven and shared with every other AppKit plugin.
+    const observability = buildObservability({ serviceName: this.name });
     this.mastra = new Mastra({
       agents: this.built.agents,
       ...(instanceStorage ? { storage: instanceStorage } : {}),

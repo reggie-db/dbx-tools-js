@@ -1,7 +1,6 @@
 import { createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
 import { buildEmailTool, createAgent, mastra, tool } from "@dbx-tools/appkit-mastra";
-import { arize } from "@dbx-tools/appkit-arize";
 import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
@@ -114,7 +113,6 @@ await createApp({
     // `genie({ spaces: { sales: "...", ops: "..." } })` to register
     // multiple aliases; each becomes a separate tool the LLM can pick.
     genie(),
-    arize(),
     lakebase(),
     mastra({
       storage: true,

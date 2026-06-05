@@ -11,7 +11,6 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 | [`@dbx-tools/appkit-serving`](packages/appkit-serving)                     | `packages/appkit-serving`       | yes                  |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra)                       | `packages/appkit-mastra`        | yes                  |
 | [`@dbx-tools/appkit-mastra-shared`](packages/appkit-mastra-shared)         | `packages/appkit-mastra-shared` | yes                  |
-| [`@dbx-tools/appkit-arize`](packages/arize)                                | `packages/arize`                | yes                  |
 | [`@dbx-tools/appkit-demo`](demo)                                           | `demo`                          | no (`private: true`) |
 
 `appkit-shared` provides small utilities (typed plugin lookup, cookie parsing,
