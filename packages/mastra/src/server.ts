@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   MASTRA_ENVIRONMENT_KEY,
+  MASTRA_REQUEST_ID_KEY,
   MASTRA_USER_EMAIL_KEY,
   MASTRA_USER_KEY,
   MASTRA_USER_NAME_KEY,
@@ -54,9 +55,11 @@ export class MastraServer extends MastraServerExpress {
       this.configureRequestContextThreadId(req, res, requestContext);
       this.configureRequestContextModelOverride(req, requestContext);
       this.configureRequestContextEnvironment(requestContext);
+      this.configureRequestContextRequestId(req, res, requestContext);
       this.log.debug("auth:middleware", {
         method: req.method,
         path: req.path,
+        requestId: requestContext.get(MASTRA_REQUEST_ID_KEY),
         threadId: requestContext.get(MASTRA_THREAD_ID_KEY),
         resourceId: requestContext.get(MASTRA_RESOURCE_ID_KEY),
         userName: requestContext.get(MASTRA_USER_NAME_KEY),
@@ -112,6 +115,30 @@ export class MastraServer extends MastraServerExpress {
     if (requestContext.get(MASTRA_ENVIRONMENT_KEY)) return;
     const environment = process.env.MASTRA_ENVIRONMENT ?? process.env.NODE_ENV;
     if (environment) requestContext.set(MASTRA_ENVIRONMENT_KEY, environment);
+  }
+
+  /**
+   * Stamp a per-request id and echo it on the response so an upstream
+   * proxy / curl client / browser-side log line can pair its view of
+   * the request with the matching trace span. Reuses `X-Request-Id`
+   * when the upstream already supplies one so multi-hop traces stay
+   * joined; otherwise mints a UUIDv4.
+   *
+   * The id is surfaced as `mastra__requestId` span metadata via
+   * {@link TRACE_REQUEST_CONTEXT_KEYS} and as the `X-Request-Id`
+   * response header so dev tools can copy it from either side.
+   */
+  configureRequestContextRequestId(
+    req: express.Request,
+    res: express.Response,
+    requestContext: RequestContext,
+  ) {
+    if (requestContext.get(MASTRA_REQUEST_ID_KEY)) return;
+    const headerValue = req.headers["x-request-id"];
+    const upstream = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    const requestId = upstream?.trim() || randomUUID();
+    requestContext.set(MASTRA_REQUEST_ID_KEY, requestId);
+    res.setHeader("X-Request-Id", requestId);
   }
 
   configureRequestContextThreadId(

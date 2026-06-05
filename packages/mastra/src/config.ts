@@ -41,6 +41,17 @@ export const MASTRA_USER_EMAIL_KEY = "mastra__userEmail";
 export const MASTRA_ENVIRONMENT_KEY = "mastra__environment";
 
 /**
+ * `RequestContext` key for the per-HTTP-request id stamped by
+ * {@link MastraServer}. Reads `X-Request-Id` from the incoming
+ * headers when present (so an upstream load balancer / API gateway
+ * can keep its trace correlation), falls back to a freshly minted
+ * UUID. Echoed back on the response and surfaced on every span via
+ * {@link TRACE_REQUEST_CONTEXT_KEYS} so logs and traces share a
+ * join key.
+ */
+export const MASTRA_REQUEST_ID_KEY = "mastra__requestId";
+
+/**
  * Canonical list of `RequestContext` keys we want Mastra to extract
  * as metadata on every observability span (agent runs, model calls,
  * tool invocations, workflow steps).
@@ -57,6 +68,7 @@ export const MASTRA_ENVIRONMENT_KEY = "mastra__environment";
 export const TRACE_REQUEST_CONTEXT_KEYS: readonly string[] = [
   MASTRA_RESOURCE_ID_KEY,
   MASTRA_THREAD_ID_KEY,
+  MASTRA_REQUEST_ID_KEY,
   MASTRA_USER_NAME_KEY,
   MASTRA_USER_EMAIL_KEY,
   MASTRA_ENVIRONMENT_KEY,

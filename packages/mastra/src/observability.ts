@@ -96,6 +96,32 @@ export async function buildObservability(
     requestContextKeys,
   });
 
+  const projectName = await projectUtils.name();
+  const serviceName = [
+    projectName,
+    httpUtils.toURL(resolved.trackingUri)?.hostname,
+  ]
+    .filter(Boolean)
+    .join("_");
+
+  // Resource attributes ride along on every span as top-level
+  // OTel resource fields (i.e. `service.name`, `service.version`).
+  // Phoenix's UI uses these for the project / service filters, and
+  // MLflow surfaces them in the trace info panel. Per-span IDs
+  // (run / request / session / user) come through `requestContextKeys`
+  // instead; resource attrs are the static identity of the process.
+  const resourceAttributes = {
+    "service.name": serviceName,
+    ...(projectName ? { "project.name": projectName } : {}),
+    ...(process.env.MASTRA_ENVIRONMENT || process.env.NODE_ENV
+      ? {
+          "deployment.environment":
+            process.env.MASTRA_ENVIRONMENT ?? process.env.NODE_ENV!,
+        }
+      : {}),
+    "mlflow.experiment_id": resolved.experimentId,
+  };
+
   const otelExporter = new OtelExporter({
     provider: {
       custom: {
@@ -106,14 +132,8 @@ export async function buildObservability(
         },
       },
     },
+    resourceAttributes,
   });
-
-  const serviceName = [
-    await projectUtils.name(),
-    httpUtils.toURL(resolved.trackingUri)?.hostname,
-  ]
-    .filter(Boolean)
-    .join("_");
 
   return new Observability({
     configs: {
