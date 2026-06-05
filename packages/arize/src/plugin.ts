@@ -2,7 +2,9 @@
  * AppKit plugin facade over the {@link ./serve.ts} Arize Phoenix
  * daemon manager. Owns the AppKit-side concerns only:
  *
- * - The {@link manifest} that registers the plugin under `arize`.
+ * - The {@link manifest} that registers the plugin under `phoenix`,
+ *   so the UI proxies under `/api/phoenix/...` (matching the
+ *   open-source `arize-phoenix` server's brand for the URL surface).
  * - `setup()`: kick off (or reuse) the daemon, publish env vars
  *   (`MLFLOW_TRACKING_URI`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, the
  *   `PHOENIX_*` family) so any in-process OTel / MLflow SDK picks up
@@ -18,9 +20,10 @@
  * other OTLP collector (Databricks-managed MLflow, an external
  * Phoenix, etc.) without touching consumers.
  *
- * "Arize" here is the plugin's public brand. The underlying daemon is
- * the open-source `arize-phoenix` server, so doc-comments still refer
- * to it as "Phoenix" when describing the process actually running.
+ * Package naming convention: the npm package + factory export are
+ * named `arize` (the company / org), while the URL surface uses
+ * `phoenix` (the server's product name). Doc comments use whichever
+ * better matches the layer being described.
  *
  * All process spawning, state, lock, and signal logic lives in
  * `./serve.ts` so this file stays focused on plugin wiring.
@@ -67,9 +70,13 @@ export interface ArizePluginConfig extends BasePluginConfig {
   enabled?: ArizeEnabled;
 }
 
-const manifest: PluginManifest<"arize"> = {
-  name: "arize",
-  displayName: "Arize",
+// Manifest `name` is `"phoenix"` so AppKit mounts the UI under
+// `/api/phoenix/...`. The npm-side identity (package, factory
+// export) stays `arize` for the org/brand; this split matches the
+// daemon's product name (Phoenix) on the URL surface.
+const manifest: PluginManifest<"phoenix"> = {
+  name: "phoenix",
+  displayName: "Arize Phoenix",
   description: "Runs a local Arize Phoenix server as a restart-surviving daemon",
   stability: "beta",
   resources: {
@@ -127,7 +134,7 @@ export class ArizePlugin extends Plugin<ArizePluginConfig> {
 
   /**
    * Mount the Arize Phoenix UI at the plugin's own AppKit prefix
-   * (so `GET /api/arize/` returns the Phoenix landing page, asset
+   * (so `GET /api/phoenix/` returns the Phoenix landing page, asset
    * URLs resolve, GraphQL POSTs reach the daemon, etc.). The
    * upstream port lives in `this.context_` which was hydrated from
    * the state file written by `serve.ts`.
@@ -136,13 +143,13 @@ export class ArizePlugin extends Plugin<ArizePluginConfig> {
    * Databricks App) we don't register anything - the mount path
    * stays free for the host app's own catch-all / frontend
    * handler. Visitors get the host's normal 404 instead of any
-   * Arize-shaped response.
+   * Phoenix-shaped response.
    */
   override injectRoutes(router: IAppRouter): void {
     if (!this.enabled_) return;
 
-    // Browsers hitting the bare prefix (`GET /api/arize`) need to
-    // land on `/api/arize/` so Phoenix's relative asset URLs
+    // Browsers hitting the bare prefix (`GET /api/phoenix`) need to
+    // land on `/api/phoenix/` so Phoenix's relative asset URLs
     // resolve. A 308 keeps the method/body intact for the rare
     // POST that omits the slash.
     router.get("/", (req, res, next) => {
