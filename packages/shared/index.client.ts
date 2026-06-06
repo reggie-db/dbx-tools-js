@@ -22,6 +22,7 @@
  * only on `index.ts` (the server entry).
  */
 export * as commonUtils from "./src/common.js";
+export * as netUtils from "./src/net.browser.js";
 export * as httpUtils from "./src/http.js";
 export * as logUtils from "./src/log.js";
 export * as pluginUtils from "./src/plugin.js";

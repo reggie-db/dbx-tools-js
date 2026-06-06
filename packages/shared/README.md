@@ -14,6 +14,7 @@ import {
   commonUtils,
   httpUtils,
   logUtils,
+  netUtils,
   pluginUtils,
   projectUtils,
   stringUtils,
@@ -51,10 +52,10 @@ const pool2 = pluginUtils
 per factory so repeated lookups don't allocate. Use it directly when you
 need the registered name for a manifest dependency.
 
-## `httpUtils` - framework-neutral request helpers
+## `httpUtils` - framework-neutral header helpers
 
-Public surface: `joinUrlSegments`, `toURL`, `forEachHeaderValue`,
-`parseCookies`. The header-shaped helpers work uniformly against any of:
+Public surface: `forEachHeaderValue`, `parseCookies`. The header-shaped
+helpers work uniformly against any of:
 
 - Express `req` (Node-style `req.headers`)
 - Web Fetch `Request` (`Headers` instance)
@@ -75,14 +76,30 @@ app.use((req, res, next) => {
     if (value.startsWith("Bearer ")) bearer = value.slice(7);
   });
 });
+```
+
+## `netUtils` - URL parsing + free-port helpers
+
+Public surface: `joinUrl`, `parseUrl`, plus the server-only
+`getRandomPort`. The URL helpers are pure JS and ship in the
+browser bundle too; `getRandomPort` binds a transient `node:net`
+listener and is therefore server-only (importing `netUtils` from
+the browser entry simply omits it).
+
+```ts
+import { netUtils } from "@dbx-tools/shared";
 
 // Tolerant URL coercion - bare hostnames, partial inputs, or
-// objects with a `.url` field all round-trip through:
-const url = httpUtils.toURL("example.com");  // https://example.com/
+// objects with a `.url` field all round-trip through. Returns
+// `null` on failure (matches WHATWG `URL.parse(...)` semantics).
+const url = netUtils.parseUrl("example.com");  // https://example.com/
 
 // Path-segment join: nullish/blank inputs are skipped, leading /
 // trailing slashes are normalized, nested arrays recurse.
-httpUtils.joinUrlSegments("/api/", ["v2", "items"], null); // "/api/v2/items"
+netUtils.joinUrl("/api/", ["v2", "items"], null); // "/api/v2/items"
+
+// Grab a free local port (server only).
+const port = await netUtils.getRandomPort();
 ```
 
 ## `apiUtils` - authenticated Databricks REST calls (server only)

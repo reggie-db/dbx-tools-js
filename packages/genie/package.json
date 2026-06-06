@@ -5,6 +5,6 @@
   "module": "index.ts",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
-    "zod": "catalog:"
+    "@dbx-tools/shared": "workspace:*"
   }
 }

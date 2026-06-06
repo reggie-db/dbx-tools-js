@@ -25,7 +25,7 @@
     "@dbx-tools/appkit-mastra": "workspace:*",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "@mastra/client-js": "^1.20.0",
+    "@mastra/client-js": "catalog:",
     "ai": "^5.0.0",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",

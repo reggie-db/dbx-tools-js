@@ -27,8 +27,8 @@
 
 import {
   commonUtils,
-  httpUtils,
   logUtils,
+  netUtils,
   stringUtils,
 } from "@dbx-tools/shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
@@ -390,7 +390,7 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
   const log = logUtils.logger("mastra/llm");
   const original = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input, init) => {
-    const url = httpUtils.toURL(input);
+    const url = netUtils.parseUrl(input);
     if (
       !url ||
       !url.pathname.startsWith(SERVING_ENDPOINTS_PATH_PREFIX) ||

@@ -11,6 +11,15 @@
     "@databricks/appkit": "^0.35",
     "@databricks/appkit-ui": "^0.35",
     "@databricks/sdk-experimental": "^0.17",
+    "@mastra/ai-sdk": "^1",
+    "@mastra/client-js": "^1",
+    "@mastra/core": "^1",
+    "@mastra/express": "^1",
+    "@mastra/fastembed": "^1",
+    "@mastra/memory": "^1",
+    "@mastra/observability": "^1",
+    "@mastra/otel-bridge": "^1",
+    "@mastra/pg": "^1",
     "@types/express": "^5",
     "@types/bun": "latest",
     "@types/node": "latest",
@@ -39,18 +48,22 @@
     "@changesets/cli": "^2.27.10",
     "@databricks/sdk-experimental": "catalog:",
     "@types/bun": "catalog:",
-    "@types/deep-diff": "^1.0.5",
     "@types/node": "catalog:",
     "@types/semver": "^7.7.1",
     "commander": "^15.0.0-0",
-    "deep-diff": "^1.0.2",
     "jsonc-parser": "^3.3.1",
+    "microdiff": "^1.5.0",
     "p-memoize": "^8.0.0",
     "prettier": "^3.8.3",
     "semver": "^7.8.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "yaml": "^2.9.0"
   },
   "overrides": {
     "zod": "4.3.6"
+  },
+  "dependencies": {
+    "@dbx-tools/shared": "workspace:*",
+    "zod": "^4.3.6"
   }
 }

@@ -12,5 +12,13 @@
     "moduleResolution": "NodeNext"
   },
   "include": ["${configDir}/index.ts", "${configDir}/src"],
-  "exclude": ["${configDir}/dist", "${configDir}/tests", "${configDir}/**/*.test.ts"]
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "**/build",
+    "**/tmp",
+    "${configDir}/dist",
+    "${configDir}/test",
+    "${configDir}/**/*.test.ts"
+  ]
 }

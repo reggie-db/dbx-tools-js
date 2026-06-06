@@ -13,7 +13,9 @@
  * to `index.client.ts` to keep this file as the thin server-only
  * delta.
  */
-export * from "./index.client.js";
+
 export * as projectUtils from "./src/project.js";
 export * as apiUtils from "./src/api.js";
 export * as netUtils from "./src/net.js";
+
+export * from "./index.client.js";
