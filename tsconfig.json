@@ -17,6 +17,9 @@
       "path": "./packages/appkit-serving/tsconfig.build.json"
     },
     {
+      "path": "./packages/genie/tsconfig.build.json"
+    },
+    {
       "path": "./packages/shared/tsconfig.build.json"
     }
   ],
