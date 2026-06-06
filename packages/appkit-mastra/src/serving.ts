@@ -21,7 +21,7 @@
  */
 
 import { CacheManager, type getExecutionContext } from "@databricks/appkit";
-import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/shared";
 import Fuse from "fuse.js";
 
 import type { ServingEndpointSummary } from "@dbx-tools/appkit-mastra-shared";

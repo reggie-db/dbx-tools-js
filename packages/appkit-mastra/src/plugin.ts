@@ -37,7 +37,7 @@ import {
   type PluginManifest,
   type ResourceRequirement,
 } from "@databricks/appkit";
-import { logUtils, pluginUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, pluginUtils } from "@dbx-tools/shared";
 import { chatRoute } from "@mastra/ai-sdk";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
@@ -285,7 +285,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // whatever tracer provider `TelemetryManager` registered during
     // `createApp`, so the OTLP endpoint / headers / sampling are
     // env-driven and shared with every other AppKit plugin.
-    const observability = buildObservability({ serviceName: this.name });
+    const observability = await buildObservability({ serviceName: this.name });
     this.mastra = new Mastra({
       agents: this.built.agents,
       ...(instanceStorage ? { storage: instanceStorage } : {}),

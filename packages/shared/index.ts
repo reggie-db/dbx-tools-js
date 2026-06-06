@@ -1,5 +1,5 @@
 /**
- * Server-side entry point for `@dbx-tools/appkit-shared`. Re-exports
+ * Server-side entry point for `@dbx-tools/shared`. Re-exports
  * everything from the browser-safe {@link ./index.client.ts} barrel
  * and adds `projectUtils`, which imports `node:fs` /
  * `node:child_process` / `node:path` / `node:util` and is therefore

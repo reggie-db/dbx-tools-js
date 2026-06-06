@@ -12,11 +12,17 @@ bun changeset
 ```
 
 Pick the packages that changed and the bump level (patch/minor/major). Commit
-the generated markdown file alongside your code change. The three publishable
-packages (`@dbx-tools/appkit-genie`, `@dbx-tools/appkit-genie-ui`,
-`@dbx-tools/appkit-genie-shared`) are configured as `fixed` in
+the generated markdown file alongside your code change. Every publishable
+package under the `@dbx-tools/*` scope is configured as `fixed` in
 `config.json`, so they always bump together regardless of which one you
 selected. The `demo` package is private and never publishes.
+
+The canonical "main" version of the monorepo is the `version` field on the
+root `package.json`. It mirrors the bumped version of the fixed group: the
+root `version` script chains `changeset version && bun scripts/sync-version.ts`
+so the root manifest auto-tracks whatever changesets just emitted. Newly
+scaffolded packages (`bun run create plugin <slug>`) start at this version so
+they're already in lockstep with the rest of the workspace.
 
 ## Skipping the prompt
 

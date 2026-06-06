@@ -8,7 +8,7 @@
  *
  * **Server-only.** Imports `node:fs`, `node:path`, `node:child_process`,
  * and `node:util` at module load. Browser bundles must use
- * `@dbx-tools/appkit-shared`'s `index.client.ts` entry point, which
+ * `@dbx-tools/shared`'s `index.client.ts` entry point, which
  * skips this module entirely.
  */
 

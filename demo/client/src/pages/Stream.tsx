@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import type { UIMessage } from "ai";
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils } from "@dbx-tools/shared";
 import {
   ChatView,
   type ApprovalDecision,

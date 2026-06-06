@@ -546,7 +546,7 @@ curl -s http://localhost:8000/api/mastra/models | jq
 Same payload from a sibling plugin or script (no HTTP round-trip):
 
 ```ts
-import { pluginUtils } from "@dbx-tools/appkit-shared";
+import { pluginUtils } from "@dbx-tools/shared";
 import { mastra } from "@dbx-tools/appkit-mastra";
 
 const m = pluginUtils.require(this.context, mastra).exports();
@@ -658,7 +658,7 @@ Other plugins / route handlers can introspect the registry via the
 `exports()` surface, modeled on AppKit's:
 
 ```ts
-import { pluginUtils } from "@dbx-tools/appkit-shared";
+import { pluginUtils } from "@dbx-tools/shared";
 import { mastra } from "@dbx-tools/appkit-mastra";
 
 const m = pluginUtils.require(this.context, mastra).exports();

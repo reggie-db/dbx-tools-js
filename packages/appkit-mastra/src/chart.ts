@@ -36,7 +36,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/shared";
 import { Agent } from "@mastra/core/agent";
 import type { RequestContext } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";

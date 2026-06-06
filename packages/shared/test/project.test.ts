@@ -8,7 +8,7 @@ import * as projectUtils from "../src/project.js";
 const tempDirs: string[] = [];
 
 function makeTempProject(layout: (root: string) => void): string {
-  const root = mkdtempSync(join(tmpdir(), "appkit-shared-project-"));
+  const root = mkdtempSync(join(tmpdir(), "shared-project-"));
   tempDirs.push(root);
   layout(root);
   return root;

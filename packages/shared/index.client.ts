@@ -1,5 +1,5 @@
 /**
- * Browser-safe entry point for `@dbx-tools/appkit-shared`. Mirrors
+ * Browser-safe entry point for `@dbx-tools/shared`. Mirrors
  * the server-side {@link ./index.ts} barrel except `projectUtils` is
  * absent - it imports `node:fs` / `node:child_process` / `node:path` /
  * `node:util` at module load, which Vite stubs for browsers and which

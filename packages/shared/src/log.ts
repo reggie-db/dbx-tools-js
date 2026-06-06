@@ -82,7 +82,7 @@ function extractLoggerName(
  *
  * @example
  * ```ts
- * import { logUtils } from "@dbx-tools/appkit-shared";
+ * import { logUtils } from "@dbx-tools/shared";
  *
  * class MyPlugin extends Plugin {
  *   private log = logUtils.logger(this);

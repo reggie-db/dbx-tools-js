@@ -21,7 +21,7 @@
  */
 
 import { genie } from "@databricks/appkit";
-import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/shared";
 import type { RequestContext } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
 import type { ToolStream } from "@mastra/core/tools";

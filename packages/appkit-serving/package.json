@@ -5,6 +5,6 @@
   "module": "index.ts",
   "dependencies": {
     "@databricks/appkit": "catalog:",
-    "@dbx-tools/appkit-shared": "workspace:*"
+    "@dbx-tools/shared": "workspace:*"
   }
 }

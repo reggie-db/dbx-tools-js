@@ -1,4 +1,4 @@
-import { apiUtils } from "@dbx-tools/appkit-shared";
+import { apiUtils } from "@dbx-tools/shared";
 
 // ────────────────────────────────────────────────────────────────
 // Endpoint shape

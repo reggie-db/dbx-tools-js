@@ -34,7 +34,7 @@
  */
 
 import { getWorkspaceClient } from "@databricks/appkit";
-import { projectUtils, stringUtils, type logUtils } from "@dbx-tools/appkit-shared";
+import { projectUtils, stringUtils, type logUtils } from "@dbx-tools/shared";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { parseAddress } from "./address.js";

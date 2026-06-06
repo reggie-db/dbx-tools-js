@@ -28,7 +28,7 @@
  */
 
 import { lakebase } from "@databricks/appkit";
-import { logUtils, pluginUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, pluginUtils } from "@dbx-tools/shared";
 import { fastembed } from "@mastra/fastembed";
 import { Memory } from "@mastra/memory";
 import { PgVector, PostgresStore } from "@mastra/pg";

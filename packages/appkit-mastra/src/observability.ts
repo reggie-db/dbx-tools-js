@@ -31,7 +31,7 @@
  * silently no-ops in the same situation.
  */
 
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, projectUtils } from "@dbx-tools/shared";
 import { Observability } from "@mastra/observability";
 import { OtelBridge } from "@mastra/otel-bridge";
 
@@ -49,7 +49,7 @@ export interface BuildObservabilityOptions {
    * - it reads `OTEL_SERVICE_NAME` / `DATABRICKS_APP_NAME` at
    * `createApp` time).
    *
-   * Defaults to `"mastra"`.
+   * Defaults to project name then `"mastra"`.
    */
   serviceName?: string;
   /**
@@ -72,24 +72,41 @@ export interface BuildObservabilityOptions {
  * is registered. Callers can spread `...(observability ? { observability } : {})`
  * either way to stay forward-compatible.
  */
-export function buildObservability(
+export async function buildObservability(
   options?: BuildObservabilityOptions,
-): Observability | undefined {
-  const serviceName = options?.serviceName ?? DEFAULT_SERVICE_NAME;
+): Promise<Observability | undefined> {
+  const serviceName =
+    options?.serviceName ??
+    (await projectUtils.name()) ??
+    DEFAULT_SERVICE_NAME;
   const requestContextKeys = [
     ...(options?.requestContextKeys ?? TRACE_REQUEST_CONTEXT_KEYS),
   ];
 
-  const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  // The OTel HTTP exporter treats `OTEL_EXPORTER_OTLP_ENDPOINT` as a
+  // *base* URL and appends the signal path itself (e.g.
+  // `http://localhost:6006` -> `http://localhost:6006/v1/traces`). Log
+  // the resolved POST URL so misconfigurations (e.g. accidentally
+  // setting the base var to a `/v1/traces`-suffixed URL, which makes
+  // the SDK POST to `.../v1/traces/v1/traces` and Phoenix 404s) are
+  // obvious in startup output.
+  const otelBase = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  const otelTracesOverride = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+  const resolvedTracesUrl = otelTracesOverride
+    ? otelTracesOverride
+    : otelBase
+      ? `${otelBase.replace(/\/+$/, "")}/v1/traces`
+      : undefined;
   log.info("Mastra observability wired through OTel bridge", {
     serviceName,
     requestContextKeys,
-    otelEndpoint: otelEndpoint ?? "<unset; spans will no-op until set>",
+    otelBase: otelBase ?? "<unset>",
+    resolvedTracesUrl: resolvedTracesUrl ?? "<noop; OTLP endpoint unset>",
   });
 
   return new Observability({
     configs: {
-      [serviceName]: {
+      serviceName: {
         serviceName,
         bridge: new OtelBridge(),
         requestContextKeys,

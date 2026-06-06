@@ -30,7 +30,7 @@ import {
   httpUtils,
   logUtils,
   stringUtils,
-} from "@dbx-tools/appkit-shared";
+} from "@dbx-tools/shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
 

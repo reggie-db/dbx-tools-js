@@ -6,14 +6,14 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 
 | Package                                                                    | Path                            | Published            |
 | -------------------------------------------------------------------------- | ------------------------------- | -------------------- |
-| [`@dbx-tools/appkit-shared`](packages/shared)                              | `packages/shared`               | yes                  |
+| [`@dbx-tools/shared`](packages/shared)                                     | `packages/shared`               | yes                  |
 | [`@dbx-tools/appkit-autopg`](packages/appkit-autopg)                       | `packages/appkit-autopg`        | yes                  |
 | [`@dbx-tools/appkit-serving`](packages/appkit-serving)                     | `packages/appkit-serving`       | yes                  |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra)                       | `packages/appkit-mastra`        | yes                  |
 | [`@dbx-tools/appkit-mastra-shared`](packages/appkit-mastra-shared)         | `packages/appkit-mastra-shared` | yes                  |
 | [`@dbx-tools/appkit-demo`](demo)                                           | `demo`                          | no (`private: true`) |
 
-`appkit-shared` provides small utilities (typed plugin lookup, cookie parsing,
+`shared` provides small utilities (typed plugin lookup, cookie parsing,
 string case helpers, console log prefixes with `LOG_LEVEL` filtering,
 memoization, and an auth-aware Databricks REST helper that resolves the
 workspace client off the AppKit execution context) without pulling AppKit

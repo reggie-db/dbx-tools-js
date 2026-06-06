@@ -16,7 +16,7 @@
  * session-cookie logic stays the single source of truth in `server.ts`.
  */
 
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils } from "@dbx-tools/shared";
 import { toAISdkV5Messages } from "@mastra/ai-sdk/ui";
 import type { Agent } from "@mastra/core/agent";
 import type { MastraDBMessage } from "@mastra/core/agent/message-list";

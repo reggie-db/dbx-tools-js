@@ -20,7 +20,7 @@
  * uniformly without coupling to specific tool ids.
  */
 
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils } from "@dbx-tools/shared";
 import type {
   InputProcessor,
   ProcessInputArgs,

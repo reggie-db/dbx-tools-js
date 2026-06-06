@@ -1,7 +1,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils } from "@dbx-tools/shared";
 import { ChatView, type ApprovalDecision } from "@/components/chat-view";
 import { useChatUrl, useMastraModels } from "@/lib/mastra-client";
 

@@ -20,7 +20,7 @@
 // Two kinds:
 //   - `plugin`: AppKit Plugin subclass with an inline manifest. Lists
 //     `@databricks/appkit` as a peer dependency and depends on
-//     `@dbx-tools/appkit-shared` for logger / plugin helpers.
+//     `@dbx-tools/shared` for logger / plugin helpers.
 //   - `shared`: pure-types package with a `src/protocol.ts` seed.
 //     Zero runtime deps so the file is safe to import from browser
 //     bundles.
@@ -30,25 +30,45 @@
 //   bun run create shared <slug>     e.g. bun run create shared example-shared
 //
 // Naming derivations from the kebab-case `<slug>`:
-//   - npm name:        @dbx-tools/appkit-<slug>       (example -> @dbx-tools/appkit-example)
+//   - npm name:        @dbx-tools/<slug>              (example -> @dbx-tools/example)
 //   - directory:       packages/<slug>                (example -> packages/example)
 //   - class name:      PascalCase(<slug>) + Plugin    (example -> ExamplePlugin)   [plugin only]
 //   - export const:    camelCase(<slug>)              (example -> example)         [plugin only]
 //   - displayName:     "Title Case <slug>"            (example -> "Example")       [plugin only]
 //   - manifest name:   <slug> verbatim                                              [plugin only]
+//
+// The npm name intentionally tracks the folder name 1:1: no implicit
+// prefix is stamped on. Naming a package `foo` therefore yields
+// `@dbx-tools/foo`; if you want `@dbx-tools/appkit-foo` on npm, name
+// the folder `appkit-foo`.
+//
+// The initial `version` is read off the root `package.json` instead
+// of being hardcoded. That keeps a freshly scaffolded package in
+// lockstep with the changesets `fixed` group, so the next
+// `changeset version` bumps it alongside everyone else.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
-import { ROOT, writeJson } from "./util.js";
+import { fail, ROOT, writeJson, type PackageJson } from "./util.js";
 
 const SCOPE = "@dbx-tools";
-const NPM_PREFIX = "appkit-";
 // AppKit's version range lives in the root `catalog` (see root
 // package.json). Scaffolded plugins reference it via `catalog:` so
 // bumping happens in one place.
 const APPKIT_PEER_RANGE = "catalog:";
-const SHARED_PKG = `${SCOPE}/${NPM_PREFIX}shared`;
+const SHARED_PKG = `${SCOPE}/shared`;
+
+// Canonical "main" version for the monorepo. Lives on the root
+// `package.json` (kept in sync with the changesets `fixed` group by
+// `scripts/sync-version.ts`). New packages start here so they're
+// already in lockstep with the rest of the workspace - the next
+// `changeset version` will then bump them alongside everyone else.
+const rootMeta = (await Bun.file(resolve(ROOT, "package.json")).json()) as PackageJson;
+const INITIAL_VERSION = rootMeta.version;
+if (!INITIAL_VERSION) {
+  fail("root package.json has no `version` field; run `bun run sync-version` first");
+}
 
 type Kind = "plugin" | "shared";
 
@@ -95,7 +115,7 @@ const pascal = parts.map((s) => s[0]!.toUpperCase() + s.slice(1)).join("");
 const camel = pascal[0]!.toLowerCase() + pascal.slice(1);
 const className = `${pascal}Plugin`;
 const displayName = parts.map((s) => s[0]!.toUpperCase() + s.slice(1)).join(" ");
-const pkgName = `${SCOPE}/${NPM_PREFIX}${slug}`;
+const pkgName = `${SCOPE}/${slug}`;
 
 // `package.json`: the bare minimum mastra-shared settled on. Bun reads
 // `module` to resolve the entry; nothing else is needed for workspace
@@ -103,7 +123,7 @@ const pkgName = `${SCOPE}/${NPM_PREFIX}${slug}`;
 // + the shared utils dep so consumers don't have to wire them.
 const basePackageJson = {
   name: pkgName,
-  version: "0.1.0",
+  version: INITIAL_VERSION,
   module: "index.ts",
   type: "module" as const,
 };

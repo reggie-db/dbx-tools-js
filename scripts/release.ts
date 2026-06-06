@@ -3,7 +3,7 @@
 //
 // On-disk `packages/*/package.json` files are kept to the absolute
 // minimum needed for dev tooling (name / version / type / module /
-// deps, plus per-package custom fields like `@dbx-tools/appkit-shared`'s
+// deps, plus per-package custom fields like `@dbx-tools/shared`'s
 // dual-entry `exports` map). The publish-time shape - license, repo,
 // files, publishConfig, the standard single-entry exports map, and so
 // on - is split between two root-level files:
@@ -233,7 +233,7 @@ function rewriteSpecialDeps(meta: PackageJson): void {
  * package-specific `repository.directory`, and rewrite all special
  * dep specifiers. Shallow merge is on purpose: when a package
  * defines its own multi-condition `exports` map (e.g.
- * `@dbx-tools/appkit-shared`'s dual server/browser entry), the
+ * `@dbx-tools/shared`'s dual server/browser entry), the
  * default single-entry map is replaced wholesale instead of
  * deep-merged into it.
  */

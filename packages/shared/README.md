@@ -1,4 +1,4 @@
-# @dbx-tools/appkit-shared
+# @dbx-tools/shared
 
 Shared utilities used by the other `@dbx-tools/appkit-*` plugins. The
 package has zero AppKit runtime dependency (it lists `@databricks/appkit`
@@ -17,13 +17,13 @@ import {
   pluginUtils,
   projectUtils,
   stringUtils,
-} from "@dbx-tools/appkit-shared";
+} from "@dbx-tools/shared";
 ```
 
 > `apiUtils` and `projectUtils` import Node-only modules (`@databricks/appkit`,
 > `node:fs`) and are intentionally **not** re-exported from the browser
 > entry. Vite / Webpack / esbuild builds that honor the `browser`
-> condition will resolve `@dbx-tools/appkit-shared` to a barrel that
+> condition will resolve `@dbx-tools/shared` to a barrel that
 > omits both - import them only from server-side code.
 
 ## `pluginUtils` - typed sibling-plugin lookup
@@ -35,7 +35,7 @@ so every cross-plugin call ends up writing the same
 
 ```ts
 import { lakebase } from "@databricks/appkit";
-import { pluginUtils } from "@dbx-tools/appkit-shared";
+import { pluginUtils } from "@dbx-tools/shared";
 
 const lake = pluginUtils.instance(this.context, lakebase);
 //    ^^ inferred as LakebasePlugin | undefined
@@ -63,7 +63,7 @@ Public surface: `joinUrlSegments`, `toURL`, `forEachHeaderValue`,
 - Plain `Record<string, string | string[] | undefined>`
 
 ```ts
-import { httpUtils } from "@dbx-tools/appkit-shared";
+import { httpUtils } from "@dbx-tools/shared";
 
 app.use((req, res, next) => {
   const session = httpUtils.parseCookies(req).session;
@@ -93,7 +93,7 @@ optional `CacheManager.getOrExecute` hook so per-user TTL'd reads are a
 single positional arg:
 
 ```ts
-import { apiUtils } from "@dbx-tools/appkit-shared";
+import { apiUtils } from "@dbx-tools/shared";
 
 // Bare GET against the workspace /api/2.0 namespace - leading /api/2.0
 // is auto-stripped so you can pass either form.
@@ -131,7 +131,7 @@ lower-case at the type level (the `lowerCase` option literal is fixed to
 `true` so an explicit `false` is a compile error):
 
 ```ts
-import { stringUtils } from "@dbx-tools/appkit-shared";
+import { stringUtils } from "@dbx-tools/shared";
 
 stringUtils.toIdentifier("My Cool Project!"); // "my_cool_project"
 stringUtils.toSlug("My Cool Project!"); // "my-cool-project"
@@ -143,7 +143,7 @@ stringUtils.toIdentifierWithOptions({ maxLength: 12 }, "very long project name")
 ## `projectUtils` - project name + git-remote parsing
 
 ```ts
-import { projectUtils } from "@dbx-tools/appkit-shared";
+import { projectUtils } from "@dbx-tools/shared";
 
 // Discovers a stable name for the current project. Order:
 // 1. `package.json` name (root of an npm/bun workspace if applicable)
@@ -158,7 +158,7 @@ projectUtils.parseGitRemote("git@github.com:org/my-repo.git"); // "my-repo"
 ## `commonUtils` - memoize + hashing
 
 ```ts
-import { commonUtils } from "@dbx-tools/appkit-shared";
+import { commonUtils } from "@dbx-tools/shared";
 
 // Memoize by all-args; sync results cache forever, async failures bust.
 const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));
@@ -181,7 +181,7 @@ keys and slugs, never for tokens or signatures.
 that auto-tags every line with the plugin's name:
 
 ```ts
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils } from "@dbx-tools/shared";
 
 class MyPlugin extends Plugin<MyConfig> {
   private log = logUtils.logger(this); // tags as "[my-plugin]"

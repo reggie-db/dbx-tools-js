@@ -14,7 +14,7 @@
  */
 
 import { genie } from "@databricks/appkit";
-import { logUtils, pluginUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, pluginUtils, stringUtils } from "@dbx-tools/shared";
 import { Agent } from "@mastra/core/agent";
 import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";

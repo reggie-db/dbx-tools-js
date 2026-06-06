@@ -1,5 +1,6 @@
 {
   "name": "dbx-tools-appkit",
+  "version": "0.1.13",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -9,6 +10,7 @@
   "catalog": {
     "@databricks/appkit": "^0.35",
     "@databricks/appkit-ui": "^0.35",
+    "@databricks/sdk-experimental": "^0.17",
     "@types/express": "^5",
     "@types/bun": "latest",
     "@types/node": "latest",
@@ -23,22 +25,25 @@
     "prebuild": "bun run typecheck",
     "build": "bun scripts/build.ts",
     "create": "bun scripts/create.ts",
-    "version": "bunx --bun changeset version",
+    "version": "bunx --bun changeset version && bun scripts/sync-version.ts",
+    "sync-version": "bun scripts/sync-version.ts",
     "prerelease": "bun run build",
     "release": "bun scripts/release.ts",
     "tag": "bun scripts/tag.ts",
-    "dev": "bun --elide-lines=0 run --filter '@dbx-tools/appkit-demo' dev"
+    "dev": "bun run --cwd=demo dev"
   },
   "peerDependencies": {
     "@databricks/appkit": "catalog:"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.10",
-    "@databricks/sdk-experimental": "^0.17",
+    "@databricks/sdk-experimental": "catalog:",
     "@types/bun": "catalog:",
+    "@types/deep-diff": "^1.0.5",
     "@types/node": "catalog:",
     "@types/semver": "^7.7.1",
     "commander": "^15.0.0-0",
+    "deep-diff": "^1.0.2",
     "jsonc-parser": "^3.3.1",
     "p-memoize": "^8.0.0",
     "prettier": "^3.8.3",

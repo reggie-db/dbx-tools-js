@@ -33,7 +33,7 @@
  * untouched and just inspect the returned record.
  */
 
-import { logUtils } from "@dbx-tools/appkit-shared";
+import { logUtils } from "@dbx-tools/shared";
 
 import {
   applyToEnv,

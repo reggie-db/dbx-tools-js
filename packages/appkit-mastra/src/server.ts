@@ -6,7 +6,7 @@
  */
 
 import { getExecutionContext } from "@databricks/appkit";
-import { httpUtils, logUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import { httpUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import {
   MASTRA_RESOURCE_ID_KEY,
   MASTRA_THREAD_ID_KEY,

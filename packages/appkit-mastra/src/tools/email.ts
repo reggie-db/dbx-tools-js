@@ -26,7 +26,7 @@
  * specific agents that should be able to draft emails.
  */
 
-import { logUtils, stringUtils } from "@dbx-tools/appkit-shared";
+import { logUtils, stringUtils } from "@dbx-tools/shared";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
