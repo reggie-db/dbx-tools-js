@@ -90,22 +90,22 @@ const chartDataPointSchema = z
         const y = typeof v[1] === "number" ? v[1] : Number(v[1]);
         return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
       }
-    if (typeof v === "object" && v !== null && "value" in v) {
-      const obj = v as { name?: unknown; value: unknown };
-      const val = typeof obj.value === "number" ? obj.value : Number(obj.value);
-      if (!Number.isFinite(val)) return null;
-      // Coerce numeric / boolean / nullish names to strings so a
-      // pie slice keyed on a year (`2024`) or category id is
-      // accepted without round-tripping through the catch arm.
-      const rawName = obj.name;
-      const name =
-        typeof rawName === "string"
-          ? rawName
-          : rawName == null
-            ? ""
-            : String(rawName);
-      return { name, value: val };
-    }
+      if (typeof v === "object" && v !== null && "value" in v) {
+        const obj = v as { name?: unknown; value: unknown };
+        const val = typeof obj.value === "number" ? obj.value : Number(obj.value);
+        if (!Number.isFinite(val)) return null;
+        // Coerce numeric / boolean / nullish names to strings so a
+        // pie slice keyed on a year (`2024`) or category id is
+        // accepted without round-tripping through the catch arm.
+        const rawName = obj.name;
+        const name =
+          typeof rawName === "string"
+            ? rawName
+            : rawName == null
+              ? ""
+              : String(rawName);
+        return { name, value: val };
+      }
       return null;
     },
     z.union([
@@ -310,7 +310,7 @@ export async function runChartPlanner(
     ...(requestContext ? { requestContext } : {}),
     ...(signal ? { abortSignal: signal } : {}),
   });
-  const plan = result.object;
+  const plan = result.object as ChartPlan;
   const option = planToEchartsOption(plan, title);
   return { option, chartType: plan.chartType };
 }

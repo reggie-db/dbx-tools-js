@@ -69,7 +69,6 @@ import {
   fail,
   ROOT,
   toRelative,
-  writeJson,
   type WorkspacePackage,
 } from "./util.js";
 
@@ -310,9 +309,11 @@ async function assertWritable(absPath: string): Promise<void> {
 /* --------------------------- per-package --------------------------- */
 
 /**
- * Regenerate the `generated/` tree for one consumer package and
- * stamp the package.json `module`/`main`/`exports` fields so the
- * tree is visible to import callers without manual wiring.
+ * Regenerate the `generated/` tree for one consumer package. The
+ * package's `package.json` is read-only - the codegen `inputs`
+ * list comes out, but nothing flows back. Consumers expose the
+ * generated tree via a hand-written top-level `index.ts`
+ * re-export.
  */
 async function generatePackage(pkg: WorkspacePackage): Promise<void> {
   const config = pkg.meta.codegen as CodegenConfig | undefined;
@@ -392,20 +393,6 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
     resolve(generatedDir, "index.ts"),
     HEADER + indexLines.join("\n") + "\n",
   );
-
-  // Stamp the package.json so the generated tree is visible to
-  // import callers without manual wiring. Surgical merge: leave
-  // every other field (name, version, codegen, dependencies, ...)
-  // alone.
-  const entryRel = `${GENERATED_DIRNAME}/index.ts`;
-  const entryExport = `./${entryRel}`;
-  const updatedMeta = {
-    ...pkg.meta,
-    module: entryRel,
-    main: entryRel,
-    exports: { ".": entryExport },
-  };
-  await writeJson(pkg.jsonPath, updatedMeta);
 
   console.log(
     `${pkg.meta.name ?? pkg.slug}: ${inputs.length} module(s) -> ` +
