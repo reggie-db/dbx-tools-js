@@ -725,12 +725,73 @@ export async function agentQuery(
     // settle in well under this cap.
     maxSteps: 32,
   });
+  // Surface tool activity inline so long-running scripts (`readme.ts`,
+  // `tag.ts`) show concrete progress. Format matches the `[scope]`
+  // convention the rest of the runtime uses (`[mastra]`, `[autopg]`).
   for await (const event of stream.fullStream) {
     if (event.type === "tool-call") {
-      console.debug(`  tool: ${event.payload?.toolName}`);
+      const { toolName, args } = event.payload;
+      if (toolName) {
+        console.log(`[tool] call ${toolName}(${_summarizeArgs(args)})`);
+      }
+    } else if (event.type === "tool-result") {
+      const { toolName, result, isError } = event.payload;
+      if (toolName) {
+        const verb = isError ? "fail" : "done";
+        console.log(`[tool] ${verb} ${toolName} (${_summarizeResult(result)})`);
+      }
     }
   }
   const text = await stream.text;
 
   return text?.trim() || null;
+}
+
+/**
+ * Render tool-call args as a compact single-line string for the
+ * `[tool] call ...` log line. Strings stay raw; everything else is
+ * JSON-stringified with whitespace collapsed, then truncated with a
+ * char-count suffix so absurdly large args don't blow out the
+ * terminal.
+ */
+function _summarizeArgs(args: unknown, maxLen = 160): string {
+  if (args === undefined || args === null) return "";
+  let s: string;
+  try {
+    s = typeof args === "string" ? args : JSON.stringify(args);
+  } catch {
+    s = String(args);
+  }
+  s = s.replace(/\s+/g, " ").trim();
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen - 3)}... (${s.length} chars)`;
+}
+
+/**
+ * Render a tool result as a short summary. Reports the top-level
+ * array length when present (so `read_files` → `2 files, 1.2KB`,
+ * `list_files` → `7 entries, 340B`) and falls back to a raw byte
+ * count for opaque payloads.
+ */
+function _summarizeResult(result: unknown): string {
+  let json: string;
+  try {
+    json = JSON.stringify(result) ?? "";
+  } catch {
+    json = String(result);
+  }
+  const bytes = _humanBytes(json.length);
+  if (Array.isArray(result)) return `${result.length} items, ${bytes}`;
+  if (result && typeof result === "object") {
+    for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+      if (Array.isArray(value)) return `${value.length} ${key}, ${bytes}`;
+    }
+  }
+  return bytes;
+}
+
+function _humanBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
 }

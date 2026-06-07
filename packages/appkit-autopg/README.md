@@ -6,11 +6,11 @@ deployment actually carries. Run it once before `createApp(...)` and stop
 hand-rolling connection strings:
 
 ```ts
-import { createApp, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
+import { createApp, lakebase, server } from "@databricks/appkit";
 
 await autopg();
-await createApp({ plugins: [server(), lakebase()] });
+await createApp({ plugins: [lakebase(), server()] });
 ```
 
 ## Why a top-level helper instead of an AppKit plugin

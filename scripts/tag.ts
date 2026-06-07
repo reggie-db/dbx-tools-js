@@ -44,10 +44,21 @@
 //   renders as plaintext, so the annotated message alone shows up
 //   monospaced; the Release object is what renders markdown. Step
 //   is skipped silently when `gh` is not on `PATH`.
+//
+// README sync:
+//   Before the release commit is built, the script runs
+//   `syncReadmes({ upgrade: true })` from `readme.ts` over every
+//   publishable package. The intent is sync-with-code, not fresh
+//   regeneration: the agent is told to preserve every section that
+//   still matches the source and only rewrite drift. Any
+//   resulting edits get auto-staged and folded into the release
+//   commit, so the shipped READMEs always match the tagged code.
+//   Pass `--no-readmes` to skip this pass when iterating fast.
 
 import { which } from "bun";
 import { Command, InvalidArgumentError } from "commander";
 import semver from "semver";
+import { syncReadmes } from "./readme.js";
 import { agentQuery, discoverPackages, fail, run, writeJson } from "./util.js";
 
 type Bump = "major" | "minor" | "patch";
@@ -273,10 +284,18 @@ const program = new Command()
     "patch" as Bump,
   )
   .option("-n, --dry-run", "print everything, write nothing", false)
+  .option(
+    "--no-readmes",
+    "skip the pre-commit README sync pass (faster, but READMEs may drift)",
+  )
   .parse(process.argv);
 
 const [bump] = program.processedArgs as [Bump];
-const { dryRun } = program.opts<{ dryRun: boolean }>();
+const { dryRun, readmes } = program.opts<{
+  dryRun: boolean;
+  // commander turns `--no-readmes` into `readmes: false`.
+  readmes: boolean;
+}>();
 
 const { version: currentVersion, pkgs } = await findPublishables();
 const nextVersion = semver.inc(currentVersion, bump);
@@ -339,6 +358,16 @@ if (ahead !== "0") {
   console.log(`Unpushed commits: ${ahead} (will be pushed with the release commit)`);
 }
 console.log();
+
+// Sync READMEs with current source before the release commit is
+// built so the shipped docs match the tagged code. Runs against
+// every publishable package; the agent preserves accurate sections
+// and only rewrites drift. Skipped via `--no-readmes`.
+if (readmes) {
+  console.log("Syncing READMEs with current source...");
+  await syncReadmes({ upgrade: true, dryRun });
+  console.log();
+}
 
 const notesContext = await buildReleaseNotesContext(prevTag, tag);
 let aiSummary: string | null = null;

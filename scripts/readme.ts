@@ -7,9 +7,10 @@
 //     the agent (which inspects the package source via `list_files`
 //     / `read_files`, scoped to that package only). Packages with an
 //     existing README are skipped.
-//   - `--upgrade`: regenerate every README. The existing content is
-//     passed to the agent as a starting point so accurate sections
-//     can be preserved and drift gets rewritten.
+//   - `--upgrade`: rewrite every existing README to match the current
+//     code. The existing content is passed to the agent with explicit
+//     "preserve what's accurate, only rewrite drift" instructions, so
+//     this is a sync pass - not a fresh regeneration.
 //   - `--dry-run`: print the proposed README to stdout instead of
 //     writing it back to disk.
 //   - `--package <name>`: limit to a single package by full name
@@ -18,6 +19,10 @@
 // The agent is built with `cwd: pkg.dir` so `list_files` /
 // `read_files` are sandboxed to that package directory and cannot
 // reach into sibling packages while generating a README.
+//
+// `tag.ts` imports `syncReadmes()` to run an upgrade pass over every
+// package right before assembling the release commit, so the
+// shipped READMEs always reflect the code being tagged.
 
 import { Command } from "commander";
 import { resolve } from "node:path";
@@ -25,10 +30,23 @@ import { agentQuery, discoverPackages, fail, toRelative } from "./util.js";
 
 const README_INSTRUCTIONS = `
 You document a TypeScript package in the dbx-tools-appkit monorepo.
+
+OUTPUT CONTRACT (read this carefully):
+Your final assistant message is written verbatim to disk as the
+package's README.md file. It must contain ONLY the README markdown
+body. Nothing else. No analysis. No recap. No "here's the README".
+No "let me check". No "based on my reading". No notes about what
+you changed or verified. If you produce any of that, the output
+is unusable.
+
 Your filesystem tools (list_files, read_files) are scoped to the
 package directory. The package.json is at "package.json", entry
 points are under "src/". \`read_files\` takes an array, so batch
 related reads in one call.
+
+All thinking, comparing, and verification happens via TOOL CALLS,
+which the user never sees. The final message is the artifact, not a
+report about producing the artifact.
 
 Workflow:
 1. read_files([{path: "package.json"}, {path: "src/index.ts"}]) to
@@ -36,9 +54,9 @@ Workflow:
    exports the README should cover.
 2. Use list_files + a follow-up read_files batch on the rest of
    src/* only as needed to describe the surface area accurately.
+3. Emit the README markdown as your final message and stop.
 
-Output: a complete README.md as plain markdown with these sections,
-in order:
+README structure (these sections, in order):
 
 - # <package name>
 - One short paragraph: what the package does and who it's for.
@@ -47,82 +65,172 @@ in order:
 - ## API - bullets listing the main public exports, one short line each.
 
 Style:
-- No preamble, no closing remarks.
+- The very first character of your final message is "#".
+- No preamble, no closing remarks, no commentary about your process.
 - No emojis.
 - No em dashes.
-- Output only the README markdown body. Do NOT wrap the whole output
-  in a triple-backtick fence; only fence actual code snippets.
+- Do NOT wrap the whole output in a triple-backtick fence; only
+  fence actual code snippets inside the body.
+- When asked to bring an existing README into sync and nothing has
+  drifted, output the existing README byte-for-byte as your final
+  message. Do not announce that it was unchanged.
 `.trim();
 
-const program = new Command()
-  .name("readme")
-  .description("Generate or refresh README.md across publishable workspace packages.")
-  .option("-u, --upgrade", "regenerate READMEs that already exist", false)
-  .option("-n, --dry-run", "print to stdout instead of writing", false)
-  .option(
-    "-p, --package <name>",
-    "limit to a single package by full name (e.g. @dbx-tools/shared)",
-  )
-  .parse(process.argv);
-
-const {
-  upgrade,
-  dryRun,
-  package: only,
-} = program.opts<{
-  upgrade: boolean;
-  dryRun: boolean;
-  package?: string;
-}>();
-
-const all = await discoverPackages();
-const pkgs = only ? all.filter((p) => p.meta.name === only) : all;
-if (pkgs.length === 0) fail(`No packages matched ${only ?? "(all publishable)"}`);
-
-let wrote = 0;
-let skipped = 0;
-let failed = 0;
-
-for (const pkg of pkgs) {
-  const readmePath = resolve(pkg.dir, "README.md");
-  const existing = await Bun.file(readmePath)
-    .text()
-    .catch(() => null);
-
-  if (existing && !upgrade) {
-    skipped++;
-    console.log(`skip ${pkg.meta.name} (README exists; pass --upgrade to refresh)`);
-    continue;
-  }
-
-  const mode = existing ? "upgrade" : "new";
-  const prompt = existing
-    ? `Refresh the README for ${pkg.meta.name}. Use the existing README below as a starting point: keep sections that are still accurate, rewrite anything that's drifted from the current code.\n\n--- existing README ---\n${existing}`
-    : `Write a README for ${pkg.meta.name} from scratch by inspecting its source.`;
-
-  console.log(`> ${pkg.meta.name} (${mode})`);
-  const md = await agentQuery(prompt, undefined, {
-    instructions: README_INSTRUCTIONS,
-    cwd: pkg.dir,
-  });
-  if (!md) {
-    failed++;
-    console.warn(`  no agent output (skipping; check Databricks auth)`);
-    continue;
-  }
-
-  const body = md.endsWith("\n") ? md : `${md}\n`;
-  if (dryRun) {
-    console.log(`\n--- ${pkg.meta.name}: ${toRelative(readmePath)} ---\n${body}`);
-  } else {
-    await Bun.write(readmePath, body);
-    wrote++;
-    console.log(`  wrote ${toRelative(readmePath)}`);
-  }
+/** Options for {@link syncReadmes}. */
+export interface SyncReadmesOptions {
+  /**
+   * Upgrade mode. When true, packages that already have a README
+   * still get re-run through the agent with the existing content as
+   * a starting point so drift gets rewritten. When false (default),
+   * existing READMEs are left alone.
+   */
+  upgrade?: boolean;
+  /** Print the proposed README to stdout instead of writing it. */
+  dryRun?: boolean;
+  /** Limit to a single package by full name (e.g. `@dbx-tools/shared`). */
+  only?: string;
 }
 
-console.log(
-  `\nDone: ${wrote} written, ${skipped} skipped, ${failed} failed (of ${pkgs.length} package(s))${
-    dryRun ? " [--dry-run, nothing persisted]" : ""
-  }.`,
-);
+/** Summary returned by {@link syncReadmes}. */
+export interface SyncReadmesResult {
+  wrote: number;
+  skipped: number;
+  failed: number;
+  total: number;
+}
+
+/**
+ * Walk every publishable workspace package and bring its `README.md`
+ * in line with the current source via the script agent. Shared by
+ * the `readme` CLI and `tag.ts` (which calls it pre-commit so the
+ * release ships in-sync docs).
+ *
+ * Errors per-package never abort the whole pass; missing agent
+ * output (no Databricks profile, rate limit, ...) is logged and
+ * counted as `failed`.
+ */
+export async function syncReadmes(
+  opts: SyncReadmesOptions = {},
+): Promise<SyncReadmesResult> {
+  const { upgrade = false, dryRun = false, only } = opts;
+  const all = await discoverPackages();
+  const pkgs = only ? all.filter((p) => p.meta.name === only) : all;
+  if (pkgs.length === 0) fail(`No packages matched ${only ?? "(all publishable)"}`);
+
+  let wrote = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const pkg of pkgs) {
+    const readmePath = resolve(pkg.dir, "README.md");
+    const existing = await Bun.file(readmePath)
+      .text()
+      .catch(() => null);
+
+    if (existing && !upgrade) {
+      skipped++;
+      console.log(`skip ${pkg.meta.name} (README exists; pass --upgrade to refresh)`);
+      continue;
+    }
+
+    const mode = existing ? "sync" : "new";
+    const prompt = existing
+      ? // Emphasize sync-not-rewrite so the agent doesn't reflow prose
+        // that's still accurate. Tag-time runs hit every package every
+        // patch, so churn matters.
+        `Bring the README for ${pkg.meta.name} into sync with the current source.
+
+The existing README is below. Preserve every section, sentence, and
+code example that still matches the code. Only rewrite the specific
+parts that have drifted (renamed exports, removed APIs, stale
+examples, wrong import paths). If nothing has drifted, return the
+existing README byte-for-byte.
+
+--- existing README ---
+${existing}`
+      : `Write a README for ${pkg.meta.name} from scratch by inspecting its source.`;
+
+    console.log(`> ${pkg.meta.name} (${mode})`);
+    const md = await agentQuery(prompt, undefined, {
+      instructions: README_INSTRUCTIONS,
+      cwd: pkg.dir,
+    });
+    if (!md) {
+      failed++;
+      console.warn(`  no agent output (skipping; check Databricks auth)`);
+      continue;
+    }
+
+    // Defensive post-processing: the system prompt forbids analysis
+    // prose in the final message, but Claude occasionally relapses
+    // and prepends lines like "Now let me check ...". Strip
+    // everything before the first top-level `# ` heading so the
+    // file we write is always a clean README.
+    const cleaned = _stripPreamble(md);
+    if (!cleaned) {
+      failed++;
+      console.warn(`  agent output had no '# ' heading; skipping`);
+      continue;
+    }
+
+    const body = cleaned.endsWith("\n") ? cleaned : `${cleaned}\n`;
+    if (dryRun) {
+      console.log(`\n--- ${pkg.meta.name}: ${toRelative(readmePath)} ---\n${body}`);
+    } else if (existing && body === existing) {
+      skipped++;
+      console.log(`  unchanged (already in sync)`);
+    } else {
+      await Bun.write(readmePath, body);
+      wrote++;
+      console.log(`  wrote ${toRelative(readmePath)}`);
+    }
+  }
+
+  console.log(
+    `\nDone: ${wrote} written, ${skipped} skipped, ${failed} failed (of ${pkgs.length} package(s))${
+      dryRun ? " [--dry-run, nothing persisted]" : ""
+    }.`,
+  );
+  return { wrote, skipped, failed, total: pkgs.length };
+}
+
+/**
+ * Trim any leading "let me check..." / "now I will..." analysis the
+ * agent occasionally prepends to the final message, by locating the
+ * first top-level `# ` heading and slicing from there. Returns null
+ * when there is no `# ` heading at all (treat as agent failure).
+ */
+function _stripPreamble(raw: string): string | null {
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (/^# \S/.test(lines[i]!)) {
+      return lines.slice(i).join("\n").trim();
+    }
+  }
+  return null;
+}
+
+if (import.meta.main) {
+  const program = new Command()
+    .name("readme")
+    .description("Generate or refresh README.md across publishable workspace packages.")
+    .option("-u, --upgrade", "regenerate READMEs that already exist", false)
+    .option("-n, --dry-run", "print to stdout instead of writing", false)
+    .option(
+      "-p, --package <name>",
+      "limit to a single package by full name (e.g. @dbx-tools/shared)",
+    )
+    .parse(process.argv);
+
+  const {
+    upgrade,
+    dryRun,
+    package: only,
+  } = program.opts<{
+    upgrade: boolean;
+    dryRun: boolean;
+    package?: string;
+  }>();
+
+  await syncReadmes({ upgrade, dryRun, only });
+}
