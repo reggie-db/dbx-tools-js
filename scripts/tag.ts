@@ -94,7 +94,18 @@ interface ReleaseNotesContext {
   range: string | null;
   /** One-line commit subjects since `prevTag`, no merges. */
   commits: string[];
-  /** Raw `git diff --stat <range>` output. */
+  /**
+   * `git status --porcelain` lines for the working tree. Captures
+   * dirty files that the release commit is about to fold in, so a
+   * "no commits since prevTag, just uncommitted edits" release
+   * still has change context for the notes generator.
+   */
+  pendingFiles: string[];
+  /**
+   * `git diff --stat` between `prevTag` and the **working tree**
+   * (so committed + uncommitted changes are both visible). Empty
+   * string when no `prevTag` exists.
+   */
   diffStat: string;
   /** Ready-to-send prompt assembled from the fields above. */
   prompt: string;
@@ -114,9 +125,21 @@ Requirements:
 Output the release notes only.`.trim();
 
 /**
- * Build the release-notes prompt from git history. Async because the
- * underlying `run()` wrapper is async; the function itself is still
- * pure-shaped (no side effects) so it's safe to preview in dry-run.
+ * Build the release-notes prompt from git history + working tree.
+ * Async because the underlying `run()` wrapper is async; the
+ * function itself is still pure-shaped (no side effects) so it's
+ * safe to preview in dry-run.
+ *
+ * Captures three sources of change so the notes generator can see
+ * everything the release commit is about to ship, even when HEAD
+ * still points at the previous tag:
+ *
+ *   - Commits in `prevTag..HEAD` (the usual case).
+ *   - Working-tree dirty files via `git status --porcelain` (the
+ *     "I edited a bunch of stuff then ran `bun run tag`" case).
+ *   - A `git diff --stat` against `prevTag` directly (no `..HEAD`)
+ *     so the stat includes both committed and uncommitted changes
+ *     in one block.
  */
 async function buildReleaseNotesContext(
   prevTag: string | null,
@@ -129,7 +152,13 @@ async function buildReleaseNotesContext(
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
-  const diffStat = range ? await git(["diff", "--stat", range], { capture: true }) : "";
+  const pendingFiles = (await git(["status", "--porcelain"], { capture: true }))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const diffStat = prevTag
+    ? await git(["diff", "--stat", prevTag], { capture: true })
+    : "";
 
   const prompt = [
     `Write release notes for ${nextTag}.`,
@@ -137,11 +166,14 @@ async function buildReleaseNotesContext(
     `Commits since ${prevTag ?? "(no previous tag)"}:`,
     commits.length ? commits.join("\n") : "(none)",
     ``,
-    `Changed files:`,
+    `Uncommitted changes about to be folded into the release commit:`,
+    pendingFiles.length ? pendingFiles.join("\n") : "(none)",
+    ``,
+    `Changed files (committed + uncommitted vs ${prevTag ?? "(no previous tag)"}):`,
     diffStat || "(none)",
   ].join("\n");
 
-  return { prevTag, nextTag, range, commits, diffStat, prompt };
+  return { prevTag, nextTag, range, commits, pendingFiles, diffStat, prompt };
 }
 
 /**
@@ -242,8 +274,12 @@ console.log();
 
 const notesContext = await buildReleaseNotesContext(prevTag, tag);
 let aiSummary: string | null = null;
-if (notesContext.commits.length === 0) {
-  console.log("(skipping release notes: no commits between previous tag and HEAD)");
+const hasChanges =
+  notesContext.commits.length > 0 || notesContext.pendingFiles.length > 0;
+if (!hasChanges) {
+  console.log(
+    "(skipping release notes: no commits or pending changes since previous tag)",
+  );
 } else {
   aiSummary = (await releaseNotes(notesContext))?.trim() || null;
 }
