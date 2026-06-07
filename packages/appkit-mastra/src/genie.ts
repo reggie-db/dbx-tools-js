@@ -726,6 +726,8 @@ const agentSummarySchema = z.object({
   ),
 });
 
+type AgentSummaryItem = z.infer<typeof agentSummarySchema>["summary"][number];
+
 /* ----------------------------- factory ----------------------------- */
 
 /**
@@ -986,7 +988,9 @@ export function createGenieTool(opts: CreateGenieToolOptions) {
       // Mastra runs the inner loop + structuring pass together
       // inside `agent.generate(...)` with no observable boundary
       // between them.
-      const textItemCount = submission.summary.filter((i) => i.type === "text").length;
+      const textItemCount = submission.summary.filter(
+        (i: AgentSummaryItem) => i.type === "text",
+      ).length;
       const dataItemCount = submission.summary.length - textItemCount;
       const summaryEvent: SummaryEvent = {
         type: "summary",
@@ -1007,7 +1011,7 @@ export function createGenieTool(opts: CreateGenieToolOptions) {
       // chart slot the moment its planner returns rather than
       // waiting for the entire batch to finish.
       const hydrated = await Promise.all(
-        submission.summary.map(async (item): Promise<GenieSummaryItem | undefined> => {
+        submission.summary.map(async (item: AgentSummaryItem): Promise<GenieSummaryItem | undefined> => {
           if (item.type === "text") {
             return { type: "string", text: item.text };
           }
