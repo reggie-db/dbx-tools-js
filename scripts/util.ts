@@ -712,19 +712,143 @@ export async function agentQuery(
 
   const agent = await getScriptAgent(overrides);
   if (!agent) return null;
-  // `generate()` runs the agent loop (tool calls + final text) to
-  // completion in one call. `result.text` is the accumulated
-  // assistant text across every step, which is what we want as the
-  // script's answer. `onStepFinish` surfaces per-step tool calls so
-  // long scripts (`readme.ts`, `tag.ts`) can show progress while the
-  // agent works.
-  const stream = await agent.stream(content, {
-    // Default `maxSteps` is conservative; bump so the agent has room
-    // to chain several tool calls (read_files / git_log / etc.) before
-    // it has to commit to a final answer. Tag + readme runs typically
-    // settle in well under this cap.
-    maxSteps: 32,
-  });
+  // Retry the whole stream pass when the upstream LLM API returns a
+  // retryable error (typically Databricks FMAPI's per-minute
+  // `REQUEST_LIMIT_EXCEEDED` 429s during back-to-back package syncs).
+  // Each attempt is a fresh `agent.stream()` call, so any tool
+  // history from the failed attempt is replayed.
+  for (let attempt = 0; attempt <= _RETRY_DELAYS_MS.length; attempt++) {
+    const { text, error } = await _streamOnce(agent, content);
+    if (text) return text;
+    if (!_isRetryable(error)) {
+      if (error) console.log(`[tool] non-retryable error; giving up`);
+      return null;
+    }
+    if (attempt === _RETRY_DELAYS_MS.length) {
+      const label = _isRateLimit(error) ? "rate-limit" : "retryable error";
+      console.log(
+        `[tool] giving up after ${_RETRY_DELAYS_MS.length} retries (${label})`,
+      );
+      return null;
+    }
+    const baseDelay = _RETRY_DELAYS_MS[attempt]!;
+    const jitter = Math.floor(Math.random() * 1000);
+    const delay = baseDelay + jitter;
+    const cause = _isRateLimit(error) ? "rate-limit" : "retryable";
+    console.log(
+      `[tool] ${cause} backoff: sleeping ${delay}ms ` +
+        `(attempt ${attempt + 1}/${_RETRY_DELAYS_MS.length})`,
+    );
+    await new Promise((r) => setTimeout(r, delay));
+  }
+  return null;
+}
+
+/**
+ * Backoff schedule for upstream LLM retries. Sized to outwait a
+ * Databricks FMAPI per-minute window with growing jitter so multiple
+ * concurrent script runs don't all hammer the limit at the same
+ * second. Last slot is ~90s + jitter so a single retryable run can
+ * survive a full token-bucket refill cycle.
+ */
+const _RETRY_DELAYS_MS = [5000, 15000, 45000, 90000];
+
+/**
+ * Detect retryable LLM API errors. Honors the Vercel AI SDK's
+ * `isRetryable` flag when present, then falls back to HTTP status
+ * codes that are universally safe to retry (429 rate-limit, 5xx
+ * transient gateway errors).
+ */
+function _isRetryable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { isRetryable?: unknown; statusCode?: unknown };
+  if (e.isRetryable === true) return true;
+  const code = typeof e.statusCode === "number" ? e.statusCode : 0;
+  return code === 429 || code === 502 || code === 503 || code === 504;
+}
+
+/**
+ * Narrow predicate for HTTP 429 / Databricks FMAPI
+ * `REQUEST_LIMIT_EXCEEDED` responses. Used to flag the rate-limit
+ * case explicitly in the backoff and give-up log lines so the cause
+ * is obvious when scrolling a noisy run.
+ */
+function _isRateLimit(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { statusCode?: unknown; responseBody?: unknown };
+  if (e.statusCode === 429) return true;
+  if (typeof e.responseBody === "string" && e.responseBody.includes("REQUEST_LIMIT_EXCEEDED")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Render a Vercel AI SDK `AI_APICallError` (or any error-shaped
+ * object) as a single line for the `[tool] upstream error ...` log.
+ * Pulls the HTTP status when available, parses the JSON
+ * `responseBody` so Databricks' `REQUEST_LIMIT_EXCEEDED` reason
+ * appears verbatim, and truncates anything longer than `maxLen` so
+ * the log line stays one row in a normal terminal.
+ */
+function _summarizeApiError(err: unknown, maxLen = 240): string {
+  if (err === null || err === undefined) return "unknown error";
+  if (typeof err !== "object") return String(err);
+  const e = err as {
+    statusCode?: number;
+    message?: string;
+    name?: string;
+    responseBody?: string;
+    url?: string;
+  };
+  const parts: string[] = [];
+  if (typeof e.statusCode === "number") parts.push(`status ${e.statusCode}`);
+  if (typeof e.name === "string" && e.name && e.name !== "Error") {
+    parts.push(e.name);
+  }
+  let detail: string | undefined;
+  if (typeof e.responseBody === "string" && e.responseBody) {
+    try {
+      const parsed = JSON.parse(e.responseBody) as {
+        error_code?: string;
+        message?: string;
+      };
+      if (parsed?.error_code && parsed?.message) {
+        detail = `${parsed.error_code}: ${parsed.message}`;
+      } else {
+        detail = parsed?.message ?? parsed?.error_code;
+      }
+    } catch {
+      detail = e.responseBody;
+    }
+  }
+  if (!detail && typeof e.message === "string") detail = e.message;
+  if (detail) parts.push(detail.replace(/\s+/g, " ").trim());
+  const line = parts.join(" | ");
+  if (line.length <= maxLen) return line;
+  return `${line.slice(0, maxLen - 3)}...`;
+}
+
+/**
+ * Run one agent.stream() pass, log tool activity, and return the
+ * final text along with any error event observed mid-stream.
+ *
+ * Mastra's stream handler swallows upstream errors and resolves
+ * `stream.text` to an empty string instead of throwing, so we read
+ * `type: "error"` events from `fullStream` ourselves to surface the
+ * underlying `AI_APICallError`. The caller uses that to decide
+ * whether to retry.
+ */
+async function _streamOnce(
+  agent: Agent,
+  content: string,
+): Promise<{ text: string | null; error: unknown }> {
+  let streamError: unknown = null;
+  // Default `maxSteps` is conservative; bump so the agent has room
+  // to chain several tool calls (read_files / git_log / etc.) before
+  // it has to commit to a final answer. Tag + readme runs typically
+  // settle in well under this cap.
+  const stream = await agent.stream(content, { maxSteps: 32 });
   // Surface tool activity inline so long-running scripts (`readme.ts`,
   // `tag.ts`) show concrete progress. Format matches the `[scope]`
   // convention the rest of the runtime uses (`[mastra]`, `[autopg]`).
@@ -740,11 +864,21 @@ export async function agentQuery(
         const verb = isError ? "fail" : "done";
         console.log(`[tool] ${verb} ${toolName} (${_summarizeResult(result)})`);
       }
+    } else if (event.type === "error") {
+      const err = event.payload?.error ?? streamError;
+      streamError = err;
+      // Surface the upstream cause immediately so the user sees a
+      // concrete reason (e.g. `status 429 | REQUEST_LIMIT_EXCEEDED:
+      // Exceeded workspace input tokens per minute...`) even when
+      // the retry loop will swallow the failure. The retry / give-up
+      // log lines downstream are intentionally short because this
+      // line carries the detail.
+      const label = _isRateLimit(err) ? "rate-limit" : "upstream error";
+      console.log(`[tool] ${label}: ${_summarizeApiError(err)}`);
     }
   }
-  const text = await stream.text;
-
-  return text?.trim() || null;
+  const text = (await stream.text)?.trim() || null;
+  return { text, error: streamError };
 }
 
 /**

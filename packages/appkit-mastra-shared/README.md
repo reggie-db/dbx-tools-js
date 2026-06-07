@@ -5,8 +5,9 @@ Dependency-free wire-format contract for `@dbx-tools/appkit-mastra`.
 This package exists so the React client (and any browser bundle)
 can import the types and URL helpers the Mastra plugin's
 `clientConfig()` publishes without pulling in `pg`, `fastembed`,
-Mastra, or anything else server-only. There is no runtime - just
-TypeScript types and three small URL helpers.
+Mastra, or anything else server-only. The surface is lightweight
+Zod schemas, inferred TypeScript types, two URL helpers, and a
+handful of structural guards.
 
 ```ts
 import {
@@ -183,6 +184,39 @@ reconstructing lifecycle pills on history reload. Live-only
 chart specs are intentionally not replayed (the resolved
 Echarts spec is held off-band on the per-request
 `RequestContext`, not on the persisted summary).
+
+## Installation
+
+```bash
+bun add @dbx-tools/appkit-mastra-shared
+```
+
+## Usage
+
+```ts
+import { chatUrl, historyUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
+
+declare const config: MastraClientConfig;
+
+// Chat endpoint for the default agent
+const chat = chatUrl(config);
+
+// History with pagination
+const history = historyUrl(config, { page: 0, perPage: 50 });
+```
+
+## API
+
+- `chatUrl(config, agentId?)` - returns the chat endpoint URL for a given agent (or the default).
+- `historyUrl(config, options?)` - builds the paginated history URL for an agent.
+- `isGenieAgentResult(value)` - O(1) structural type guard for `GenieAgentResult`.
+- `genieResultToWriterEvents(result)` - replays terminal writer events from a completed result.
+- `MastraClientConfig` - shape published by the plugin's `clientConfig()`.
+- `MastraHistoryUIMessage` / `MastraHistoryResponse` / `MastraClearHistoryResponse` - history endpoint types.
+- `ServingEndpointSummary` / `ServingEndpointsResponse` - model catalogue types.
+- `GenieWriterEvent` - unified writer-event union (wire + Mastra-only).
+- `GenieAgentResult` / `GenieSummaryItem` / `GenieDataset` - workflow output shapes.
+- `MinimalWriter` - structural interface for `ctx.writer`.
 
 ## License
 

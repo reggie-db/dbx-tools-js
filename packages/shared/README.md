@@ -21,11 +21,11 @@ import {
 } from "@dbx-tools/shared";
 ```
 
-> `apiUtils` and `projectUtils` import Node-only modules (`@databricks/appkit`,
-> `node:fs`) and are intentionally **not** re-exported from the browser
-> entry. Vite / Webpack / esbuild builds that honor the `browser`
-> condition will resolve `@dbx-tools/shared` to a barrel that
-> omits both - import them only from server-side code.
+> `apiUtils`, `appkitUtils`, and `projectUtils` import Node-only modules
+> (`@databricks/appkit`, `node:fs`) and are intentionally **not** re-exported
+> from the browser entry. Vite / Webpack / esbuild builds that honor the
+> `browser` condition will resolve `@dbx-tools/shared` to a barrel that
+> omits all three - import them only from server-side code.
 
 ## `appkitUtils` - typed sibling-plugin lookup
 
@@ -106,8 +106,8 @@ const port = await netUtils.getRandomPort();
 
 Wraps `fetch` against `https://<workspace-host>/api/2.0/<path>` with the
 auth header your AppKit execution context already carries, plus an
-optional `CacheManager.getOrExecute` hook so per-user TTL'd reads are a
-single positional arg:
+optional `cache` field on the init object so per-user TTL'd reads are a
+single property:
 
 ```ts
 import { apiUtils } from "@dbx-tools/shared";
@@ -121,8 +121,7 @@ const data = await apiUtils.fetchApi<{ endpoints?: unknown[] }>(
 // With a per-user cache (useful for "list everything" calls):
 const cached = await apiUtils.fetchApi<{ endpoints?: unknown[] }>(
   "serving-endpoints",
-  undefined,
-  { userKey: req.userId, options: { ttl: 300 } },
+  { cache: { options: { ttl: 300 } } },
 );
 
 // POST + custom client (e.g. service-account script outside a request).
@@ -131,9 +130,8 @@ await apiUtils.fetchApi<{ id: string }>(
   {
     body: JSON.stringify({ inputs }),
     headers: { "Content-Type": "application/json" },
+    workspaceClient: serviceClient,
   },
-  undefined,
-  serviceClient,
 );
 ```
 
@@ -191,8 +189,14 @@ commonUtils.shortId(); // e.g. "a3f1c92b"
 commonUtils.fnvHash("databricks-claude-sonnet-4-6"); // e.g. "k3p9q7"
 commonUtils.fnvHashWithOptions({ length: 4 }, "user@example.com");
 
-// Poll an async fn until it returns truthy or the timeout fires.
-await commonUtils.poll(() => isReady(), { intervalMs: 250, timeoutMs: 30_000 });
+// Async generator that polls a producer on an interval. Yields each
+// value; stops when `predicate` returns false or the signal aborts.
+for await (const status of commonUtils.poll(
+  async ({ signal }) => fetchStatus(signal),
+  { intervalMs: 250, predicate: (s) => s !== "ready" },
+)) {
+  render(status);
+}
 
 // Pull a printable message out of any thrown value. Folds the
 // `err instanceof Error ? err.message : String(err)` dance into

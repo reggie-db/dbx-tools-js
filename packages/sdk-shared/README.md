@@ -45,7 +45,7 @@ For each upstream type the generator emits two exports:
 | Export             | Shape                                       |
 | ------------------ | ------------------------------------------- |
 | `xxxSchema`        | `z.ZodType<X>` for runtime validation       |
-| `XxxType` (alias)  | `z.infer<typeof xxxSchema>` for static use  |
+| `Xxx` (type alias) | `z.infer<typeof xxxSchema>` for static use  |
 
 ## How codegen works
 
