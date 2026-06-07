@@ -14,16 +14,19 @@
  * Other utility namespaces are re-exported as-is. `common.ts` ships a
  * pure-JS FNV-1a `fnvHash` (no `node:crypto`) that `string.ts` uses
  * for slug suffixes, so the whole barrel is safe in the browser;
- * `http.ts` / `plugin.ts` / `log.ts` already had no node-only imports.
+ * `http.ts` / `log.ts` already had no node-only imports.
  *
- * `apiUtils` is intentionally **not** re-exported here. It wraps
- * `getExecutionContext()` and a fetch-time auth header callback, both
- * of which only make sense inside an AppKit server process. It lives
- * only on `index.ts` (the server entry).
+ * `apiUtils` and `appkitUtils` are intentionally **not** re-exported
+ * here. Both import from `@databricks/appkit`, whose main barrel
+ * re-exports server-only typegen helpers
+ * (`extractServingEndpoints`, the `appKit*TypesPlugin` Vite plugins)
+ * that transitively load `@ast-grep/napi`'s native `.node` binary.
+ * Letting either land in the browser bundle drags the entire appkit
+ * tree (including ast-grep) into the client. They live only on
+ * `index.ts` (the server entry).
  */
 export * as commonUtils from "./src/common.js";
-export * as netUtils from "./src/net.browser.js";
 export * as httpUtils from "./src/http.js";
 export * as logUtils from "./src/log.js";
-export * as pluginUtils from "./src/plugin.js";
+export * as netUtils from "./src/net.browser.js";
 export * as stringUtils from "./src/string.js";

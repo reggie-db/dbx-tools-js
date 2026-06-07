@@ -27,6 +27,7 @@ import {
 import { registerApiRoute } from "@mastra/core/server";
 import type { ContextWithMastra } from "@mastra/core/server";
 import type {
+  MastraClearHistoryResponse,
   MastraHistoryResponse,
   MastraHistoryUIMessage,
 } from "@dbx-tools/appkit-mastra-shared";
@@ -108,14 +109,93 @@ export async function loadHistory(
   };
 }
 
+/** Inputs accepted by {@link clearHistory}. */
+export interface ClearHistoryOptions {
+  agent: Agent;
+  threadId: string;
+}
+
+/**
+ * Wipe every persisted message tied to a thread. Returns the count
+ * of messages that were on the thread at delete time so the caller
+ * can render a "cleared N messages" affordance without an
+ * additional round-trip.
+ *
+ * Agents without a configured `Memory` resolve to a no-op (count
+ * 0), matching {@link loadHistory}'s "stateless agents return an
+ * empty page" stance so callers don't have to special-case them.
+ * Threads that don't exist yet are also a successful no-op - the
+ * operation is idempotent so the UI can fire-and-forget without
+ * tracking thread existence.
+ */
+export async function clearHistory(
+  opts: ClearHistoryOptions,
+): Promise<{ cleared: number }> {
+  const memory = await opts.agent.getMemory();
+  if (!memory) {
+    log.debug("clear:no-memory", { agentId: opts.agent.id, threadId: opts.threadId });
+    return { cleared: 0 };
+  }
+  // Mastra's `deleteThread` cascades to the message table, so we
+  // can't ask for a count after the fact. Read it pre-delete with a
+  // one-page recall sized to fit common threads in a single round
+  // trip; the value is for telemetry / UI, not correctness.
+  let cleared = 0;
+  try {
+    const probe = await memory.recall({
+      threadId: opts.threadId,
+      page: 0,
+      perPage: 1,
+    });
+    cleared = probe.total;
+  } catch (err) {
+    // A missing-thread error is the happy-path "nothing to count";
+    // every other error is logged but doesn't block the delete.
+    log.debug("clear:probe-failed", {
+      agentId: opts.agent.id,
+      threadId: opts.threadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  const startedAt = Date.now();
+  try {
+    await memory.deleteThread(opts.threadId);
+  } catch (err) {
+    // Mastra's `deleteThread` raises when the thread row was never
+    // created (e.g. clearing an empty session). Surface as a soft
+    // warn and treat as success - the user-facing semantic is
+    // "history is now empty" which is already true.
+    log.warn("clear:delete-soft-failed", {
+      agentId: opts.agent.id,
+      threadId: opts.threadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  log.info("clear:done", {
+    agentId: opts.agent.id,
+    threadId: opts.threadId,
+    cleared,
+    elapsedMs: Date.now() - startedAt,
+  });
+  return { cleared };
+}
+
 /** Options accepted by {@link historyRoute}. */
 export type HistoryRouteOptions =
   | { path: `${string}:agentId${string}`; agent?: never }
   | { path: string; agent: string };
 
 /**
- * Register a `GET <path>` Mastra custom API route that returns a page
- * of AI SDK V5 `UIMessage`s for the caller's current thread.
+ * Register the `<path>` Mastra custom API route. Handles two
+ * methods on the same mount:
+ *
+ *   - `GET`: return a page of AI SDK V5 `UIMessage`s for the
+ *     caller's current thread ({@link loadHistory}).
+ *   - `DELETE`: wipe every persisted message on the caller's
+ *     thread ({@link clearHistory}). The session cookie that
+ *     anchors the thread id is left alone so the user keeps the
+ *     same thread - only the contents go away.
  *
  * Modeled after `chatRoute` from `@mastra/ai-sdk`: pass `agent` for a
  * fixed-agent mount, or include `:agentId` in the path for dynamic
@@ -134,36 +214,70 @@ export function historyRoute(options: HistoryRouteOptions) {
       "historyRoute path must include `:agentId` or `agent` must be passed explicitly",
     );
   }
-  return registerApiRoute(path, {
-    method: "GET",
-    handler: async (c: ContextWithMastra) => {
-      const mastra = c.get("mastra");
-      const requestContext = c.get("requestContext");
-      const agentId = fixedAgent ?? c.req.param("agentId");
-      if (!agentId) {
-        return c.json({ error: "agentId is required" }, 400);
-      }
-      const agent = mastra.getAgentById(agentId);
-      if (!agent) {
-        return c.json({ error: `Unknown agent "${agentId}"` }, 404);
-      }
-      const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as string | undefined;
-      if (!threadId) {
-        return c.json({ error: "thread id missing from request context" }, 400);
-      }
-      const resourceId = requestContext.get(MASTRA_RESOURCE_ID_KEY) as
-        | string
-        | undefined;
-      const payload = await loadHistory({
-        agent,
-        threadId,
-        ...(resourceId ? { resourceId } : {}),
-        page: parseIntParam(c.req.query("page")),
-        perPage: parseIntParam(c.req.query("perPage")),
-      });
-      return c.json(payload);
-    },
-  });
+  // Tiny resolver shared by GET / DELETE: derive the active agent
+  // and thread id, returning a JSON error response when either is
+  // missing. Keeps both handlers thin and gives them identical
+  // validation behaviour.
+  const resolveContext = (c: ContextWithMastra) => {
+    const mastra = c.get("mastra");
+    const requestContext = c.get("requestContext");
+    const agentId = fixedAgent ?? c.req.param("agentId");
+    if (!agentId) {
+      return { error: c.json({ error: "agentId is required" }, 400) } as const;
+    }
+    const agent = mastra.getAgentById(agentId);
+    if (!agent) {
+      return {
+        error: c.json({ error: `Unknown agent "${agentId}"` }, 404),
+      } as const;
+    }
+    const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as string | undefined;
+    if (!threadId) {
+      return {
+        error: c.json({ error: "thread id missing from request context" }, 400),
+      } as const;
+    }
+    const resourceId = requestContext.get(MASTRA_RESOURCE_ID_KEY) as
+      | string
+      | undefined;
+    return { agentId, agent, threadId, resourceId } as const;
+  };
+
+  return [
+    registerApiRoute(path, {
+      method: "GET",
+      handler: async (c: ContextWithMastra) => {
+        const ctx = resolveContext(c);
+        if ("error" in ctx) return ctx.error;
+        const payload = await loadHistory({
+          agent: ctx.agent,
+          threadId: ctx.threadId,
+          ...(ctx.resourceId ? { resourceId: ctx.resourceId } : {}),
+          page: parseIntParam(c.req.query("page")),
+          perPage: parseIntParam(c.req.query("perPage")),
+        });
+        return c.json(payload);
+      },
+    }),
+    registerApiRoute(path, {
+      method: "DELETE",
+      handler: async (c: ContextWithMastra) => {
+        const ctx = resolveContext(c);
+        if ("error" in ctx) return ctx.error;
+        const { cleared } = await clearHistory({
+          agent: ctx.agent,
+          threadId: ctx.threadId,
+        });
+        const payload: MastraClearHistoryResponse = {
+          ok: true,
+          agentId: ctx.agentId,
+          threadId: ctx.threadId,
+          cleared,
+        };
+        return c.json(payload);
+      },
+    }),
+  ];
 }
 
 /** Coerce / clamp `perPage`; falls back to the page-size default. */

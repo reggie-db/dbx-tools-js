@@ -5,6 +5,7 @@ import { usePluginClientConfig } from "@databricks/appkit-ui/react";
 import {
   chatUrl,
   historyUrl,
+  type MastraClearHistoryResponse,
   type MastraClientConfig,
   type MastraHistoryResponse,
   type ServingEndpointSummary,
@@ -147,4 +148,25 @@ export const fetchMastraHistory = async (
     total: payload.total,
     hasMore: payload.hasMore,
   };
+};
+
+/**
+ * Wipe the caller's thread history on the Mastra plugin. Hits
+ * `DELETE` on the same `/history` endpoint `fetchMastraHistory`
+ * reads from, so the session cookie (and therefore the thread id)
+ * is preserved - only the messages go away. Idempotent: a fresh
+ * thread reports `cleared: 0` without erroring.
+ */
+export const clearMastraHistory = async (
+  config: Pick<MastraClientConfig, "historyPath" | "defaultAgent">,
+  options: { agentId?: string; signal?: AbortSignal } = {},
+): Promise<MastraClearHistoryResponse> => {
+  const url = historyUrl(config, {
+    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
+  });
+  const init: RequestInit = { method: "DELETE", credentials: "include" };
+  if (options.signal) init.signal = options.signal;
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as MastraClearHistoryResponse;
 };

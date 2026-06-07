@@ -13,8 +13,7 @@
  * `chatRoute` agent for demos.
  */
 
-import { genie } from "@databricks/appkit";
-import { logUtils, pluginUtils, stringUtils } from "@dbx-tools/shared";
+import { appkitUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import { Agent } from "@mastra/core/agent";
 import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
@@ -23,9 +22,9 @@ import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import { buildRenderDataTool } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
-import { buildGenieProvider } from "./genie.js";
+import { buildGenieToolkitProvider, resolveGenieSpaces } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
-import { buildModel } from "./model.js";
+import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
 import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
 
 /**
@@ -399,7 +398,7 @@ function composeInstructions(agentInstructions: string, style: string | null): s
  */
 export async function buildAgents(opts: {
   config: MastraPluginConfig;
-  context: pluginUtils.PluginContextLike | undefined;
+  context: appkitUtils.PluginContextLike | undefined;
   memoryBuilder?: MemoryBuilder;
   log: logUtils.Logger;
 }): Promise<BuiltAgents> {
@@ -440,6 +439,18 @@ export async function buildAgents(opts: {
       ...(memory ? { memory } : {}),
       ...(inputProcessors.length > 0 ? { inputProcessors } : {}),
     });
+    // Surface the effective default model per agent so operators can
+    // see at a glance which endpoint each agent points at without
+    // having to fire a request and inspect a trace. The value is the
+    // *static* default; per-request overrides (header / query /
+    // body) and the workspace-catalogue fuzzy match still apply at
+    // call time.
+    log.info("agent registered", {
+      id,
+      name: def.name ?? id,
+      defaultModel: describeAgentDefaultModel(config, def),
+      tools: Object.keys(tools),
+    });
   }
 
   if (!agents[defaultAgentId]) {
@@ -448,8 +459,39 @@ export async function buildAgents(opts: {
     );
   }
 
-  log.info("agents registered", { ids, defaultAgentId });
+  log.info("agents ready", { ids, defaultAgentId });
   return { agents, defaultAgentId };
+}
+
+/**
+ * Best-effort description of the *static* default model an agent will
+ * resolve to at call time. Walks the same precedence ladder as
+ * {@link resolveModel} / {@link buildModel}:
+ *
+ *   1. Per-agent `def.model` (string sugar -> the literal id;
+ *      function / `DynamicArgument` -> `"<dynamic>"` because the
+ *      resolver decides at call time).
+ *   2. Plugin-level `config.defaultModel` (same rules).
+ *   3. `DATABRICKS_SERVING_ENDPOINT_NAME` env var.
+ *   4. First entry of `config.defaultModelFallbacks ?? FALLBACK_MODEL_IDS`.
+ *
+ * Used for the startup `agent registered` log so operators can see
+ * which endpoint each agent points at by default. Per-request
+ * overrides (`X-Mastra-Model` etc.) and the workspace-catalogue
+ * fuzzy match are still applied at runtime.
+ */
+function describeAgentDefaultModel(
+  config: MastraPluginConfig,
+  def: MastraAgentDefinition,
+): string {
+  const effective = def.model ?? config.defaultModel;
+  if (typeof effective === "string") return effective;
+  if (effective !== undefined) return "<dynamic>";
+  return (
+    process.env.DATABRICKS_SERVING_ENDPOINT_NAME ??
+    config.defaultModelFallbacks?.[0] ??
+    FALLBACK_MODEL_IDS[0]!
+  );
 }
 
 /**
@@ -590,7 +632,7 @@ async function resolveTools(
  */
 function buildPluginsMap(
   config: MastraPluginConfig,
-  context: pluginUtils.PluginContextLike | undefined,
+  context: appkitUtils.PluginContextLike | undefined,
 ): MastraPlugins {
   const cache = new Map<string, MastraPluginToolkitProvider | null>();
   return new Proxy({} as MastraPlugins, {
@@ -606,22 +648,36 @@ function buildPluginsMap(
 
 /**
  * Pick the right {@link MastraPluginToolkitProvider} for a sibling
- * plugin lookup. Returns the streaming-aware Genie adapter when the
- * caller asks for `genie`; falls back to the generic AppKit
- * `ToolProvider` adapter for every other plugin name. `config` is
- * threaded through so Genie's tool can run the chart planner
- * inline against the same model resolver / fallback ladder the
- * agents use.
+ * plugin lookup. Returns the Genie agent-backed adapter when
+ * the caller asks for `genie` AND at least one space is reachable
+ * via {@link resolveGenieSpaces} (the explicit
+ * `config.genieSpaces`, the registered AppKit `genie()` plugin's
+ * `spaces` config, or the `DATABRICKS_GENIE_SPACE_ID` env var).
+ * Falls back to the generic AppKit `ToolProvider` adapter for
+ * every other plugin name. `config` is threaded through so the
+ * Genie agent inherits the same model resolver / fallback
+ * ladder the calling agents use.
+ *
+ * The legacy AppKit `genie` plugin's tools are no longer consulted
+ * at runtime - the Genie agent talks to Genie directly via
+ * `@dbx-tools/genie` (`genieEventChat`) and the workspace
+ * `statementExecution.getStatement` API. But the plugin's
+ * resource manifest and `spaces` config are still honored so
+ * existing `app.yaml` configs and `genie({ spaces })` wiring
+ * keep working without change.
  */
 function resolveProvider(
   config: MastraPluginConfig,
-  context: pluginUtils.PluginContextLike | undefined,
+  context: appkitUtils.PluginContextLike | undefined,
   propName: string,
 ): MastraPluginToolkitProvider | null {
   if (propName === "genie") {
-    const geniePlugin = pluginUtils.instance(context, genie);
-    if (!geniePlugin) return null;
-    return buildGenieProvider(geniePlugin, { config }) as MastraPluginToolkitProvider;
+    const spaces = resolveGenieSpaces(config, context);
+    if (Object.keys(spaces).length === 0) return null;
+    return buildGenieToolkitProvider({
+      spaces,
+      config,
+    }) as MastraPluginToolkitProvider;
   }
   const plugin = context?.getPlugins().get(propName);
   return adaptPluginToolkit(plugin);

@@ -1,81 +1,28 @@
 import type { UIMessage } from "ai";
-import type { ToolEvent, ToolProgress } from "@/components/chat-view";
+import {
+  genieResultToWriterEvents,
+  isGenieAgentResult,
+} from "@dbx-tools/appkit-mastra-shared";
+import type { ToolEvent } from "@/components/chat-view";
 
 // Walks a page of loaded `UIMessage`s and rebuilds the in-memory
 // `ToolEvent` records that would have been collected during a live
 // `agent.stream` call. Lets `<AssistantBubble>` render Genie's
-// suggested-question buttons after a hard reload, since the
-// streamed `tool-output` chunks themselves are gone but the final
-// tool-result is persisted in the message history (the `output`
-// of the `tool-${name}` part).
+// terminal state (error frames) after a hard reload by extracting
+// it out of the persisted tool-result (the `output` of the
+// `tool-${name}` part) - the same path the live `tool-result`
+// handler in `Stream.tsx` uses, via the shared translator in
+// `@dbx-tools/appkit-mastra-shared`.
 //
-// Note: SQL pills and charts are deliberately not replayed on
-// reload. Both ride writer events (`kind: "sql"` and `kind: "chart"`)
-// that aren't part of the LLM-bound tool result, so after a reload
-// only the durable bits (genie's answer prose, suggested follow-up
-// questions) come back. This is intentional - it keeps the
-// LLM-bound payload minimal and avoids persisting transient UI
-// chrome.
-
-/**
- * Shape of the Genie tool's persisted DrainResult, mirrored from
- * `packages/appkit-mastra/src/genie.ts`. The `datasets` array is metadata
- * only (chartId, title, columns, rowCount, sql); row data rides
- * writer events that aren't persisted, so charts don't replay
- * after a hard reload.
- */
-type PersistedGenieResult = {
-  conversationId?: string;
-  genieAnswer?: string;
-  datasets?: Array<{
-    chartId: string;
-    title?: string;
-    description?: string;
-    columns?: string[];
-    rowCount?: number;
-    sql?: string;
-  }>;
-  suggestedFollowUps?: string[];
-  error?: string;
-};
-
-/**
- * True when `value` looks like the Genie tool's persisted DrainResult.
- * We use a structural check rather than matching on tool name because
- * Mastra mints per-space variants (`tool-genie-<alias>`) plus
- * `genie_get_conversation`, and the shared shape is what matters.
- */
-const isGenieResult = (value: unknown): value is PersistedGenieResult => {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.conversationId === "string" ||
-    typeof v.genieAnswer === "string" ||
-    Array.isArray(v.datasets) ||
-    Array.isArray(v.suggestedFollowUps)
-  );
-};
-
-/**
- * Walk a tool-invocation UI part and emit the same progress events
- * that `drainGenieStream` would have published live. Order mirrors
- * the streaming case so `collectSuggestions` produces identical
- * output for replayed turns.
- *
- * Live-only events (`started`, `status`, `sql`, `text`, `chart`) are
- * deliberately skipped - they ride writer events that aren't in the
- * persisted LLM-bound payload. Only the durable bits replay.
- */
-const buildProgress = (output: PersistedGenieResult): ToolProgress[] => {
-  const progress: ToolProgress[] = [];
-  if (output.suggestedFollowUps && output.suggestedFollowUps.length > 0) {
-    progress.push({ kind: "suggested", questions: output.suggestedFollowUps });
-  }
-  if (output.error) {
-    progress.push({ kind: "error", error: output.error });
-  }
-  return progress;
-};
+// Live-only events (`started`, `status`, `sql`, `text`,
+// `suggested`, `chart`) ride writer events that aren't
+// persisted; they're gone after a reload. Charts intentionally
+// do NOT replay: the resolved Echarts spec is held off-band on
+// the per-request `RequestContext` (and the live writer event),
+// not on the persisted summary, so the chart `option` isn't
+// available after the request closes. Stale `[[chart:<id>]]`
+// markers in the persisted assistant text are silently dropped
+// by `<MarkdownWithCharts>` on re-render.
 
 /**
  * Pull the tool name out of a part. `tool-${name}` parts encode it
@@ -118,12 +65,12 @@ export const synthesizeToolEventsFromHistory = (
       if (typeof toolCallId !== "string") continue;
       if (state === "output-available") {
         const output = (part as { output?: unknown }).output;
-        if (!isGenieResult(output)) continue;
+        if (!isGenieAgentResult(output)) continue;
         events.push({
           id: toolCallId,
           toolName,
           status: "done",
-          progress: buildProgress(output),
+          progress: genieResultToWriterEvents(output),
         });
       } else if (state === "output-error") {
         const errorText = (part as { errorText?: unknown }).errorText;
@@ -132,7 +79,7 @@ export const synthesizeToolEventsFromHistory = (
           toolName,
           status: "error",
           ...(typeof errorText === "string" && errorText
-            ? { progress: [{ kind: "error", error: errorText }] }
+            ? { progress: [{ type: "error", error: errorText }] }
             : {}),
         });
       }

@@ -1,15 +1,16 @@
 /**
- * Smoke test for {@link genieChat} (the high-level `GenieChat`
- * handle). Builds an async iterable of questions (REPL, argv, or
- * piped stdin), drives a single `GenieChat` across every turn, and
+ * Smoke test for {@link genieEventChat}. Pulls a single question
+ * from argv, piped stdin, or a REPL (one question per turn,
+ * caller-threaded `conversation_id` so a REPL session is a
+ * multi-turn Genie conversation), drives `genieEventChat`, and
  * writes every emitted event to a per-run tmp directory so you can
  * inspect deltas after the fact.
  *
- * Layout (one subdir per `GenieChat` event, plus `rows-data/`
- * for paired SQL fetches):
+ * Layout (one subdir per `genieEventChat` event variant, plus
+ * `rows-data/` for paired SQL fetches):
  *
  *   tmp/genie-run-<uuid>/
- *     raw/                  # `message` event - every yielded snapshot
+ *     message/              # `message` event - every yielded snapshot
  *     status/               # `status` event - top-level transitions
  *     attachment/           # `attachment` event - new attachment slots
  *     thinking/             # `thinking` event - new reasoning steps
@@ -25,10 +26,6 @@
  * Each file is `<NNNN>.yaml` (counter per subdir, arrival order,
  * zero-padded so directory listings sort naturally). Stdout
  * carries a one-line summary per event with the relative path.
- *
- * REPL mode (interactive `isTTY`) keeps a single `GenieChat`
- * instance alive across questions, so multi-turn follow-ups land
- * in the same Genie conversation. Empty line / Ctrl+D exits.
  *
  * Run:
  *
@@ -48,32 +45,19 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import yaml from "yaml";
 import { WorkspaceClient } from "@databricks/sdk-experimental";
-import { genieChat } from "../src/chat.js";
+import type { GenieChatEvent, GenieChatEventType } from "@dbx-tools/genie-shared";
+import { genieEventChat } from "../src/chat.js";
 
 // All event files for one process invocation live under this dir.
 const RUN_DIR = path.resolve("tmp", `genie-run-${randomUUID()}`);
 
 // Per-type counters so each event subdir gets monotonically
 // increasing file names (`0001.yaml`, `0002.yaml`, ...) in
-// arrival order. The narrow `Record<EventType, number>` shape
-// makes the counter type-checked against the event types we
-// support.
-const EVENT_TYPES = [
-  "raw",
-  "status",
-  "attachment",
-  "thinking",
-  "text",
-  "query",
-  "statement",
-  "rows",
-  "suggested_questions",
-  "result",
-  "rows-data",
-] as const;
-type EventType = (typeof EVENT_TYPES)[number];
-const counters: Record<EventType, number> = {
-  raw: 0,
+// arrival order. The narrow `Record<...>` shape makes the counter
+// type-checked against the event variants we support.
+type SubDir = GenieChatEventType | "rows-data";
+const counters: Record<SubDir, number> = {
+  message: 0,
   status: 0,
   attachment: 0,
   thinking: 0,
@@ -87,12 +71,12 @@ const counters: Record<EventType, number> = {
 };
 
 /**
- * Synchronous event write. We use sync I/O so `EventEmitter.emit`
- * returns AFTER the file lands, which keeps the counter and file
- * order race-free even though `emit` itself is fire-and-forget.
- * For a smoke test against the local fs the latency is irrelevant.
+ * Synchronous event write. We use sync I/O so the writer returns
+ * AFTER the file lands, which keeps the counter and file order
+ * race-free even when events arrive back-to-back. For a smoke
+ * test against the local fs the latency is irrelevant.
  */
-function writeEvent(type: EventType, payload: unknown): string {
+function writeEvent(type: SubDir, payload: unknown): string {
   const dir = path.join(RUN_DIR, type);
   // mkdirSync({ recursive: true }) is idempotent and cheap for an
   // already-existing dir, so calling it per-write keeps subdirs
@@ -105,10 +89,68 @@ function writeEvent(type: EventType, payload: unknown): string {
 }
 
 /**
+ * Render one event to stdout and persist its full body to the
+ * matching subdir. Each variant's flat `{type, ...fields}` shape
+ * narrows on `event.type`, so per-event field access (e.g.
+ * `event.sql`, `event.statement_id`) is type-safe.
+ */
+function renderEvent(event: GenieChatEvent): void {
+  const file = writeEvent(event.type, event);
+  switch (event.type) {
+    case "message":
+      process.stdout.write(
+        `[message      ] ${file}  status=${event.message.status ?? "<unknown>"}\n`,
+      );
+      break;
+    case "status":
+      process.stdout.write(
+        `[status       ] ${file}  ${event.previous_status ?? "<initial>"} -> ${event.status}\n`,
+      );
+      break;
+    case "attachment":
+      process.stdout.write(
+        `[attachment   ] ${file}  #${event.index} type=${event.attachment_type}\n`,
+      );
+      break;
+    case "thinking":
+      process.stdout.write(
+        `[thinking     ] ${file}  ${event.thought_type}\n`,
+      );
+      break;
+    case "text":
+      process.stdout.write(`[text         ] ${file}\n`);
+      break;
+    case "query":
+      process.stdout.write(
+        `[query        ] ${file}  ${event.sql.length} chars\n`,
+      );
+      break;
+    case "statement":
+      process.stdout.write(
+        `[statement    ] ${file}  ${event.statement_id}\n`,
+      );
+      break;
+    case "rows":
+      process.stdout.write(
+        `[rows         ] ${file}  ${event.previous_row_count ?? "?"} -> ${event.row_count}\n`,
+      );
+      break;
+    case "suggested_questions":
+      process.stdout.write(
+        `[suggested_q  ] ${file}  ${event.questions.length} question(s)\n`,
+      );
+      break;
+    case "result":
+      process.stdout.write(
+        `[result       ] ${file}  status=${event.status}\n`,
+      );
+      break;
+  }
+}
+
+/**
  * Yield trimmed lines from the readline interface until the user
- * submits an empty line or hits Ctrl+D. The `yield` suspends the
- * generator until the consumer pulls the next item, so the prompt
- * only fires after the previous turn has fully drained.
+ * submits an empty line or hits Ctrl+D.
  */
 async function* readQuestions(rl: readline.Interface): AsyncGenerator<string> {
   while (true) {
@@ -163,70 +205,32 @@ async function main(): Promise<void> {
   );
 
   const client = new WorkspaceClient({});
-  const chat = genieChat(spaceId, contents, { workspaceClient: client });
-
-  chat.on("message", (m) => {
-    const file = writeEvent("raw", m);
-    process.stdout.write(
-      `[raw          ] ${file}  status=${m.status ?? "<unknown>"}\n`,
-    );
-  });
-  chat.on("status", (e) => {
-    const file = writeEvent("status", e);
-    process.stdout.write(
-      `[status       ] ${file}  ${e.previous_status ?? "<initial>"} -> ${e.status}\n`,
-    );
-  });
-  chat.on("attachment", (e) => {
-    const file = writeEvent("attachment", e);
-    process.stdout.write(
-      `[attachment   ] ${file}  #${e.index} type=${e.type}\n`,
-    );
-  });
-  chat.on("thinking", (e) => {
-    const file = writeEvent("thinking", e);
-    process.stdout.write(`[thinking     ] ${file}  ${e.thought_type}\n`);
-  });
-  chat.on("text", (e) => {
-    const file = writeEvent("text", e);
-    process.stdout.write(`[text         ] ${file}\n`);
-  });
-  chat.on("query", (e) => {
-    const file = writeEvent("query", e);
-    process.stdout.write(`[query        ] ${file}  ${e.sql.length} chars\n`);
-  });
-  chat.on("statement", (e) => {
-    const file = writeEvent("statement", e);
-    process.stdout.write(`[statement    ] ${file}  ${e.statement_id}\n`);
-  });
-  chat.on("rows", (e) => {
-    const file = writeEvent("rows", e);
-    process.stdout.write(
-      `[rows         ] ${file}  ${e.previous_row_count ?? "?"} -> ${e.row_count}\n`,
-    );
-  });
-  chat.on("suggested_questions", (e) => {
-    const file = writeEvent("suggested_questions", e);
-    process.stdout.write(
-      `[suggested_q  ] ${file}  ${e.questions.length} question(s)\n`,
-    );
-  });
+  // Caller-threaded multi-turn: every question reuses the
+  // conversation id we read off the prior turn's result.
+  let conversationId: string | undefined;
 
   // The SQL-statement fetch on terminal messages is async, so we
-  // can't run it inline in the event handler (emit is sync). Track
-  // each fetch's promise and await them all after the chat
-  // finishes so the process doesn't exit mid-fetch.
+  // can't run it inline in the event loop. Track each fetch's
+  // promise and await them all after the run so the process
+  // doesn't exit mid-fetch.
   const queryFetches: Promise<void>[] = [];
-  chat.on("result", (e) => {
-    const file = writeEvent("result", e);
-    process.stdout.write(`[result       ] ${file}  status=${e.status}\n`);
-    const statementId = e.message.query_result?.statement_id;
-    if (!statementId) return;
-    queryFetches.push(fetchAndWriteQuery(client, statementId));
-  });
 
   try {
-    await chat.run();
+    for await (const question of contents) {
+      for await (const event of genieEventChat(spaceId, question, {
+        workspaceClient: client,
+        conversationId,
+      })) {
+        renderEvent(event);
+        if (event.type === "result") {
+          conversationId = event.conversation_id ?? conversationId;
+          const statementId = event.message.query_result?.statement_id;
+          if (statementId) {
+            queryFetches.push(fetchAndWriteQuery(client, statementId));
+          }
+        }
+      }
+    }
     await Promise.all(queryFetches);
   } finally {
     rl?.close();

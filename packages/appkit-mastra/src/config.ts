@@ -14,6 +14,7 @@ import {
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import type { MastraAgentDefinition, MastraTools } from "./agents.js";
+import type { GenieSpacesConfig } from "./genie.js";
 
 /**
  * `RequestContext` key under which {@link MastraServer} stores the
@@ -238,4 +239,74 @@ export interface MastraPluginConfig extends BasePluginConfig {
    * and the style block leans on the model's recency bias.
    */
   styleInstructions?: string | false;
+  /**
+   * Genie spaces this plugin's agents can delegate to. One Mastra
+   * tool is registered per alias (`genie` for the well-known
+   * `default` alias, `genie_<alias>` otherwise). Each tool spins
+   * up a per-question Genie sub-agent that runs Databricks
+   * "agent mode" against the space, broadcasts wire events to the
+   * UI, fetches statement rows for non-empty results, and returns
+   * a `(string | data | chart)[]` summary the host UI renders
+   * inline.
+   *
+   * Entries accept either a full {@link GenieSpaceConfig} object
+   * or a bare `space_id` string when no extras are needed:
+   *
+   * ```ts
+   * mastra({
+   *   genieSpaces: {
+   *     default: "01ef0d3c0e1b1f4a8d2c3e4f5a6b7c8d",
+   *     forecasts: { spaceId: "01ef...", hint: "weekly demand forecasts" },
+   *   },
+   * });
+   * ```
+   *
+   * Reach the spaces from an agent's `tools(plugins)` callback via
+   * `plugins.genie?.toolkit()`; the resulting tools accept
+   * `{ content, conversationId? }` and return a hydrated summary.
+   *
+   * **Fallback discovery** (highest precedence first): if this
+   * field is omitted, the Genie agent also picks up spaces from
+   * (1) the AppKit `genie({ spaces: { ... } })` plugin instance
+   * when registered, and (2) the `DATABRICKS_GENIE_SPACE_ID`
+   * env var (registered under the `default` alias). This keeps
+   * existing AppKit deployments working without restating the
+   * spaces config in two places.
+   */
+  genieSpaces?: GenieSpacesConfig;
+  /**
+   * TTL for the in-memory Genie space metadata cache, in
+   * milliseconds. Defaults to 5 minutes. The Genie agent calls
+   * `client.genie.getSpace(...)` on every cold-start to get the
+   * title / description / warehouse id; cached responses skip the
+   * round-trip and concurrent callers coalesce on a single
+   * in-flight fetch. Drop to a smaller value when analysts are
+   * actively editing space metadata and you want changes visible
+   * within seconds; raise it to amortise the round-trip when
+   * space metadata is effectively frozen.
+   *
+   * Backed by AppKit's `CacheManager`, so the cache participates
+   * in telemetry spans (`cache.getOrExecute`) and benefits from
+   * Lakebase persistence when the `lakebase` plugin is wired up.
+   */
+  genieSpaceCacheTtlMs?: number;
+  /**
+   * Maximum LLM steps the Genie agent gets per turn.
+   * Each step is one round-trip to the underlying model
+   * (`get_space_description`, each `ask_genie` call, and the
+   * mandatory `submit_summary` closer all consume one step).
+   *
+   * Defaults to 16, which fits ~10 `ask_genie` calls plus
+   * grounding plus the summary closer - matches the
+   * decomposition pattern the Genie agent instructions prescribe
+   * ("2-6 ask_genie calls for any non-trivial question").
+   * Mastra's own `agent.generate` default of 5 would cut the
+   * Genie agent off after 2-3 Genie calls, so explicitly raising
+   * the ceiling here is what lets the agent-mode loop play out.
+   *
+   * Lower this when an unusually slow or expensive model makes
+   * long turns unaffordable; raise it for exploratory workloads
+   * that need to drill into a dataset.
+   */
+  genieAgentMaxSteps?: number;
 }

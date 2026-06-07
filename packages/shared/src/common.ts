@@ -316,6 +316,22 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Mint a short, collision-resistant id by sampling the first `length`
+ * hex chars of a v4 UUID. `length` defaults to 8 (collision odds
+ * ~1 in 4 billion - safe within a single conversation turn / job /
+ * batch). Uses `globalThis.crypto.randomUUID()` so it works in
+ * both Node (>= 19) and modern browsers.
+ *
+ * Use for ids that the caller cares about being typeable / short
+ * (e.g. chart ids the LLM types into `[[chart:<id>]]` markers).
+ * For ids that need to survive across long-running batches or be
+ * globally unique, use a full UUID instead.
+ */
+export function shortId(length: number = 8): string {
+  return globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, length);
+}
+
 export function fnvHash(...values: string[]): string {
   return fnvHashWithOptions({}, ...values);
 }

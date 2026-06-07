@@ -1,12 +1,16 @@
 #!/usr/bin/env bun
-// Scaffolds a new workspace package under `packages/<slug>/`, matching
+// Scaffolds a new workspace package under `packages/<dir>/`, matching
 // the minimal shape `mastra-shared` settled on:
 //
-//   packages/<slug>/
+//   packages/<dir>/
 //     package.json         (name, version, module, type, optional deps)
 //     tsconfig.build.json  (one-liner extending the root build config)
 //     index.ts             (root barrel - what `module: "index.ts"` points at)
-//     src/<slug>.ts        (plugin) or src/protocol.ts (shared)
+//     src/<dir>.ts         (plugin) or src/protocol.ts (shared)
+//
+// For `plugin`, `<dir>` is always `appkit-<bare>` (the script
+// auto-prefixes `appkit-`). For `shared`, `<dir>` is the slug verbatim.
+// See "Naming derivations" below.
 //
 // Notable absences vs. typical npm scaffolds:
 //   - no `exports`, `files`, `scripts`, `main`, `types` on package.json
@@ -29,18 +33,33 @@
 //   bun run create plugin <slug>     e.g. bun run create plugin example
 //   bun run create shared <slug>     e.g. bun run create shared example-shared
 //
-// Naming derivations from the kebab-case `<slug>`:
+// Naming derivations.
+//
+// `shared`:
 //   - npm name:        @dbx-tools/<slug>              (example -> @dbx-tools/example)
 //   - directory:       packages/<slug>                (example -> packages/example)
-//   - class name:      PascalCase(<slug>) + Plugin    (example -> ExamplePlugin)   [plugin only]
-//   - export const:    camelCase(<slug>)              (example -> example)         [plugin only]
-//   - displayName:     "Title Case <slug>"            (example -> "Example")       [plugin only]
-//   - manifest name:   <slug> verbatim                                              [plugin only]
 //
-// The npm name intentionally tracks the folder name 1:1: no implicit
-// prefix is stamped on. Naming a package `foo` therefore yields
-// `@dbx-tools/foo`; if you want `@dbx-tools/appkit-foo` on npm, name
-// the folder `appkit-foo`.
+// `plugin` (auto-prefixed with `appkit-` so every plugin npm name is
+// `@dbx-tools/appkit-<bare>`; the prefix is stripped back off for the
+// in-process manifest name since the runtime addresses plugins by
+// their bare name):
+//   - bare slug:       <slug> with any leading `appkit-` stripped
+//                                                     (appkit-foo -> foo, foo -> foo)
+//   - prefixed slug:   `appkit-<bare>`                (foo -> appkit-foo)
+//   - npm name:        @dbx-tools/<prefixed>          (foo -> @dbx-tools/appkit-foo)
+//   - directory:       packages/<prefixed>            (foo -> packages/appkit-foo)
+//   - class name:      PascalCase(<prefixed>) + Plugin (foo -> AppkitFooPlugin)
+//   - export const:    camelCase(<prefixed>)          (foo -> appkitFoo)
+//   - displayName:     "Title Case <prefixed>"        (foo -> "Appkit Foo")
+//   - file name:       src/<prefixed>.ts              (foo -> src/appkit-foo.ts)
+//   - manifest name:   <bare>                         (foo -> "foo")
+//
+// Passing either form works: `bun run create plugin foo` and
+// `bun run create plugin appkit-foo` both produce `packages/appkit-foo`
+// with a manifest `name: "foo"`. The bare-vs-prefixed split exists
+// because the npm side wants the package to read as an AppKit plugin
+// (`appkit-foo`) while the runtime addresses plugins by their short
+// name (`foo`).
 //
 // The initial `version` is read off the root `package.json` instead
 // of being hardcoded. That keeps a freshly scaffolded package in
@@ -104,18 +123,26 @@ const program = new Command()
   .parse(process.argv);
 
 const [kind, slug] = program.processedArgs as [Kind, string];
-const pkgDir = resolve(ROOT, "packages", slug);
+
+// Plugins auto-prefix `appkit-` so the npm/folder/class names all
+// read as AppKit plugins; the manifest `name` keeps the bare slug
+// because the runtime addresses plugins by their short name. Shared
+// packages pass through verbatim.
+const bareSlug = kind === "plugin" ? slug.replace(/^appkit-/, "") : slug;
+const dirSlug = kind === "plugin" ? `appkit-${bareSlug}` : slug;
+
+const pkgDir = resolve(ROOT, "packages", dirSlug);
 if (existsSync(pkgDir)) {
-  console.error(`packages/${slug} already exists; aborting.`);
+  console.error(`packages/${dirSlug} already exists; aborting.`);
   process.exit(1);
 }
 
-const parts = slug.split("-");
+const parts = dirSlug.split("-");
 const pascal = parts.map((s) => s[0]!.toUpperCase() + s.slice(1)).join("");
 const camel = pascal[0]!.toLowerCase() + pascal.slice(1);
 const className = `${pascal}Plugin`;
 const displayName = parts.map((s) => s[0]!.toUpperCase() + s.slice(1)).join(" ");
-const pkgName = `${SCOPE}/${slug}`;
+const pkgName = `${SCOPE}/${dirSlug}`;
 
 // `package.json`: the bare minimum mastra-shared settled on. Bun reads
 // `module` to resolve the entry; nothing else is needed for workspace
@@ -150,10 +177,10 @@ await writeJson(resolve(pkgDir, "tsconfig.build.json"), tsconfigBuild);
 
 if (kind === "plugin") {
   // Root barrel: one line that re-exports the plugin and its factory
-  // from `src/<slug>.js` (NodeNext-emitted `.js` extension - the
+  // from `src/<dirSlug>.js` (NodeNext-emitted `.js` extension - the
   // tsconfig.build.json compiles src/ into dist/ so the runtime path is
   // `.js`, even though the file on disk is `.ts`).
-  const indexTs = `export { ${className}, ${camel} } from "./src/${slug}.js";\n`;
+  const indexTs = `export { ${className}, ${camel} } from "./src/${dirSlug}.js";\n`;
 
   const pluginTs = `import {
   Plugin,
@@ -162,8 +189,8 @@ if (kind === "plugin") {
   type PluginManifest,
 } from "@databricks/appkit";
 
-const manifest: PluginManifest<"${slug}"> = {
-  name: "${slug}",
+const manifest: PluginManifest<"${bareSlug}"> = {
+  name: "${bareSlug}",
   displayName: "${displayName}",
   description: "",
   stability: "beta",
@@ -179,7 +206,7 @@ export class ${className} extends Plugin {
   injectRoutes(router: IAppRouter): void {
     // Add your routes here, e.g.:
     // router.get("/", (_req, res) => {
-    //   res.json({ message: "Hello from ${slug}" });
+    //   res.json({ message: "Hello from ${dirSlug}" });
     // });
   }
 }
@@ -188,9 +215,11 @@ export const ${camel} = toPlugin(${className});
 `;
 
   write(resolve(pkgDir, "index.ts"), indexTs);
-  write(resolve(pkgDir, "src", `${slug}.ts`), pluginTs);
+  write(resolve(pkgDir, "src", `${dirSlug}.ts`), pluginTs);
 
-  console.log(`Scaffolded packages/${slug}/ (plugin, npm name ${pkgName})`);
+  console.log(
+    `Scaffolded packages/${dirSlug}/ (plugin, npm name ${pkgName}, manifest name "${bareSlug}")`,
+  );
   console.log(`Run \`bun install\` to link the workspace.`);
 } else {
   // Shared package: barrel re-exports from a single seed protocol
@@ -206,6 +235,6 @@ export const ${camel} = toPlugin(${className});
   write(resolve(pkgDir, "index.ts"), indexTs);
   write(resolve(pkgDir, "src", "protocol.ts"), protocolTs);
 
-  console.log(`Scaffolded packages/${slug}/ (shared, npm name ${pkgName})`);
+  console.log(`Scaffolded packages/${dirSlug}/ (shared, npm name ${pkgName})`);
   console.log(`Run \`bun install\` to link the workspace.`);
 }

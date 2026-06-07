@@ -1,9 +1,9 @@
 {
   "name": "@dbx-tools/appkit-autopg",
   "version": "0.1.13",
-  "type": "module",
-  "module": "index.ts",
   "dependencies": {
     "@dbx-tools/shared": "workspace:*"
-  }
+  },
+  "module": "index.ts",
+  "type": "module"
 }

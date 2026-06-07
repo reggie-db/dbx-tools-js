@@ -1,42 +1,34 @@
 /**
  * Chart-rendering primitives.
  *
- * Three surfaces, one shared brain:
- *
- * - {@link buildRenderDataTool}: a Mastra tool the model calls
- *   ("here is a dataset, render it as a chart"). The tool's
- *   `execute` emits a `kind: "chart"` event with the raw rows to
- *   `ctx.writer` synchronously, kicks off the chart-planner agent,
- *   and `await`s the planner promise before returning so the
- *   planner's latency is attributed to this tool's trace span.
- *   The LLM-bound output is just `{ chartId }`, so its context
- *   stays flat regardless of dataset size.
- *
- * - {@link emitChartWithPlanning}: the underlying helper that both
- *   `render_data` and Genie's `drainGenieStream` call. Mints the
- *   `chartId`, fires the dataset event immediately, runs the
- *   planner in the background, and returns `{ chartId,
- *   plannerPromise }` so callers can choose to await for trace
- *   shape or fire-and-forget.
+ * Two surfaces, one shared brain:
  *
  * - {@link runChartPlanner}: the chart-planner Agent + ECOption
- *   expansion as a plain async function. Used internally by
- *   {@link emitChartWithPlanning}; producers shouldn't reach for
- *   it directly so chart events keep a single wire-format
- *   contract.
+ *   expansion as a plain async function. Takes a dataset and
+ *   returns a promise that resolves to a full `EChartsOption`
+ *   JSON plus the chosen `chartType`. No background work, no
+ *   writer side-effects, no id allocation - callers stitch the
+ *   result into whatever shape their producer needs.
+ *
+ * - {@link buildRenderDataTool}: a Mastra tool the model calls
+ *   ("here is a dataset, render it as a chart"). Mints a short
+ *   `chartId`, `await`s {@link runChartPlanner} so the planner
+ *   latency is attributed to this tool's trace span, emits one
+ *   `type: "chart"` writer event carrying the dataset + resolved
+ *   `option`, and returns `{ chartId }` to the model. The
+ *   LLM-bound output stays flat regardless of dataset size.
  *
  * The model wires the chart into its reply by emitting the marker
  * `[[chart:<chartId>]]` on its own line in markdown. The chat
  * client splits the assistant text on these markers and drops a
- * `<ChartSlot>` in at the position the model placed it; the slot
- * shows a skeleton until the second `kind: "chart"` event (with
- * the resolved `EChartsOption`) arrives, then swaps in the
- * rendered Echarts visualisation.
+ * `<ChartSlot>` in at the position the model placed it. The slot
+ * resolves directly to the rendered Echarts visualisation - no
+ * skeleton state, because the option is in the same event as the
+ * dataset.
  */
 
-import { randomUUID } from "node:crypto";
-
-import { logUtils, stringUtils } from "@dbx-tools/shared";
+import type { MinimalWriter } from "@dbx-tools/appkit-mastra-shared";
+import { commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import { Agent } from "@mastra/core/agent";
 import type { RequestContext } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
@@ -55,6 +47,79 @@ import { ModelTier, modelForTier, buildModel } from "./model.js";
 const log = logUtils.logger("mastra/chart");
 
 /**
+ * One series data point. Wide variant set so the planner agent can
+ * faithfully pass through whatever the SQL row set contained
+ * (numbers, stringified numbers, nulls for missing measurements,
+ * `[x, y]` tuples for scatter, `{name, value}` slices for pie)
+ * without the structured-output guard rejecting the whole plan.
+ *
+ * Three layers of tolerance:
+ *
+ *   1. {@link z.preprocess} normalizes wire shapes BEFORE union
+ *      dispatch: stringified numbers parse to numbers, finite
+ *      checks reject `NaN` / `Infinity`, 2-element arrays coerce
+ *      tuple components, and `{value}` objects with missing /
+ *      stringified `value` get coerced or rejected uniformly.
+ *      Anything not handleable becomes `null`.
+ *   2. The union accepts `null` as a first-class variant. Echarts
+ *      renders null as a gap on bar / line / area (which is the
+ *      right visual signal for "missing reading"). Scatter and
+ *      pie filter nulls in {@link planToEchartsOption} because
+ *      Echarts crashes on null tuples / slices.
+ *   3. {@link z.union#catch} backstops the whole thing: if
+ *      preprocess somehow produces a shape that still doesn't
+ *      match any variant, the bad item becomes `null` instead of
+ *      taking down the entire chart with a
+ *      `Structured output validation failed` error.
+ *
+ * Net effect: a 200-row dataset with a few sparse/null/string
+ * values still produces a chart; only a totally-malformed planner
+ * response (no items at all) falls through to the table fallback.
+ */
+const chartDataPointSchema = z
+  .preprocess(
+    (v) => {
+      if (v === null || v === undefined) return null;
+      if (typeof v === "number") return Number.isFinite(v) ? v : null;
+      if (typeof v === "string") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (Array.isArray(v) && v.length === 2) {
+        const x = typeof v[0] === "number" ? v[0] : Number(v[0]);
+        const y = typeof v[1] === "number" ? v[1] : Number(v[1]);
+        return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+      }
+    if (typeof v === "object" && v !== null && "value" in v) {
+      const obj = v as { name?: unknown; value: unknown };
+      const val = typeof obj.value === "number" ? obj.value : Number(obj.value);
+      if (!Number.isFinite(val)) return null;
+      // Coerce numeric / boolean / nullish names to strings so a
+      // pie slice keyed on a year (`2024`) or category id is
+      // accepted without round-tripping through the catch arm.
+      const rawName = obj.name;
+      const name =
+        typeof rawName === "string"
+          ? rawName
+          : rawName == null
+            ? ""
+            : String(rawName);
+      return { name, value: val };
+    }
+      return null;
+    },
+    z.union([
+      z.number(),
+      z.null(),
+      z.tuple([z.number(), z.number()]),
+      z.object({ name: z.string(), value: z.number() }),
+    ]),
+  )
+  .catch(null);
+
+type ChartDataPoint = z.infer<typeof chartDataPointSchema>;
+
+/**
  * Compact, model-friendly representation of an Echarts spec. The
  * planner agent emits this; {@link planToEchartsOption} expands it
  * into a real `EChartsOption` JSON. Two layers because letting the
@@ -65,8 +130,7 @@ const log = logUtils.logger("mastra/chart");
  * across charts.
  */
 const chartPlanSchema = z.object({
-  chartType: z
-    .enum(["bar", "line", "area", "scatter", "pie"])
+  chartType: z.enum(["bar", "line", "area", "scatter", "pie"])
     .describe(stringUtils.toDescription`
       The chart shape that best matches the data and intent. Use
       \`bar\` for category-vs-value comparisons, \`line\` for
@@ -86,10 +150,7 @@ const chartPlanSchema = z.object({
     Axis label to the left of the chart. Used for bar / line /
     area / scatter; ignored for pie.
   `),
-  categories: z
-    .array(z.string())
-    .optional()
-    .describe(stringUtils.toDescription`
+  categories: z.array(z.string()).optional().describe(stringUtils.toDescription`
       X-axis category labels for \`bar\` / \`line\` / \`area\`
       charts (one per data point in each series). Omit for
       \`scatter\` (uses [x, y] tuples) and \`pie\` (each slice
@@ -101,18 +162,7 @@ const chartPlanSchema = z.object({
         name: z.string().describe(stringUtils.toDescription`
           Legend name for this series.
         `),
-        data: z
-          .array(
-            z.union([
-              z.number(),
-              z.tuple([z.number(), z.number()]),
-              z.object({
-                name: z.string(),
-                value: z.number(),
-              }),
-            ]),
-          )
-          .describe(stringUtils.toDescription`
+        data: z.array(chartDataPointSchema).describe(stringUtils.toDescription`
             Data points. For \`bar\` / \`line\` / \`area\`, an
             array of numbers aligned to \`categories\`. For
             \`scatter\`, an array of \`[x, y]\` numeric tuples.
@@ -120,8 +170,7 @@ const chartPlanSchema = z.object({
           `),
       }),
     )
-    .min(1)
-    .describe(stringUtils.toDescription`
+    .min(1).describe(stringUtils.toDescription`
       One or more series to plot. Pie charts use exactly one
       series; bar/line/area can stack multiple series sharing
       the same \`categories\` axis.
@@ -200,6 +249,12 @@ export interface RunChartPlannerOptions {
   title: string;
   description?: string;
   data: ReadonlyArray<Record<string, unknown>>;
+  /**
+   * Cooperative cancellation. Forwarded to the planner agent's
+   * `generate({ abortSignal })` call so concurrent renders can be
+   * aborted as a group when the parent Genie agent's signal fires.
+   */
+  signal?: AbortSignal;
 }
 
 /** Output of {@link runChartPlanner}: a fully-formed Echarts spec. */
@@ -226,15 +281,16 @@ function getPlannerAgent(config: MastraPluginConfig): Agent {
 
 /**
  * Run the chart planner against the given dataset and return a
- * full Echarts `EChartsOption` JSON. Used by
- * {@link emitChartWithPlanning}; tools and producers shouldn't
- * call this directly (use the helper instead so chart events
- * follow the same wire-format contract everywhere).
+ * full Echarts `EChartsOption` JSON. Pure async function: no
+ * writer side-effects, no id minting, no background work.
+ * Producers (the `render_data` tool, the Genie agent,
+ * anything else that needs a chart) await this and stitch the
+ * result into whatever shape their wire contract needs.
  */
 export async function runChartPlanner(
   opts: RunChartPlannerOptions,
 ): Promise<RunChartPlannerResult> {
-  const { config, requestContext, title, description, data } = opts;
+  const { config, requestContext, title, description, data, signal } = opts;
   const planner = getPlannerAgent(config);
 
   const prompt = [
@@ -252,174 +308,11 @@ export async function runChartPlanner(
   const result = await planner.generate(prompt, {
     structuredOutput: { schema: chartPlanSchema },
     ...(requestContext ? { requestContext } : {}),
+    ...(signal ? { abortSignal: signal } : {}),
   });
   const plan = result.object;
   const option = planToEchartsOption(plan, title);
   return { option, chartType: plan.chartType };
-}
-
-/**
- * Minimal `ToolStream`-shaped writer surface. Defined locally so
- * helpers can take any object with a `.write` method without
- * importing Mastra's full `ToolStream` (which would also drag in
- * agent / tool types this module doesn't otherwise need).
- */
-interface MinimalWriter {
-  write: (chunk: unknown) => unknown;
-}
-
-/** Inputs to {@link emitChartWithPlanning}. */
-export interface EmitChartWithPlanningOptions {
-  /** Mastra `ctx.writer`; missing or closed writers are tolerated. */
-  writer?: MinimalWriter;
-  /** Plugin config; used to resolve the planner's model. */
-  config: MastraPluginConfig;
-  /** Per-request context (OBO auth). */
-  requestContext?: RequestContext;
-  /** Title shown above the rendered chart. Required. */
-  title: string;
-  /** Optional one-line intent biasing the planner. */
-  description?: string;
-  /** Tabular dataset to chart (one object per row). */
-  data: ReadonlyArray<Record<string, unknown>>;
-}
-
-/** Output of {@link emitChartWithPlanning}. */
-export interface EmitChartWithPlanningResult {
-  /** Short id matching the marker `[[chart:<chartId>]]`. */
-  chartId: string;
-  /**
-   * Promise that resolves once the planner has finished and the
-   * `kind: "chart"` event with the option has been emitted (or
-   * once the planner has failed silently). Callers that want
-   * trace observability should `await` this before returning
-   * from their tool's `execute`; callers that want pure
-   * fire-and-forget can ignore it.
-   */
-  plannerPromise: Promise<void>;
-}
-
-/**
- * Shared chart-emission primitive used by both the `render_data`
- * tool and Genie's `drainGenieStream`. Keeps both producers on
- * one wire-format contract so the chat client only ever has to
- * understand a single chart event shape.
- *
- * Behaviour:
- *
- * 1. Generates a short `chartId` (8 hex chars).
- * 2. Immediately emits `{ kind: "chart", chartId, title,
- *    description?, data }` via the writer so the chat client can
- *    mount its `<ChartSlot>` with the rows in hand.
- * 3. Kicks off the chart-planner agent in the background. On
- *    success, emits a second `{ kind: "chart", chartId, option }`
- *    event - same `chartId`, just the spec - so the client merges
- *    the two into one rendered chart. On failure, no follow-up
- *    event fires; the client falls back to whatever it can do
- *    with the dataset alone (typically a "render failed" frame
- *    after the parent tool finishes).
- *
- * Returns `chartId` synchronously so the caller can include it in
- * the tool result (model uses it in `[[chart:<chartId>]]`
- * markers), and `plannerPromise` so the caller can choose
- * trace-spanning vs. snappy-return semantics.
- */
-export async function emitChartWithPlanning(
-  opts: EmitChartWithPlanningOptions,
-): Promise<EmitChartWithPlanningResult> {
-  const { writer, config, requestContext, title, description, data } = opts;
-
-  // Short, marker-friendly id. The LLM types this verbatim into
-  // `[[chart:<id>]]`; an 8-hex-char prefix is unique within a
-  // single assistant turn (collision odds ~1 in 4 billion) and
-  // much less error-prone for the model to reproduce.
-  const chartId = randomUUID().replace(/-/g, "").slice(0, 8);
-
-  log.debug("emit:start", {
-    chartId,
-    title,
-    rows: data.length,
-    columns: data[0] ? Object.keys(data[0]) : [],
-    hasWriter: writer !== undefined,
-  });
-
-  // Initial event: rows + metadata, no option yet. The client
-  // mounts a chart slot that shows a skeleton until the option
-  // event arrives (or until the parent tool finishes without
-  // one, in which case it falls back).
-  await safeWrite(writer, chartId, "data", {
-    kind: "chart",
-    chartId,
-    title,
-    ...(description ? { description } : {}),
-    data,
-  });
-
-  // Background planner. Awaitable for trace observability via the
-  // returned `plannerPromise`; safe to ignore for pure
-  // fire-and-forget. Failures are intentionally swallowed (only
-  // logged): the dataset event already landed, so the client has
-  // enough to surface a fallback.
-  const plannerPromise = (async () => {
-    const startedAt = Date.now();
-    try {
-      const { option, chartType } = await runChartPlanner({
-        config,
-        ...(requestContext ? { requestContext } : {}),
-        title,
-        ...(description ? { description } : {}),
-        data,
-      });
-      log.debug("planner:done", {
-        chartId,
-        chartType,
-        elapsedMs: Date.now() - startedAt,
-      });
-      await safeWrite(writer, chartId, "option", { kind: "chart", chartId, option });
-    } catch (err) {
-      // No follow-up event on failure. The client treats a
-      // dataset-only chart slot as "render failed" once the
-      // parent tool's status flips to done. Surface as a `warn`
-      // so the failure is visible at the default log level
-      // without being mistaken for a fatal error.
-      log.warn("planner:error", {
-        chartId,
-        elapsedMs: Date.now() - startedAt,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  })();
-
-  return { chartId, plannerPromise };
-}
-
-/**
- * Best-effort writer.write. Failures are logged at `warn` (a
- * persistently-closed writer is the most likely culprit when
- * chart events go missing client-side) but swallowed so a closed
- * downstream stream (cancelled request, client navigated away)
- * can't take a tool down.
- */
-async function safeWrite(
-  writer: MinimalWriter | undefined,
-  chartId: string,
-  phase: "data" | "option",
-  chunk: unknown,
-): Promise<void> {
-  if (!writer) {
-    log.debug("write:no-writer", { chartId, phase });
-    return;
-  }
-  try {
-    await writer.write(chunk);
-    log.debug("write:ok", { chartId, phase });
-  } catch (err) {
-    log.warn("write:error", {
-      chartId,
-      phase,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 const renderDataInputSchema = z.object({
@@ -434,9 +327,7 @@ const renderDataInputSchema = z.object({
     The chart-planner reads this when picking the chart type and
     axis encodings; the user does not see it directly.
   `),
-  data: z
-    .array(z.record(z.string(), z.unknown()))
-    .min(1)
+  data: z.array(z.record(z.string(), z.unknown())).min(1)
     .describe(stringUtils.toDescription`
       Tabular dataset to chart. One object per row, keyed by
       column name. Values may be strings, numbers, booleans, or
@@ -458,16 +349,14 @@ const renderDataOutputSchema = z.object({
 /**
  * Build the `render_data` tool bound to the given plugin config.
  *
- * The tool is a thin wrapper around {@link emitChartWithPlanning}:
- * a single `kind: "chart"` writer event ships the raw rows to
- * the client immediately, the chart-planner agent runs alongside
- * (so the calling LLM stays unblocked while the planner thinks),
- * and a follow-up `kind: "chart"` event with the resolved
- * `EChartsOption` lands when it's ready. The tool's `execute`
- * awaits the planner promise so the planner work shows up under
- * the tool's trace span; the LLM still gets back just
- * `{ chartId }`, so its context stays small regardless of dataset
- * size.
+ * The tool awaits {@link runChartPlanner} so the planner's
+ * latency is attributed to this tool's trace span, then emits
+ * one `type: "chart"` writer event carrying the dataset and the
+ * resolved `EChartsOption`. The LLM-bound output is just
+ * `{ chartId }` so the model's context stays flat regardless of
+ * dataset size. Planner failures are caught and surfaced as a
+ * `type: "error"` writer event so the slot can fall back to
+ * "couldn't render chart" without taking the parent agent down.
  */
 export function buildRenderDataTool(config: MastraPluginConfig) {
   return createTool({
@@ -482,14 +371,14 @@ export function buildRenderDataTool(config: MastraPluginConfig) {
 
       Placement contract: embed \`[[chart:<chartId>]]\` on its own
       line (blank lines above and below) wherever you want the
-      chart to appear in your reply. The client shows a skeleton
-      at that spot until the chart is ready, then swaps in the
-      rendered Echarts visualization. You can call
-      \`render_data\` multiple times in the same turn (the tool
-      is parallel-safe) and interleave the markers with prose so
-      each chart sits next to its commentary. A chart whose
-      marker is omitted falls through to the end of your reply
-      as a fallback - safe but less polished.
+      chart to appear in your reply. The chart is fully resolved
+      by the time the tool returns, so it renders immediately at
+      that spot. You can call \`render_data\` multiple times in
+      the same turn (the tool is parallel-safe) and interleave
+      the markers with prose so each chart sits next to its
+      commentary. A chart whose marker is omitted falls through
+      to the end of your reply as a fallback - safe but less
+      polished.
 
       Use whenever a SQL row set, API response, or hand-built
       dataset would land better as a picture than as a list or
@@ -505,21 +394,89 @@ export function buildRenderDataTool(config: MastraPluginConfig) {
       const writer = (ctx as { writer?: MinimalWriter } | undefined)?.writer;
       const requestContext = (ctx as { requestContext?: RequestContext } | undefined)
         ?.requestContext;
-      const { chartId, plannerPromise } = await emitChartWithPlanning({
-        ...(writer ? { writer } : {}),
-        config,
-        ...(requestContext ? { requestContext } : {}),
+
+      // Marker-friendly short id. The LLM types this verbatim
+      // into `[[chart:<id>]]`; 8 hex chars is unique within a
+      // single assistant turn and easy for the model to copy.
+      const chartId = commonUtils.shortId();
+      const startedAt = Date.now();
+      log.debug("render:start", {
+        chartId,
         title,
-        ...(description ? { description } : {}),
-        data,
+        rows: data.length,
+        columns: data[0] ? Object.keys(data[0]) : [],
+        hasWriter: writer !== undefined,
       });
-      // Await the planner so its latency is attributed to this
-      // tool's trace span. The promise itself swallows planner
-      // failures, so this never throws.
-      await plannerPromise;
+
+      try {
+        const { option, chartType } = await runChartPlanner({
+          config,
+          ...(requestContext ? { requestContext } : {}),
+          title,
+          ...(description ? { description } : {}),
+          data,
+        });
+        log.debug("render:done", {
+          chartId,
+          chartType,
+          elapsedMs: Date.now() - startedAt,
+        });
+        // Single chart event with everything resolved: dataset
+        // for the table-like fallback / hover, option for the
+        // actual render. Best-effort write so a closed
+        // downstream stream can't take the tool down.
+        await safeWrite(writer, chartId, {
+          type: "chart",
+          chartId,
+          title,
+          ...(description ? { description } : {}),
+          data,
+          option,
+        });
+      } catch (err) {
+        log.warn("render:error", {
+          chartId,
+          elapsedMs: Date.now() - startedAt,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Surface as a writer-level error so the slot can
+        // transition to "couldn't render chart" without the
+        // parent agent surfacing a stack trace.
+        await safeWrite(writer, chartId, {
+          type: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       return { chartId };
     },
   });
+}
+
+/**
+ * Best-effort writer.write. Failures are logged at `warn` (a
+ * persistently-closed writer is the most likely culprit when
+ * chart events go missing client-side) but swallowed so a closed
+ * downstream stream (cancelled request, client navigated away)
+ * can't take a tool down.
+ */
+async function safeWrite(
+  writer: MinimalWriter | undefined,
+  chartId: string,
+  chunk: unknown,
+): Promise<void> {
+  if (!writer) {
+    log.debug("write:no-writer", { chartId });
+    return;
+  }
+  try {
+    await writer.write(chunk);
+    log.debug("write:ok", { chartId });
+  } catch (err) {
+    log.warn("write:error", {
+      chartId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
@@ -537,6 +494,14 @@ function planToEchartsOption(
   const grid = { left: 48, right: 24, top: 56, bottom: 48, containLabel: true };
 
   if (plan.chartType === "pie") {
+    // Echarts crashes on null pie slices - filter them out.
+    // `{name, value}` slices are the only valid pie data shape,
+    // so drop bare numbers / tuples / nulls the planner may
+    // have leaked into a pie series.
+    const slices = (plan.series[0]?.data ?? []).filter(
+      (d): d is { name: string; value: number } =>
+        d !== null && typeof d === "object" && !Array.isArray(d),
+    );
     return {
       title: { text: baseTitle, left: "center" },
       tooltip: { trigger: "item" },
@@ -546,13 +511,16 @@ function planToEchartsOption(
           name: plan.series[0]?.name ?? baseTitle,
           type: "pie",
           radius: ["35%", "65%"],
-          data: plan.series[0]?.data ?? [],
+          data: slices,
         },
       ],
     };
   }
 
   if (plan.chartType === "scatter") {
+    // Echarts crashes on null scatter points - keep only valid
+    // `[x, y]` tuples. Bare numbers / objects / nulls from a
+    // mismatched plan get dropped silently.
     return {
       title: { text: baseTitle, left: "center" },
       tooltip: { trigger: "item" },
@@ -563,7 +531,9 @@ function planToEchartsOption(
       series: plan.series.map((s) => ({
         name: s.name,
         type: "scatter",
-        data: s.data,
+        data: s.data.filter(
+          (d): d is [number, number] => Array.isArray(d) && d.length === 2,
+        ),
       })),
     };
   }

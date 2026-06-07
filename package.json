@@ -1,12 +1,6 @@
 {
   "name": "dbx-tools-appkit",
   "version": "0.1.13",
-  "private": true,
-  "type": "module",
-  "workspaces": [
-    "packages/*",
-    "demo"
-  ],
   "catalog": {
     "@databricks/appkit": "^0.35",
     "@databricks/appkit-ui": "^0.35",
@@ -25,24 +19,9 @@
     "@types/node": "latest",
     "@types/which": "latest",
     "express": "^5",
-    "zod": "^4.3.6"
-  },
-  "scripts": {
-    "pretypecheck": "bun run scripts/pretypecheck.ts",
-    "typecheck": "bunx --bun tsc --noEmit",
-    "clean": "bun scripts/clean.ts",
-    "prebuild": "bun run typecheck",
-    "build": "bun scripts/build.ts",
-    "create": "bun scripts/create.ts",
-    "version": "bunx --bun changeset version && bun scripts/sync-version.ts",
-    "sync-version": "bun scripts/sync-version.ts",
-    "prerelease": "bun run build",
-    "release": "bun scripts/release.ts",
-    "tag": "bun scripts/tag.ts",
-    "dev": "bun run --cwd=demo dev"
-  },
-  "peerDependencies": {
-    "@databricks/appkit": "catalog:"
+    "zod": "^4.3.6",
+    "fast-deep-equal": "^3.1.3",
+    "lru-cache": "^11.5.1"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.10",
@@ -56,14 +35,37 @@
     "p-memoize": "^8.0.0",
     "prettier": "^3.8.3",
     "semver": "^7.8.1",
+    "ts-to-zod": "^5.1.0",
     "typescript": "^5",
     "yaml": "^2.9.0"
   },
   "overrides": {
-    "zod": "4.3.6"
+    "zod": "catalog:"
   },
-  "dependencies": {
-    "@dbx-tools/shared": "workspace:*",
-    "zod": "^4.3.6"
-  }
+  "peerDependencies": {
+    "@databricks/appkit": "catalog:"
+  },
+  "private": true,
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "clean": "bun scripts/clean.ts",
+    "codegen": "bun scripts/codegen.ts",
+    "create": "bun scripts/create.ts",
+    "dev": "bun run --cwd=demo dev",
+    "format": "bunx syncpack format",
+    "preinstall": "bun scripts/codegen-bootstrap.ts @dbx-tools/sdk-shared",
+    "prebuild": "bun scripts/codegen.ts --package @dbx-tools/sdk-shared node_modules/@databricks/sdk-experimental/dist/apis/dashboards/model.d.ts && bun run format && bun run typecheck",
+    "prerelease": "bun run build",
+    "pretypecheck": "bun run scripts/pretypecheck.ts",
+    "release": "bun scripts/release.ts",
+    "sync-version": "bun scripts/sync-version.ts",
+    "tag": "bun scripts/tag.ts",
+    "typecheck": "bunx --bun tsc --noEmit",
+    "version": "bunx --bun changeset version && bun scripts/sync-version.ts"
+  },
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "demo"
+  ]
 }

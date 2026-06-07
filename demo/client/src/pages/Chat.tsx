@@ -3,12 +3,18 @@ import { DefaultChatTransport } from "ai";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { logUtils } from "@dbx-tools/shared";
 import { ChatView, type ApprovalDecision } from "@/components/chat-view";
-import { useChatUrl, useMastraModels } from "@/lib/mastra-client";
+import {
+  clearMastraHistory,
+  useChatUrl,
+  useMastraConfig,
+  useMastraModels,
+} from "@/lib/mastra-client";
 
 const log = logUtils.logger("client/chat");
 
 const Chat = () => {
   const api = useChatUrl();
+  const { historyPath, defaultAgent } = useMastraConfig();
   const { models } = useMastraModels();
   const [model, setModel] = useState("");
 
@@ -38,9 +44,32 @@ const Chat = () => {
     [api],
   );
 
-  const { messages, sendMessage, status, regenerate } = useChat({
+  const { messages, sendMessage, status, regenerate, setMessages, stop } = useChat({
     transport,
   });
+
+  /**
+   * Wipe the server-side thread and reset the in-memory `useChat`
+   * transcript. The session cookie that pins the thread id is left
+   * alone so the next message opens against the same (now empty)
+   * thread. Stops any in-flight stream first so the cleared bubble
+   * doesn't get back-filled by an already-running generation.
+   */
+  const handleClear = useCallback(async () => {
+    stop();
+    try {
+      const result = await clearMastraHistory(
+        { historyPath, defaultAgent },
+        { agentId: defaultAgent },
+      );
+      log.info("history cleared", { cleared: result.cleared });
+    } catch (error) {
+      log.error("history clear error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    setMessages([]);
+  }, [historyPath, defaultAgent, setMessages, stop]);
 
   /**
    * Resolve an approval-gated tool call.
@@ -94,6 +123,7 @@ const Chat = () => {
       model={model}
       onModelChange={setModel}
       onResolveToolApproval={handleApproval}
+      onClear={handleClear}
     />
   );
 };

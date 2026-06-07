@@ -1,10 +1,11 @@
 {
   "name": "@dbx-tools/genie",
   "version": "0.1.13",
-  "type": "module",
-  "module": "index.ts",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
+    "@dbx-tools/genie-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*"
-  }
+  },
+  "module": "index.ts",
+  "type": "module"
 }

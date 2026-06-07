@@ -11,11 +11,16 @@ import {
   type ToolProgress,
 } from "@/components/chat-view";
 import {
+  clearMastraHistory,
   fetchMastraHistory,
   useMastraClient,
   useMastraConfig,
   useMastraModels,
 } from "@/lib/mastra-client";
+import {
+  genieResultToWriterEvents,
+  isGenieAgentResult,
+} from "@dbx-tools/appkit-mastra-shared";
 import { synthesizeToolEventsFromHistory } from "@/lib/genie-history";
 
 const log = logUtils.logger("client/stream");
@@ -51,12 +56,12 @@ const makeUserMessage = (text: string): UIMessage => ({
 });
 
 // `tool-output` chunks carry arbitrary tool-defined payloads; only the
-// `{kind: ...}` shape we know how to render in `ToolStatusList` is
+// `{type: ...}` shape we know how to render in `ToolStatusList` is
 // surfaced. Anything else (other tools, raw data, etc.) is ignored.
 const isToolProgress = (value: unknown): value is ToolProgress =>
   typeof value === "object" &&
   value !== null &&
-  typeof (value as { kind?: unknown }).kind === "string";
+  typeof (value as { type?: unknown }).type === "string";
 
 const Stream = () => {
   const [model, setModel] = useState("");
@@ -275,9 +280,38 @@ const Stream = () => {
             case "tool-result": {
               const toolCallId = chunk.payload?.toolCallId;
               if (typeof toolCallId !== "string") break;
+              // Charts arrive as live writer events from the
+              // Genie agent (no longer embedded in the structured
+              // return value), so the tool-result hook only needs
+              // to surface the terminal `error` event when Genie
+              // reports `FAILED` / `CANCELLED`. Live chart events
+              // already populated `e.progress` via the
+              // `tool-output` path; merge any extras (just the
+              // error frame today) on top of them.
+              //
+              // Mastra's live `tool-result` chunk carries the
+              // tool's return value under `payload.result` (the
+              // persisted AI SDK V5 `tool-${name}` part uses
+              // `output` instead - that path lives in
+              // `synthesizeToolEventsFromHistory`). Fall back to
+              // `output` so a future Mastra rename doesn't
+              // silently break extraction.
+              const raw =
+                chunk.payload?.result ?? chunk.payload?.output;
+              const extra = isGenieAgentResult(raw)
+                ? genieResultToWriterEvents(raw)
+                : [];
               patchToolEvents((list) =>
                 list.map((e) =>
-                  e.id === toolCallId ? { ...e, status: "done" } : e,
+                  e.id === toolCallId
+                    ? {
+                        ...e,
+                        status: "done",
+                        ...(extra.length > 0
+                          ? { progress: [...(e.progress ?? []), ...extra] }
+                          : {}),
+                      }
+                    : e,
                 ),
               );
               break;
@@ -432,6 +466,40 @@ const Stream = () => {
     [runStream, writeMessages],
   );
 
+  /**
+   * Wipe the current thread on the server and reset every piece of
+   * client-side state that mirrored it. The session cookie that
+   * anchors the thread id is preserved by the server, so the next
+   * turn opens against the same (now empty) thread - no reload
+   * needed. Suspended approval cards belong to the cleared turns
+   * and would be unresolvable anyway, so we drop them too.
+   */
+  const handleClear = useCallback(async () => {
+    try {
+      const result = await clearMastraHistory(
+        { historyPath, defaultAgent },
+        { agentId: defaultAgent },
+      );
+      log.info("history cleared", { cleared: result.cleared });
+    } catch (error) {
+      log.error("history clear error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Reset UI anyway so the user isn't stuck staring at a stale
+      // transcript; the server-side cleanup will catch up on next
+      // request or session expiry.
+    }
+    writeMessages([]);
+    setToolEventsByMessage({});
+    setPendingApprovalsByMessage({});
+    setHasMoreHistory(false);
+    historyPageRef.current = 1;
+    lastUserTextRef.current = null;
+    currentAssistantIdRef.current = null;
+    currentRunIdRef.current = null;
+    setStatus("ready");
+  }, [historyPath, defaultAgent, writeMessages]);
+
   const regenerate = useCallback(() => {
     if (!lastUserTextRef.current) return;
     // Drop the last assistant message before regenerating so the new
@@ -574,6 +642,7 @@ const Stream = () => {
       isLoadingMore={isLoadingMore}
       hasMore={hasMoreHistory}
       isLoadingHistory={isLoadingHistory}
+      onClear={handleClear}
     />
   );
 };

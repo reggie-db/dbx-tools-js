@@ -1,10 +1,11 @@
 {
   "name": "@dbx-tools/appkit-mastra",
   "version": "0.1.13",
-  "type": "module",
-  "module": "index.ts",
   "dependencies": {
+    "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
+    "@dbx-tools/genie": "workspace:*",
+    "@dbx-tools/genie-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
     "@mastra/ai-sdk": "catalog:",
     "@mastra/core": "catalog:",
@@ -17,13 +18,15 @@
     "fuse.js": "^7.0.0",
     "zod": "catalog:"
   },
-  "peerDependencies": {
-    "@databricks/appkit": "catalog:",
-    "express": "catalog:"
-  },
   "devDependencies": {
     "@types/express": "catalog:",
     "@types/pg": "^8",
     "express": "catalog:"
-  }
+  },
+  "module": "index.ts",
+  "peerDependencies": {
+    "@databricks/appkit": "catalog:",
+    "express": "catalog:"
+  },
+  "type": "module"
 }

@@ -11,11 +11,11 @@ libraries:
 ```ts
 import {
   apiUtils,
+  appkitUtils,
   commonUtils,
   httpUtils,
   logUtils,
   netUtils,
-  pluginUtils,
   projectUtils,
   stringUtils,
 } from "@dbx-tools/shared";
@@ -27,28 +27,28 @@ import {
 > condition will resolve `@dbx-tools/shared` to a barrel that
 > omits both - import them only from server-side code.
 
-## `pluginUtils` - typed sibling-plugin lookup
+## `appkitUtils` - typed sibling-plugin lookup
 
 AppKit's `this.context.getPlugins()` returns `ReadonlyMap<string, BasePlugin>`,
 so every cross-plugin call ends up writing the same
 `as InstanceType<ReturnType<typeof someFactory>["plugin"]>` cast.
-`pluginUtils.instance` / `pluginUtils.require` absorb that boilerplate:
+`appkitUtils.instance` / `appkitUtils.require` absorb that boilerplate:
 
 ```ts
 import { lakebase } from "@databricks/appkit";
-import { pluginUtils } from "@dbx-tools/shared";
+import { appkitUtils } from "@dbx-tools/shared";
 
-const lake = pluginUtils.instance(this.context, lakebase);
+const lake = appkitUtils.instance(this.context, lakebase);
 //    ^^ inferred as LakebasePlugin | undefined
 const pool = lake?.exports().pool;
 
 // Throws "<caller>: required plugin not registered: lakebase" when missing.
-const pool2 = pluginUtils
+const pool2 = appkitUtils
   .require(this.context, lakebase, "mastra")
   .exports().pool;
 ```
 
-`pluginUtils.data(factory)` caches the static `{ plugin, name }` descriptor
+`appkitUtils.data(factory)` caches the static `{ plugin, name }` descriptor
 per factory so repeated lookups don't allocate. Use it directly when you
 need the registered name for a manifest dependency.
 

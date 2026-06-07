@@ -1,5 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { UIMessage } from "ai";
+import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
+import { humanizeStatus } from "@dbx-tools/genie-shared";
 import { Streamdown } from "streamdown";
 import {
   ArrowDownIcon,
@@ -10,6 +12,7 @@ import {
   RefreshCcwIcon,
   SendIcon,
   SparklesIcon,
+  Trash2Icon,
   UserIcon,
   XIcon,
 } from "lucide-react";
@@ -83,34 +86,13 @@ export type ToolEvent = {
 };
 
 /**
- * Normalised progress event shape; mirrors `GenieProgress` in the Mastra
- * Genie tool wrapper. Open union so new tools can publish new kinds
- * without breaking existing renders.
+ * Normalised progress event shape. Aliases {@link GenieWriterEvent}
+ * from `@dbx-tools/appkit-mastra-shared` so the Genie agent
+ * (server) and the chat UI (client) stay in lock-step on the
+ * unified flat `{type, ...}` events the `tool-output` chunks
+ * carry. New variants should be added there.
  */
-export type ToolProgress =
-  | { kind: "started"; conversationId: string; messageId: string; spaceId: string }
-  | { kind: "status"; status: string; label: string }
-  | { kind: "sql"; sql: string; title?: string; description?: string; statementId?: string }
-  /**
-   * Chart event emitted by `render_data` and Genie's
-   * `drainGenieStream`. The producer fires two events per
-   * `chartId`: the first carries `data` (the raw rows), the
-   * second - on chart-planner success - carries `option` (the
-   * Echarts spec). The client merges them by `chartId`. All
-   * fields except `chartId` are optional so each event can
-   * populate just what it knows.
-   */
-  | {
-      kind: "chart";
-      chartId: string;
-      title?: string;
-      description?: string;
-      data?: Array<Record<string, unknown>>;
-      option?: Record<string, unknown>;
-    }
-  | { kind: "text"; content: string }
-  | { kind: "suggested"; questions: string[] }
-  | { kind: "error"; error: string };
+export type ToolProgress = GenieWriterEvent;
 
 /** Subset of a Model Serving endpoint surfaced in the model picker. */
 export type ChatModelOption = { name: string };
@@ -165,9 +147,7 @@ export type ChatViewProps = {
    * approval is stale, please re-ask the model" message rather than
    * trying to resume a workflow that no longer exists.
    */
-  onResolveToolApproval?: (
-    args: ApprovalDecision,
-  ) => void | Promise<void>;
+  onResolveToolApproval?: (args: ApprovalDecision) => void | Promise<void>;
   /**
    * Out-of-band approval requests keyed by assistant message id, for
    * transports that don't surface approvals as `UIMessage` parts.
@@ -177,6 +157,16 @@ export type ChatViewProps = {
    * merged with any approvals already discovered in `message.parts`.
    */
   pendingApprovalsByMessage?: Record<string, PendingApproval[]>;
+  /**
+   * Wipe the current chat thread. When provided, the header renders
+   * a "Clear" button that calls this and shows a confirmation
+   * prompt first. The handler is responsible for both the
+   * server-side delete (typically {@link clearMastraHistory}) and
+   * resetting client-side transcript / tool-event state so the
+   * blank slate sticks across the next render. Omit to hide the
+   * button entirely (read-only embeds, history-less agents).
+   */
+  onClear?: () => void | Promise<void>;
 };
 
 /** Payload {@link ChatViewProps.onResolveToolApproval} receives. */
@@ -231,13 +221,18 @@ const capitalizeFirst = (s: string): string =>
 /**
  * Track the freshest status label a running tool has published so the
  * inline pill follows the backend (FETCHING_METADATA -> EXECUTING_QUERY)
- * instead of stalling on a generic "Calling X".
+ * instead of stalling on a generic "Calling X". The wire event
+ * carries the raw {@link MessageStatus} enum; we humanize it here
+ * with {@link humanizeStatus} so the pill stays in lock-step with
+ * the server-side label generator.
  */
 const runningLabelFor = (event: ToolEvent): string => {
   const latest = [...(event.progress ?? [])]
     .reverse()
-    .find((p): p is Extract<ToolProgress, { kind: "status" }> => p.kind === "status");
-  return latest ? capitalizeFirst(latest.label) : `Calling ${humanizeToolName(event.toolName)}`;
+    .find((p): p is Extract<ToolProgress, { type: "status" }> => p.type === "status");
+  return latest
+    ? capitalizeFirst(humanizeStatus(latest.status))
+    : `Calling ${humanizeToolName(event.toolName)}`;
 };
 
 const getReasoningText = (parts: UIMessage["parts"]): string =>
@@ -247,101 +242,473 @@ const getReasoningText = (parts: UIMessage["parts"]): string =>
     .join("\n\n");
 
 /**
+ * One Genie attachment's worth of progress: the reasoning thoughts
+ * that landed on it, the SQL query if any, and the per-attachment
+ * text response Genie produced (a "text" attachment carries prose;
+ * a "query" attachment can co-emit prose via the same path).
+ * Bucketing thinking + query + text together by `attachment_id`
+ * keeps the rendered detail view aligned with the underlying wire
+ * structure (data sourcing, description, steps, SQL, and the prose
+ * interpretation all stay next to each other for the same query
+ * instead of intermixing across queries).
+ *
+ * The `key` is the wire `attachment_id` when Genie supplied one;
+ * for the rare anonymous attachment (Genie's "main answer" text
+ * sometimes arrives without an id) we fall back to a synthetic
+ * `__anon` bucket. That bucket only ever receives events that
+ * weren't tied to a query attachment in the first place, so the
+ * conflation is harmless.
+ */
+type AttachmentBucket = {
+  key: string;
+  thinking: Extract<ToolProgress, { type: "thinking" }>[];
+  /**
+   * Genie emits one SQL string per query attachment. When it
+   * rewrites the SQL mid-turn the later event supersedes the
+   * earlier one (so the bucket always shows the final SQL).
+   */
+  query?: Extract<ToolProgress, { type: "query" }>;
+  /**
+   * Genie may emit one text snapshot per attachment (typed
+   * "text" attachments, plus prose that accompanies a query).
+   * Later snapshots supersede earlier ones - we render the final
+   * value, which matches how the SDK presents it on
+   * `attachment.text.content`.
+   */
+  text?: Extract<ToolProgress, { type: "text" }>;
+};
+
+/**
+ * One Genie sub-call's worth of progress, keyed by the assigned
+ * `message_id`. Every event coming back from a single
+ * `genieEventChat` turn shares the same `message_id` (including
+ * the `question` event, which {@link genieEventChat} defers until
+ * the first snapshot so it can carry that id). Grouping by
+ * `message_id` keeps each LLM-driven sub-call (question + all its
+ * attachments) visually distinct from the next sub-call's
+ * sub-question and attachments.
+ *
+ * `messageId` is optional only to keep the wire flexible: events
+ * before Genie assigns one (none expected today, since `question`
+ * is emitted from the first snapshot) end up in a leading anon
+ * group. The grouping algorithm assigns subsequent events to the
+ * group whose id matches their `message_id`, opening a new group
+ * the first time a new id appears.
+ */
+type MessageGroup = {
+  messageId?: string;
+  /** Prompt this Genie call asked, from the `question` event. */
+  question?: string;
+  attachments: AttachmentBucket[];
+  /** Errors emitted under this `message_id` (turn-scoped). */
+  errors: Extract<ToolProgress, { type: "error" }>[];
+};
+
+/**
  * Shape of the detail rows we extract from a single tool's progress
  * stream. Pulled out so the pill header can show a one-line summary
  * (e.g. `2 queries`) without expanding the collapsible. Charts and
  * suggested follow-up questions are intentionally excluded - both
  * live at message scope (charts via {@link collectCharts}, suggestions
  * via {@link collectSuggestions}).
+ *
+ * `thinking` entries are de-duplicated server-side already
+ * (`packages/genie-shared/src/event.ts` keys on
+ * `(thought_type, content)` per attachment) so we can render them
+ * verbatim without an extra dedupe pass here.
+ *
+ * `groups` preserves first-seen order so the rendered detail view
+ * walks Genie sub-calls in the order the LLM dispatched them.
+ * Within a group, `attachments` preserves first-seen order too so
+ * queries render in the order Genie produced them.
  */
 type ToolDetailSummary = {
-  sql: Extract<ToolProgress, { kind: "sql" }>[];
-  text: Extract<ToolProgress, { kind: "text" }>[];
-  errors: Extract<ToolProgress, { kind: "error" }>[];
+  groups: MessageGroup[];
 };
 
+const ANON_GROUP_KEY = "__anon-group";
+const ANON_ATTACHMENT_KEY = "__anon";
+
 const summarizeProgress = (progress: ToolProgress[]): ToolDetailSummary => {
-  const summary: ToolDetailSummary = { sql: [], text: [], errors: [] };
+  const groupByMessageId = new Map<string, MessageGroup>();
+  const groups: MessageGroup[] = [];
+
+  // Resolve the group an event belongs to. When the event carries a
+  // `message_id` we trust it as the canonical key; we open a new
+  // group the first time a new id appears so out-of-order arrivals
+  // (or `question` re-emits, currently impossible but the union
+  // allows it) all converge. When there's no `message_id` (e.g. an
+  // anonymous status event before the first snapshot lands) we
+  // funnel into a single anon group keyed by ANON_GROUP_KEY.
+  const groupFor = (messageId: string | undefined): MessageGroup => {
+    const key = messageId ?? ANON_GROUP_KEY;
+    let group = groupByMessageId.get(key);
+    if (!group) {
+      group = {
+        ...(messageId ? { messageId } : {}),
+        attachments: [],
+        errors: [],
+      };
+      groupByMessageId.set(key, group);
+      groups.push(group);
+    }
+    return group;
+  };
+
+  // Per-group attachment bucket resolution. Attachments scoped to
+  // different `message_id`s can collide on `attachment_id` (Genie
+  // restarts numbering per message), so the bucket map is owned by
+  // the group, not the summary.
+  const bucketFor = (
+    group: MessageGroup,
+    attachmentId: string | undefined,
+  ): AttachmentBucket => {
+    const key = attachmentId ?? ANON_ATTACHMENT_KEY;
+    let bucket = group.attachments.find((b) => b.key === key);
+    if (!bucket) {
+      bucket = { key, thinking: [] };
+      group.attachments.push(bucket);
+    }
+    return bucket;
+  };
+
   for (const p of progress) {
-    switch (p.kind) {
-      case "sql":
-        summary.sql.push(p);
+    switch (p.type) {
+      case "question": {
+        // Latest question wins (today's emitter only fires once per
+        // turn, but the union allows future re-emits to update the
+        // displayed prompt without orphaning attachments).
+        const g = groupFor(p.message_id);
+        g.question = p.content;
         break;
-      case "text":
-        summary.text.push(p);
+      }
+      case "thinking": {
+        const g = groupFor(p.message_id);
+        bucketFor(g, p.attachment_id).thinking.push(p);
         break;
-      case "error":
-        summary.errors.push(p);
+      }
+      case "query": {
+        const g = groupFor(p.message_id);
+        bucketFor(g, p.attachment_id).query = p;
         break;
+      }
+      case "text": {
+        const g = groupFor(p.message_id);
+        bucketFor(g, p.attachment_id).text = p;
+        break;
+      }
+      case "error": {
+        // Mastra's error event is camelCase (`messageId`) where the
+        // wire-derived events are snake_case (`message_id`); align
+        // here so an errored Genie call still files under its group.
+        const g = groupFor(p.messageId);
+        g.errors.push(p);
+        break;
+      }
       default:
         break;
     }
   }
-  return summary;
+  return { groups };
 };
 
 /**
  * Build the one-line collapsed summary shown next to the pill header.
  * Examples:
  *   `1 query`
- *   `2 queries · error`
- *   `error`
+ *   `2 questions · 3 queries`
+ *   `2 queries · thinking · error`
  * Returns null when there's nothing worth surfacing inline.
+ *
+ * `thinking` collapses to a single label regardless of count - the
+ * raw count (often 6+ per turn) is too noisy for the pill header,
+ * but the presence of any reasoning is worth advertising so users
+ * know the row has reasoning to expand into. The question count is
+ * only surfaced when there's more than one (the single-question case
+ * is implicit in "Called Genie"); a multi-question call always means
+ * the LLM decomposed the user prompt, which is worth signposting.
  */
 const headlineFor = (s: ToolDetailSummary): string | null => {
   const parts: string[] = [];
-  if (s.sql.length === 1) parts.push("1 query");
-  else if (s.sql.length > 1) parts.push(`${s.sql.length} queries`);
-  if (s.errors.length > 0) parts.push("error");
+  const questionCount = s.groups.reduce((n, g) => n + (g.question ? 1 : 0), 0);
+  const queryCount = s.groups.reduce(
+    (n, g) => n + g.attachments.reduce((m, b) => m + (b.query ? 1 : 0), 0),
+    0,
+  );
+  const hasThinking = s.groups.some((g) =>
+    g.attachments.some((b) => b.thinking.length > 0),
+  );
+  const errorCount = s.groups.reduce((n, g) => n + g.errors.length, 0);
+  if (questionCount > 1) parts.push(`${questionCount} questions`);
+  if (queryCount === 1) parts.push("1 query");
+  else if (queryCount > 1) parts.push(`${queryCount} queries`);
+  if (hasThinking) parts.push("thinking");
+  if (errorCount > 0) parts.push(errorCount === 1 ? "error" : `${errorCount} errors`);
   return parts.length === 0 ? null : parts.join(" · ");
 };
 
 /**
- * Expanded detail view for a tool call. Rendered inside a Collapsible
- * owned by `ToolEventPill`; the SQL block keeps its own nested
- * collapsible so the (often long) statement only renders when the
- * user opts in. Charts produced by `render_data` render at message
- * scope (alongside suggested questions), not inside the pill.
+ * Strip Genie's `THOUGHT_TYPE_*` prefix and turn the remaining
+ * upper-snake into a Title Cased label users can read at a glance.
+ *
+ * Examples:
+ *   `THOUGHT_TYPE_DESCRIPTION`     -> `Description`
+ *   `THOUGHT_TYPE_DATA_SOURCING`   -> `Data Sourcing`
+ *   `THOUGHT_TYPE_UNDERSTANDING`   -> `Understanding`
  */
-const ToolProgressDetails = ({ summary }: { summary: ToolDetailSummary }) => {
-  if (
-    summary.sql.length === 0 &&
-    summary.text.length === 0 &&
-    summary.errors.length === 0
-  ) {
-    return null;
-  }
+const humanizeThoughtType = (kind: string): string =>
+  kind
+    .replace(/^THOUGHT_TYPE_/i, "")
+    .toLowerCase()
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+/**
+ * Genie attaches one of three payload kinds per attachment slot:
+ * `query` (SQL), `text` (prose answer), or `suggested_questions`.
+ * `isQueryAttachment` true means this bucket got a SQL query, so
+ * it earns a numbered "Query N" card in the UI; prose-only or
+ * thinking-only buckets render as plain markdown below the
+ * numbered queries because labelling them "Query N" misleads
+ * users into thinking Genie ran an extra query when it didn't.
+ */
+const isQueryAttachment = (b: AttachmentBucket): boolean => Boolean(b.query);
+
+/** True when a bucket has any renderable content (thinking, SQL, or prose). */
+const isAttachmentRenderable = (b: AttachmentBucket): boolean =>
+  b.thinking.length > 0 || Boolean(b.query) || Boolean(b.text);
+
+/** True when a group has any renderable content (question, attachments, or errors). */
+const isGroupRenderable = (g: MessageGroup): boolean =>
+  Boolean(g.question) ||
+  g.attachments.some(isAttachmentRenderable) ||
+  g.errors.length > 0;
+
+/**
+ * Body of one Genie sub-call (one `message_id` group). Pulled out
+ * so the same render can live either inline (when there's only one
+ * group) or wrapped in a Collapsible sub-pill (when there are
+ * multiple). Default-quiet layout: only the question stays visible
+ * without interaction; every other lane is a Collapsible that
+ * starts closed.
+ *
+ *   1. The LLM's sub-question for this Genie call, always
+ *      visible, styled as a blockquote so it reads as provenance.
+ *   2. One numbered "Query N" Collapsible per query attachment
+ *      (or just "Query" when there's one). Opens to reveal
+ *      reasoning thoughts, an inner SQL Collapsible, and any
+ *      prose Genie attached directly to the query.
+ *   3. One "Answer N" Collapsible per prose-only attachment
+ *      (Genie's natural-language summary, follow-up questions).
+ *      Opens to reveal thinking + the markdown body.
+ *   4. Errors that landed under this `message_id`, always
+ *      visible (red text - users need to see failures, not click
+ *      to find them).
+ *
+ * `omitQuestion` skips the question blockquote when the surrounding
+ * sub-pill already shows it in its trigger so we don't render the
+ * same text twice.
+ */
+const MessageGroupBody = ({
+  group,
+  omitQuestion,
+}: {
+  group: MessageGroup;
+  omitQuestion?: boolean;
+}) => {
+  const renderableAttachments = group.attachments.filter(isAttachmentRenderable);
+  // Split renderable attachments into the two visual lanes: numbered
+  // query cards vs flat prose. The partition preserves first-seen
+  // order within each lane so queries still render in the order
+  // Genie produced them and the prose still reads in dispatch order.
+  const queryBuckets = renderableAttachments.filter(isQueryAttachment);
+  const proseBuckets = renderableAttachments.filter((b) => !isQueryAttachment(b));
   return (
-    <div className="mt-2 flex flex-col gap-2">
-      {summary.sql.map((p, i) => (
+    <div className="flex flex-col gap-1.5">
+      {!omitQuestion && group.question && (
+        <div className="rounded border-l-2 border-primary/40 bg-background/40 px-2 py-1 text-[11px] italic leading-snug text-muted-foreground">
+          {group.question}
+        </div>
+      )}
+      {queryBuckets.map((bucket, i) => (
+        // Each query bucket is a single Collapsible (default
+        // closed) so the expanded group reads as just the
+        // question + a short stack of "Query N" / "Answer" rows.
+        // Click any row to drill into its thinking + SQL + text.
+        // SQL itself stays a nested Collapsible (default closed)
+        // for the same reason: code is the heaviest content here,
+        // and most readers only want a glance.
         <Collapsible
-          key={`sql-${i}`}
-          className="rounded border border-border/60 bg-background/40 text-xs"
+          key={bucket.key}
+          className="rounded border border-border/60 bg-background/40"
         >
-          <CollapsibleTrigger className="flex w-full items-center gap-1 px-2 py-1 text-left text-muted-foreground hover:text-foreground">
-            <ChevronDownIcon className="size-3" />
-            <span>SQL{p.title ? `: ${p.title}` : ""}</span>
+          <CollapsibleTrigger className="group flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground">
+            <ChevronDownIcon className="size-3 shrink-0 transition-transform group-data-[state=closed]:-rotate-90" />
+            <span>{queryBuckets.length > 1 ? `Query ${i + 1}` : "Query"}</span>
+            {bucket.query?.title ? (
+              <span className="min-w-0 flex-1 truncate normal-case text-muted-foreground/70">
+                {bucket.query.title}
+              </span>
+            ) : null}
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="px-2 pb-2">
-              <SqlBlock sql={p.sql} />
+            <div className="flex flex-col gap-2 px-2 pb-2 text-xs">
+              {bucket.thinking.length > 0 && (
+                <ul className="flex flex-col gap-1.5 border-l-2 border-border/60 pl-3 text-muted-foreground">
+                  {bucket.thinking.map((p, j) => (
+                    <li
+                      key={`think-${j}`}
+                      className="whitespace-pre-wrap break-words leading-snug"
+                    >
+                      <span className="font-medium text-foreground/80">
+                        {humanizeThoughtType(p.thought_type)}:
+                      </span>{" "}
+                      {p.text}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {bucket.query && (
+                <Collapsible className="rounded border border-border/60 bg-background/30">
+                  <CollapsibleTrigger className="group flex w-full items-center gap-1 px-2 py-1 text-left text-muted-foreground hover:text-foreground">
+                    <ChevronDownIcon className="size-3 transition-transform group-data-[state=closed]:-rotate-90" />
+                    <span>SQL</span>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="px-2 pb-2">
+                      <SqlBlock sql={bucket.query.sql} />
+                    </div>
+                    {bucket.query.description && (
+                      <div className="px-2 pb-2">
+                        <ToolMarkdown>{bucket.query.description}</ToolMarkdown>
+                      </div>
+                    )}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+              {bucket.text && <ToolMarkdown>{bucket.text.text}</ToolMarkdown>}
             </div>
-            {p.description && (
-              <div className="px-2 pb-2">
-                <ToolMarkdown>{p.description}</ToolMarkdown>
-              </div>
-            )}
           </CollapsibleContent>
         </Collapsible>
       ))}
-      {summary.text.map((p, i) => (
-        <ToolMarkdown key={`text-${i}`}>{p.content}</ToolMarkdown>
+      {proseBuckets.map((bucket, i) => (
+        // Prose-only attachments (Genie's natural-language answer
+        // and clarifying follow-up question attachments) get the
+        // same Collapsible treatment as queries. Label as "Answer"
+        // when there's only one prose bucket; multiple buckets
+        // (rare - typically interpretation + a follow-up question)
+        // get numbered so each row is addressable.
+        <Collapsible
+          key={bucket.key}
+          className="rounded border border-border/60 bg-background/40"
+        >
+          <CollapsibleTrigger className="group flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground">
+            <ChevronDownIcon className="size-3 shrink-0 transition-transform group-data-[state=closed]:-rotate-90" />
+            <span>
+              {proseBuckets.length > 1 ? `Answer ${i + 1}` : "Answer"}
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="flex flex-col gap-1 px-2 pb-2">
+              {bucket.thinking.length > 0 && (
+                <ul className="flex flex-col gap-1 text-[11px] text-muted-foreground">
+                  {bucket.thinking.map((p, j) => (
+                    <li
+                      key={`think-${j}`}
+                      className="whitespace-pre-wrap break-words leading-snug"
+                    >
+                      <span className="font-medium text-foreground/80">
+                        {humanizeThoughtType(p.thought_type)}:
+                      </span>{" "}
+                      {p.text}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {bucket.text && <ToolMarkdown>{bucket.text.text}</ToolMarkdown>}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       ))}
-      {summary.errors.map((p, i) => (
+      {group.errors.map((p, i) => (
         <p key={`err-${i}`} className="text-xs text-destructive">
           {p.error}
         </p>
       ))}
+    </div>
+  );
+};
+
+/**
+ * Expanded detail view for a tool call. Rendered inside the
+ * Collapsible owned by `ToolEventPill`.
+ *
+ *   - Single Genie sub-call: render its `MessageGroupBody` flat,
+ *     no extra nesting.
+ *   - Multiple Genie sub-calls: wrap each in a `Collapsible`
+ *     sub-pill labeled "Question N" with the question text in the
+ *     trigger so the user can fold individual sub-calls without
+ *     losing sight of which one is which. Default open so the
+ *     "expand outer pill -> see everything" UX is preserved.
+ *
+ * When `isRunning` is true and there's at least some content, a
+ * compact spinner row pinned at the bottom signals "more events
+ * still arriving" so users don't think the partial state is the
+ * final answer.
+ *
+ * Charts produced by `render_data` render at message scope
+ * (alongside suggested questions), not inside the pill.
+ */
+const ToolProgressDetails = ({
+  summary,
+  isRunning,
+}: {
+  summary: ToolDetailSummary;
+  isRunning: boolean;
+}) => {
+  const renderableGroups = summary.groups.filter(isGroupRenderable);
+  if (renderableGroups.length === 0 && !isRunning) return null;
+  const multi = renderableGroups.length > 1;
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {renderableGroups.map((group, gi) =>
+        multi ? (
+          <Collapsible
+            key={group.messageId ?? `anon-${gi}`}
+            defaultOpen
+            className="rounded border border-border/40 bg-background/20"
+          >
+            <CollapsibleTrigger className="group flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground">
+              <ChevronDownIcon className="mt-0.5 size-3 shrink-0 transition-transform group-data-[state=closed]:-rotate-90" />
+              <span className="flex min-w-0 flex-col">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                  Question {gi + 1}
+                </span>
+                {group.question && (
+                  <span className="break-words text-foreground/80">
+                    {group.question}
+                  </span>
+                )}
+              </span>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="px-2 pb-2 pt-1">
+                <MessageGroupBody group={group} omitQuestion />
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        ) : (
+          <MessageGroupBody key={group.messageId ?? `anon-${gi}`} group={group} />
+        ),
+      )}
+      {isRunning && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Spinner className="size-3" />
+          <span>Streaming...</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -351,10 +718,10 @@ const ToolEventPill = ({ event }: { event: ToolEvent }) => {
   const isError = event.status === "error";
   const summary = summarizeProgress(event.progress ?? []);
   const headline = headlineFor(summary);
-  const hasDetails =
-    summary.sql.length > 0 ||
-    summary.text.length > 0 ||
-    summary.errors.length > 0;
+  // Running tools always get an expandable details section (even
+  // with no events yet) so users can pop it open to see the
+  // "Streaming..." spinner and confirm the turn hasn't stalled.
+  const hasDetails = isRunning || summary.groups.some(isGroupRenderable);
 
   // Header label: "Calling Genie" / "Called Genie" / "Failed Genie".
   // Running tools defer to the latest backend status label.
@@ -363,7 +730,22 @@ const ToolEventPill = ({ event }: { event: ToolEvent }) => {
     : `${isError ? "Failed" : "Called"} ${humanizeToolName(event.toolName)}`;
 
   return (
-    <div className="rounded-md border border-border/40 bg-background/30 px-2 py-1.5">
+    <div
+      className={cn(
+        "rounded-md border bg-background/30 px-2 py-1.5 transition-colors",
+        // Loud-but-not-jarring "this is in flight" treatment when
+        // the tool is running: switch the border to the primary
+        // accent and slap a soft ring on it so a row mid-stream is
+        // unambiguously distinct from a settled one at a glance.
+        // Failed rows pick up a destructive border for the same
+        // reason; settled-success rows stay on the neutral border.
+        isRunning
+          ? "border-primary/50 ring-1 ring-primary/15"
+          : isError
+            ? "border-destructive/40"
+            : "border-border/40",
+      )}
+    >
       <Collapsible>
         <CollapsibleTrigger
           // Disable the toggle entirely when there's nothing to expand
@@ -387,21 +769,50 @@ const ToolEventPill = ({ event }: { event: ToolEvent }) => {
             <span className="size-3 shrink-0" aria-hidden />
           )}
           {isRunning ? (
-            <Spinner className="size-3" />
+            <Spinner className="size-3 text-primary" />
           ) : isError ? (
             <XIcon className="size-3 text-destructive" />
           ) : (
             <CheckIcon className="size-3" />
           )}
-          <span className={cn(isRunning && "animate-pulse")}>{verb}</span>
-          {headline && (
-            <span className="truncate text-muted-foreground/70">
-              · {headline}
+          {/*
+           * Verb and headline share one span so the `·` separator
+           * reads as a natural inline divider. Splitting them
+           * across two flex children would stack `gap-2` (8px) on
+           * top of the literal `· ` text, yielding "Called Genie
+           * &nbsp;&nbsp;· 1 query" with visibly doubled spacing.
+           * `min-w-0` lets the truncate clip without forcing the
+           * row to overflow when the headline is long.
+           */}
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate",
+              isRunning && "animate-pulse text-foreground/90",
+            )}
+          >
+            {verb}
+            {headline && (
+              <span className="text-muted-foreground/70"> · {headline}</span>
+            )}
+          </span>
+          {/*
+           * Trailing "live" pip on the right edge while the tool is
+           * in flight. Two-layer: a static dot under an animated
+           * ping ring, identical to the convention native chat
+           * apps use for active recording / streaming indicators.
+           * Renders as a tiny block so it stays out of the way of
+           * the headline truncation but is impossible to miss when
+           * scanning a stack of pills.
+           */}
+          {isRunning && (
+            <span className="relative ml-1 flex size-2 shrink-0" aria-hidden>
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
+              <span className="relative inline-flex size-2 rounded-full bg-primary" />
             </span>
           )}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <ToolProgressDetails summary={summary} />
+          <ToolProgressDetails summary={summary} isRunning={isRunning} />
         </CollapsibleContent>
       </Collapsible>
     </div>
@@ -436,7 +847,7 @@ const ToolEventList = ({ events }: { events: ToolEvent[] }) => (
  * option" from "tool finished without an option" (planner
  * failed - render the dataset-only fallback).
  */
-type MergedChart = Extract<ToolProgress, { kind: "chart" }> & {
+type MergedChart = Extract<ToolProgress, { type: "chart" }> & {
   sourceToolDone: boolean;
 };
 
@@ -457,7 +868,7 @@ const collectCharts = (events: ToolEvent[] | undefined): MergedChart[] => {
   for (const event of events) {
     const toolDone = event.status !== "running";
     for (const p of event.progress ?? []) {
-      if (p.kind !== "chart") continue;
+      if (p.type !== "chart") continue;
       const existing = byId.get(p.chartId);
       if (!existing) {
         order.push(p.chartId);
@@ -487,8 +898,8 @@ const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
     const last = [...(event.progress ?? [])]
       .reverse()
       .find(
-        (p): p is Extract<ToolProgress, { kind: "suggested" }> =>
-          p.kind === "suggested",
+        (p): p is Extract<ToolProgress, { type: "suggested_questions" }> =>
+          p.type === "suggested_questions",
       );
     if (!last) continue;
     for (const q of last.questions) {
@@ -528,7 +939,8 @@ function colorizeDelta(content: React.ReactNode): React.ReactNode {
   const match = DELTA_PATTERN.exec(text);
   if (!match) return content;
   const sign = match[1];
-  if (sign === "+") return <span className="font-medium text-emerald-500">{content}</span>;
+  if (sign === "+")
+    return <span className="font-medium text-emerald-500">{content}</span>;
   if (sign === "-" || sign === "\u2212")
     return <span className="font-medium text-rose-500">{content}</span>;
   return content;
@@ -581,7 +993,9 @@ const MARKDOWN_COMPONENTS = {
   ),
   td: ({ children, ...rest }: React.HTMLAttributes<HTMLTableCellElement>) => {
     const colored = Array.isArray(children)
-      ? children.map((c, i) => <React.Fragment key={i}>{colorizeDelta(c)}</React.Fragment>)
+      ? children.map((c, i) => (
+          <React.Fragment key={i}>{colorizeDelta(c)}</React.Fragment>
+        ))
       : colorizeDelta(children as React.ReactNode);
     return <TableCell {...rest}>{colored}</TableCell>;
   },
@@ -618,9 +1032,13 @@ const AssistantMarkdown = ({ children }: { children: string }) => (
  * attachment text (the natural-language summary that arrives below
  * the SQL) and SQL descriptions. Same `Streamdown` engine as
  * {@link AssistantMarkdown} so we keep GFM, shiki, and table primitive
- * mapping, but with `text-xs`, muted foreground, and collapsed
- * paragraph / list margins so a few short lines don't take more
- * vertical space than the SQL block above them.
+ * mapping, but everything is squeezed: smaller font, tighter leading,
+ * and near-zero block margins so a few short lines don't take more
+ * vertical space than the SQL block above them. Lists get a shallow
+ * indent (`pl-4`) because the default `prose-sm` indent is sized for
+ * chat-bubble copy and looks oversized inside a sub-pill. Strong
+ * (bold) gets the foreground color so KPI names still pop against
+ * the muted body.
  */
 const ToolMarkdown = ({ children }: { children: string }) => (
   <Streamdown
@@ -628,11 +1046,13 @@ const ToolMarkdown = ({ children }: { children: string }) => (
     controls={false}
     className={cn(
       "prose prose-sm dark:prose-invert max-w-none break-words",
-      "text-xs text-muted-foreground",
-      "prose-p:my-1 prose-p:leading-snug",
-      "prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-li:leading-snug",
+      "text-[11px] leading-snug text-muted-foreground",
+      "prose-p:my-0.5 prose-p:leading-snug",
+      "prose-ul:my-0.5 prose-ul:pl-4 prose-ol:my-0.5 prose-ol:pl-4",
+      "prose-li:my-0 prose-li:leading-snug prose-li:marker:text-muted-foreground/60",
       "prose-headings:my-1 prose-headings:text-xs prose-headings:font-semibold",
-      "prose-code:text-[11px] prose-code:font-medium",
+      "prose-strong:text-foreground/90 prose-strong:font-medium",
+      "prose-code:text-[10px] prose-code:font-medium",
     )}
   >
     {children}
@@ -674,159 +1094,48 @@ const CHART_FRAME_CLASSES =
 const CHART_HEIGHT_PX = 320;
 
 /**
- * Loading state for a chart slot: dashed-border frame matching
- * the eventual rendered footprint, with a spinner + status. Used
- * before the dataset event arrives and while the planner is
- * still running.
- */
-const ChartLoading = ({
-  chartId,
-  title,
-  status,
-}: {
-  chartId: string;
-  title?: string;
-  status: string;
-}) => (
-  <div
-    className={cn(
-      CHART_FRAME_CLASSES,
-      "flex flex-col items-center justify-center border-dashed bg-background/30",
-    )}
-    style={{ height: CHART_HEIGHT_PX }}
-  >
-    {title && (
-      <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
-        {title}
-      </div>
-    )}
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      <Spinner className="size-4" />
-      <span>
-        {status} <code className="text-[10px]">{chartId}</code>
-      </span>
-    </div>
-  </div>
-);
-
-/**
- * Render-failed fallback. Shown when the source tool has finished
- * but no `option` ever landed for this chartId - i.e. the
- * server-side planner threw. Keeps the same frame footprint so
- * the layout doesn't shift when we transition into this state.
- */
-const ChartUnavailable = ({
-  chartId,
-  title,
-}: {
-  chartId: string;
-  title?: string;
-}) => (
-  <div
-    className={cn(
-      CHART_FRAME_CLASSES,
-      "flex flex-col items-center justify-center border-destructive/40 bg-destructive/5",
-    )}
-    style={{ height: CHART_HEIGHT_PX }}
-  >
-    {title && (
-      <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
-        {title}
-      </div>
-    )}
-    <div className="px-2 text-center text-xs text-destructive">
-      Couldn't render chart <code className="text-[10px]">{chartId}</code>.
-    </div>
-  </div>
-);
-
-/**
  * Inline chart slot. Each `[[chart:<chartId>]]` marker in the
- * assistant's reply resolves to one of these. The slot is purely
- * driven by writer events the producer (Genie / `render_data`)
- * emits via `emitChartWithPlanning`: a dataset event with rows
- * lands first, then a follow-up event with the resolved Echarts
- * `option` lands when the planner finishes. Both arrive
- * pre-merged in {@link MergedChart}; this component just picks
- * the right state.
+ * assistant's reply resolves to one of these. The producer
+ * (`render_data` tool, or the Genie agent's structured
+ * summary) emits a single `type: "chart"` event carrying both
+ * the dataset and the resolved Echarts `option`.
  *
- * State table (with `isMessageSettled` from the parent bubble):
+ * Render contract:
  *
- * | chart event | option | tool done | settled | render        |
- * | :---------: | :----: | :-------: | :-----: | ------------- |
- * |     -       |   -    |     -     |   no    | "Queueing"    |
- * |     -       |   -    |     -     |   yes   | unavailable * |
- * |     ✓       |   -    |    no     |    -    | "Rendering"   |
- * |     ✓       |   -    |   yes     |    -    | unavailable   |
- * |     ✓       |   ✓    |    -      |    -    | full chart    |
+ *   - `chart.option` present -> render the full Echarts spec.
+ *   - Anything else (chart undefined, planner failed, marker
+ *     hallucinated) -> render NOTHING. Markers that can't
+ *     resolve to a real chart are silently dropped rather than
+ *     left as "Unavailable" placeholder frames, because a stale
+ *     marker in a long-running chat reads as broken UI more
+ *     loudly than its absence does.
  *
- * \* The "no chart event + settled" row is the hallucinated-
- * chartId case: the model emitted `[[chart:<id>]]` referencing a
- * chartId from a prior turn that's no longer connected to a
- * live chart. The instructions tell the model not to do this,
- * but the UI still degrades gracefully if it slips through.
- *
- * No HTTP fetching, no per-slot caching - the option is in the
- * stream by the time the parent tool finishes (drainGenieStream
- * awaits `Promise.allSettled` on every planner before returning).
+ * No HTTP fetching, no per-slot caching - the producer's event
+ * already carries the resolved option by the time it lands.
  */
 const ChartSlot = ({
-  chartId,
   chart,
-  isMessageSettled,
 }: {
   chartId: string;
   chart?: MergedChart;
-  /**
-   * True when the assistant message hosting this slot has
-   * stopped streaming (status returned to `ready` / `error`, or
-   * a newer message took the active streaming slot). Used to
-   * decide whether a missing chart event is "still arriving"
-   * (skeleton) or "never arrived" (unavailable).
-   */
+  /** Unused; kept on the prop type so call sites still compile. */
   isMessageSettled: boolean;
 }) => {
-  if (!chart) {
-    // Marker present but no chart event for this id. While the
-    // message is still streaming, this is the normal "waiting
-    // for the writer chunk" state. After the message settles,
-    // it's a stale chartId (model hallucinated it from prior
-    // turn history); show the unavailable frame instead of
-    // spinning forever.
-    return isMessageSettled ? (
-      <ChartUnavailable chartId={chartId} />
-    ) : (
-      <ChartLoading chartId={chartId} status="Queueing chart" />
-    );
-  }
-  if (chart.option) {
-    return (
-      <div className={CHART_FRAME_CLASSES}>
-        {chart.title && (
-          <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
-            {chart.title}
-          </div>
-        )}
-        <ReactECharts
-          option={chart.option}
-          style={{ height: CHART_HEIGHT_PX, width: "100%" }}
-          notMerge
-          lazyUpdate
-        />
-      </div>
-    );
-  }
-  if (chart.sourceToolDone) {
-    // Tool that emitted the dataset has finished without ever
-    // emitting an option - planner failed server-side.
-    return <ChartUnavailable chartId={chartId} title={chart.title} />;
-  }
+  if (!chart?.option) return null;
   return (
-    <ChartLoading
-      chartId={chartId}
-      title={chart.title}
-      status="Rendering chart"
-    />
+    <div className={CHART_FRAME_CLASSES}>
+      {chart.title && (
+        <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
+          {chart.title}
+        </div>
+      )}
+      <ReactECharts
+        option={chart.option}
+        style={{ height: CHART_HEIGHT_PX, width: "100%" }}
+        notMerge
+        lazyUpdate
+      />
+    </div>
   );
 };
 
@@ -888,6 +1197,26 @@ const splitTextWithCharts = (
  * full-width block element. Charts whose `[[chart:<id>]]` marker
  * the model forgot to place are appended below as a fallback so a
  * missing marker can't silently hide the chart.
+ *
+ * Streaming render contract (the "block-on-chart" rule):
+ *
+ *   - Text before the first unresolved marker streams normally.
+ *   - Hitting an unresolved marker (`pending` segment) HALTS the
+ *     render: that marker renders nothing and every segment after
+ *     it is held back. As soon as the chart event for that id
+ *     arrives, the marker resolves to a chart and downstream
+ *     segments unblock. This gives the desired
+ *     text -> chart -> text -> chart sequence; the next bite of
+ *     prose never appears before the chart it references.
+ *   - Orphan charts (chart events received but no marker placed
+ *     yet) are SUPPRESSED while streaming. They only render at
+ *     the bottom as a fallback once the message settles, so the
+ *     bubble doesn't sprout standalone chart tiles before any text
+ *     has appeared.
+ *   - Once the message settles, unresolved markers are silently
+ *     dropped (no broken "Unavailable" frame) and downstream
+ *     prose renders. Orphans appear at the bottom as fallback.
+ *     The block-on-chart latch only applies mid-stream.
  */
 const MarkdownWithCharts = ({
   text,
@@ -907,9 +1236,18 @@ const MarkdownWithCharts = ({
   );
   const orphans = charts.filter((c) => !placedIds.has(c.chartId));
 
+  // Block-on-chart latch: during streaming, the first pending
+  // marker we hit freezes the render so nothing past it shows up
+  // until that marker's chart event arrives. After settle, we
+  // never block - hallucinated chartIds fall through to a single
+  // "Unavailable" frame and the rest of the prose renders so the
+  // user isn't left staring at a half-rendered message.
+  const blocked = { tripped: false };
+
   return (
     <>
       {segments.map((seg, i) => {
+        if (blocked.tripped) return null;
         if (seg.kind === "text") {
           if (seg.text.trim().length === 0) return null;
           return <AssistantMarkdown key={`t-${i}`}>{seg.text}</AssistantMarkdown>;
@@ -924,26 +1262,27 @@ const MarkdownWithCharts = ({
             />
           );
         }
-        // Marker present but no chart event for this id. While
-        // the message is still streaming, ChartSlot shows a
-        // queueing state. Once the message settles, it shows the
-        // unavailable frame (model hallucinated a stale chartId).
-        return (
+        // Pending marker: chart event for this id hasn't arrived.
+        // Mid-stream we hide the marker entirely AND latch the
+        // block flag so subsequent text/charts hold until the
+        // chart resolves. Post-settle we silently drop the marker
+        // (model hallucinated a chartId or its chart event was
+        // dropped) so the rest of the prose keeps reading
+        // cleanly instead of being interrupted by a broken frame.
+        if (!isMessageSettled) {
+          blocked.tripped = true;
+        }
+        return null;
+      })}
+      {isMessageSettled &&
+        orphans.map((c) => (
           <ChartSlot
-            key={`p-${seg.chartId}`}
-            chartId={seg.chartId}
+            key={`o-${c.chartId}`}
+            chartId={c.chartId}
+            chart={c}
             isMessageSettled={isMessageSettled}
           />
-        );
-      })}
-      {orphans.map((c) => (
-        <ChartSlot
-          key={`o-${c.chartId}`}
-          chartId={c.chartId}
-          chart={c}
-          isMessageSettled={isMessageSettled}
-        />
-      ))}
+        ))}
     </>
   );
 };
@@ -1289,7 +1628,17 @@ const AssistantBubble = ({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-auto rounded-full px-3 py-1 text-xs font-normal"
+                // `h-auto` lets long suggestions grow vertically;
+                // `whitespace-normal` + `text-left` overrides the
+                // base button's `whitespace-nowrap` so multi-line
+                // questions wrap inside the pill instead of
+                // overflowing the chat column. `rounded-2xl`
+                // keeps a friendly capsule shape for short
+                // suggestions while scaling cleanly when a long
+                // question wraps to two or three lines (the full
+                // `rounded-full` capsule warps awkwardly with
+                // wrapped text).
+                className="h-auto max-w-full whitespace-normal text-left rounded-2xl px-3 py-1.5 text-xs font-normal leading-snug"
                 onClick={() => onSuggestionClick?.(q)}
                 disabled={!onSuggestionClick}
               >
@@ -1345,6 +1694,7 @@ export const ChatView = ({
   isLoadingHistory = false,
   onResolveToolApproval,
   pendingApprovalsByMessage = {},
+  onClear,
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1387,7 +1737,9 @@ export const ChatView = ({
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
-    setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD_PX);
+    setIsAtBottom(
+      el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD_PX,
+    );
     // Lazy-load older messages once the user gets close to the top.
     // Capture the anchor *before* firing the callback so the parent's
     // synchronous state updates don't beat us to the layout effect.
@@ -1407,7 +1759,10 @@ export const ChatView = ({
 
   const scrollToBottom = () => {
     if (!scrollRef.current) return;
-    scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    scrollRef.current.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1420,47 +1775,131 @@ export const ChatView = ({
 
   const lastMessage = messages.at(-1);
   const lastEvents = lastMessage ? toolEventsByMessage[lastMessage.id] : undefined;
+  // Two waiting states the chat-level indicator distinguishes:
+  //  - `isWaitingForFirstByte`: the user just sent a turn and no
+  //    content of any kind (text, reasoning, tool pill) has come
+  //    back yet. Show "Thinking..." prominently.
+  //  - `isWaitingForMoreContent`: streaming is still active but
+  //    the model isn't *currently* writing text - either a tool
+  //    is in flight or the model has finished a pill and hasn't
+  //    started the final response yet. Show "Working..." so the
+  //    user knows more is coming and a partial pill stack isn't
+  //    mistaken for the final answer. Suppressed while text is
+  //    actively streaming because the text itself is the
+  //    indicator; doubling it up reads as redundant noise.
+  const lastAssistantParts =
+    lastMessage?.role === "assistant" ? lastMessage.parts : [];
   const lastAssistantHasContent =
-    lastMessage?.role === "assistant" &&
-    (lastMessage.parts.some(
+    lastAssistantParts.some(
       (p) =>
         (p.type === "text" || p.type === "reasoning") &&
         Boolean((p as { text?: string }).text),
-    ) ||
-      (lastEvents?.length ?? 0) > 0);
-  const isWaiting =
-    (status === "submitted" || status === "streaming") && !lastAssistantHasContent;
+    ) || (lastEvents?.length ?? 0) > 0;
+  const lastPart = lastAssistantParts.at(-1);
+  const isTextStreaming =
+    status === "streaming" &&
+    lastPart?.type === "text" &&
+    Boolean((lastPart as { text?: string }).text);
+  const hasRunningTool = (lastEvents ?? []).some((e) => e.status === "running");
+  const isStreamingTurn = status === "submitted" || status === "streaming";
+  const isWaitingForFirstByte = isStreamingTurn && !lastAssistantHasContent;
+  const isWaitingForMoreContent =
+    isStreamingTurn && lastAssistantHasContent && !isTextStreaming;
+  const waitingLabel = isWaitingForFirstByte
+    ? "Thinking..."
+    : hasRunningTool
+      ? "Working..."
+      : "Composing response...";
+  const showWaiting = isWaitingForFirstByte || isWaitingForMoreContent;
 
-  const showModelPicker = Boolean(
-    models && models.length > 0 && onModelChange,
-  );
+  const showModelPicker = Boolean(models && models.length > 0 && onModelChange);
+  const showClear = Boolean(onClear);
+  const showHeader = showModelPicker || showClear;
+
+  // Local "in-flight" + confirm latch for the clear button so the
+  // user can't double-fire the DELETE and so a stray click doesn't
+  // wipe history without a beat to back out. Resets back to idle
+  // after the parent's `onClear` settles (success or failure).
+  const [clearState, setClearState] = useState<"idle" | "confirm" | "clearing">("idle");
+
+  const handleClearClick = async () => {
+    if (clearState === "clearing" || !onClear) return;
+    if (clearState === "idle") {
+      setClearState("confirm");
+      return;
+    }
+    setClearState("clearing");
+    try {
+      await onClear();
+    } finally {
+      setClearState("idle");
+    }
+  };
 
   return (
     <TooltipProvider delayDuration={200}>
       <div className="mx-auto flex h-full max-w-4xl flex-col p-0 md:p-6">
-        {showModelPicker && (
-          <div className="flex items-center justify-end gap-2 px-4 pb-2 pt-1 text-xs text-muted-foreground">
-            <span>Model</span>
-            <Select
-              value={model ? model : DEFAULT_MODEL_VALUE}
-              onValueChange={(v) =>
-                onModelChange?.(v === DEFAULT_MODEL_VALUE ? "" : v)
-              }
-            >
-              <SelectTrigger size="sm" className="w-[260px]">
-                <SelectValue placeholder="Server default" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={DEFAULT_MODEL_VALUE}>
-                  Server default
-                </SelectItem>
-                {models!.map((m) => (
-                  <SelectItem key={m.name} value={m.name}>
-                    {m.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        {showHeader && (
+          <div className="flex items-center justify-end gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground">
+            {showModelPicker && (
+              <div className="flex items-center gap-2">
+                <span>Model</span>
+                <Select
+                  value={model ? model : DEFAULT_MODEL_VALUE}
+                  onValueChange={(v) =>
+                    onModelChange?.(v === DEFAULT_MODEL_VALUE ? "" : v)
+                  }
+                >
+                  <SelectTrigger size="sm" className="w-[260px]">
+                    <SelectValue placeholder="Server default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={DEFAULT_MODEL_VALUE}>Server default</SelectItem>
+                    {models!.map((m) => (
+                      <SelectItem key={m.name} value={m.name}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {showClear && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={clearState === "confirm" ? "destructive" : "outline"}
+                    size="sm"
+                    onClick={handleClearClick}
+                    onBlur={() =>
+                      // Drop the confirm latch when focus leaves so a
+                      // half-armed button doesn't sit destructive-red
+                      // forever after the user clicks away.
+                      setClearState((s) => (s === "confirm" ? "idle" : s))
+                    }
+                    disabled={clearState === "clearing"}
+                    className="gap-1.5"
+                  >
+                    {clearState === "clearing" ? (
+                      <Spinner className="size-3" />
+                    ) : (
+                      <Trash2Icon className="size-3" />
+                    )}
+                    {clearState === "confirm"
+                      ? "Confirm clear"
+                      : clearState === "clearing"
+                        ? "Clearing..."
+                        : "Clear"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {clearState === "confirm"
+                    ? "Click again to confirm; wipes this conversation."
+                    : "Clear chat history for this thread"}
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
         )}
         <div
@@ -1511,10 +1950,10 @@ export const ChatView = ({
                 }
                 return <UserBubble key={message.id} message={message} />;
               })}
-              {isWaiting && (
+              {showWaiting && (
                 <div className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
                   <Spinner className="size-3" />
-                  <span className="animate-pulse">Thinking...</span>
+                  <span className="animate-pulse">{waitingLabel}</span>
                 </div>
               )}
             </div>
@@ -1567,7 +2006,9 @@ export const ChatView = ({
                 type="submit"
                 size="icon-sm"
                 variant="default"
-                disabled={!input.trim() || status === "streaming" || status === "submitted"}
+                disabled={
+                  !input.trim() || status === "streaming" || status === "submitted"
+                }
               >
                 {status === "streaming" || status === "submitted" ? (
                   <Spinner className="size-3" />

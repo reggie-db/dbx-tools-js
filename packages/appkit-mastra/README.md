@@ -223,7 +223,7 @@ Genie tool-result shape (LLM-bound):
 ```
 
 `datasets[]` is metadata only - column names, row count, the SQL
-Genie ran. The actual rows ride a separate `kind: "chart"` writer
+Genie ran. The actual rows ride a separate `type: "chart"` writer
 event so the LLM never has them in context (token cost stays flat
 regardless of dataset size). The model references each dataset by
 its `chartId` via the `[[chart:<chartId>]]` marker to display the
@@ -232,10 +232,10 @@ client resolves those markers.
 
 Genie data flow:
 
-- The writer emits `kind: "started" | "status" | "sql" |
+- The writer emits `type: "started" | "status" | "sql" |
   "suggested" | "error"` events for the live loading pill. SQL
   text is shown via a small Shiki-highlighted block.
-- The writer **also** emits two `kind: "chart"` events per
+- The writer **also** emits two `type: "chart"` events per
   executed SQL statement, sharing the same `chartId`: the first
   carries `{chartId, title, description?, data}` (rows converted
   to objects keyed by column name with best-effort numeric
@@ -263,41 +263,36 @@ upstream. Input is `{ title, description?, data: Row[] }` where
 `data` is an array of objects keyed by column name (a SQL row
 set, an API response, a hand-built array, etc.).
 
-#### How it works (shared pipeline with Genie)
+#### How it works
 
-Both `render_data` and Genie's `drainGenieStream` route through
-one helper, `emitChartWithPlanning`, so the wire format and
-trace shape are consistent everywhere:
+`render_data` is a thin wrapper around `runChartPlanner`, a
+pure async function that takes a dataset and returns a fully-
+resolved Echarts `EChartsOption`. No id-then-promise dance, no
+background work: the planner runs inline, and the tool emits a
+single chart event with everything attached.
 
 1. Mint a short `chartId` (8 hex chars).
-2. Push a `{ kind: "chart", chartId, title, description?, data }`
-   event to `ctx.writer` immediately. The chat client mounts a
-   `<ChartSlot>` showing a "Rendering chart" skeleton.
-3. Kick off the chart-planner agent
-   (`modelForTier(ModelTier.Fast)`) with the dataset in the
-   background. The agent's `structuredOutput` schema is a compact
-   "chart plan" (chart type + axis labels + categories +
-   series); the helper expands the plan into an Echarts
-   `EChartsOption` JSON.
-4. When the planner resolves, push a follow-up
-   `{ kind: "chart", chartId, option }` event. The client's
-   `<ChartSlot>` merges it with the dataset event (last write
-   wins per field) and swaps in `<ReactECharts>`.
-5. If the planner fails, no follow-up event fires. Once the
-   parent tool finishes, the slot transitions to a "couldn't
-   render chart" fallback frame.
+2. `await runChartPlanner({ title, description?, data })`. The
+   planner is its own Mastra `Agent` (`modelForTier(ModelTier.Fast)`)
+   whose `structuredOutput` schema is a compact "chart plan"
+   (chart type + axis labels + categories + series); the helper
+   expands the plan into an `EChartsOption` JSON.
+3. Push one `{ type: "chart", chartId, title, description?, data,
+   option }` event to `ctx.writer`. The chat client's
+   `<ChartSlot>` mounts straight to the rendered Echarts
+   visualisation - no skeleton frame, because the option arrives
+   in the same event as the dataset.
+4. If the planner throws, the tool emits a `type: "error"` writer
+   event instead. The slot transitions to a "couldn't render
+   chart" fallback frame.
 
-The parent tool (`render_data` or Genie) `await`s the planner
-promise(s) before its `execute` returns, so chart latency shows
-up under the tool's trace span. The dataset event fires
-**immediately**, though, so the calling LLM gets back the
-`chartId` synchronously and the chat client has a layout slot
-ready before the planner resolves.
-
-The LLM-bound payload is just `{ chartId }` (for `render_data`)
-or `datasets[]` metadata (for Genie); row data and option JSON
-never reach the LLM, so token cost stays flat regardless of
-dataset size.
+Planner latency lands under the tool's trace span (it's
+`await`ed directly), and the LLM-bound payload is just
+`{ chartId }` so the model's context stays flat regardless of
+dataset size. The Genie agent reuses `runChartPlanner` the
+same way to embed charts in its structured summary, so the
+backbone is shared without coupling the two paths to a
+fire-and-forget writer contract.
 
 #### Inline placement contract
 
@@ -546,10 +541,10 @@ curl -s http://localhost:8000/api/mastra/models | jq
 Same payload from a sibling plugin or script (no HTTP round-trip):
 
 ```ts
-import { pluginUtils } from "@dbx-tools/shared";
+import { appkitUtils } from "@dbx-tools/shared";
 import { mastra } from "@dbx-tools/appkit-mastra";
 
-const m = pluginUtils.require(this.context, mastra).exports();
+const m = appkitUtils.require(this.context, mastra).exports();
 const endpoints = await m.asUser(req).listModels(); // user-scoped
 m.clearModelsCache(); // force the next call to re-fetch
 ```
@@ -658,10 +653,10 @@ Other plugins / route handlers can introspect the registry via the
 `exports()` surface, modeled on AppKit's:
 
 ```ts
-import { pluginUtils } from "@dbx-tools/shared";
+import { appkitUtils } from "@dbx-tools/shared";
 import { mastra } from "@dbx-tools/appkit-mastra";
 
-const m = pluginUtils.require(this.context, mastra).exports();
+const m = appkitUtils.require(this.context, mastra).exports();
 m.list(); // ["analyst", "helper"]
 m.get("analyst"); // Agent | null
 m.getDefault(); // Agent | null

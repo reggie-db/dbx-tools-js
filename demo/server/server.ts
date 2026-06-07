@@ -23,11 +23,19 @@ import { z } from "zod";
 // 3. `lakebase()` backs Mastra Memory (`PostgresStore` + `PgVector`)
 //    when `storage` / `memory` are true on the mastra plugin.
 //
+// Genie integration: register the AppKit `genie()` plugin for its
+// resource manifest (so `app.yaml` picks up the Genie space binding)
+// and its `spaces` config format. The `mastra()` plugin's Genie agent
+// auto-discovers spaces from the registered `genie()` plugin (or
+// from `mastra({ genieSpaces: ... })` if you prefer to declare them
+// there), then talks to Genie directly via `@dbx-tools/genie` for
+// streaming + `getStatement`-backed row hydration.
+//
 // Required env vars (see .env.example):
 // - DATABRICKS_SERVING_ENDPOINT_NAME=databricks-claude-sonnet-4-6
 // - LAKEBASE_PROJECT (or LAKEBASE_ENDPOINT) - autopg fills in the rest
-// - DATABRICKS_GENIE_SPACE_ID - registered automatically as the
-//   `default` space by `genie()` when no `spaces` config is passed
+// - DATABRICKS_GENIE_SPACE_ID - picked up by `genie()` as the
+//   `default` space when `spaces` is omitted.
 
 await autopg();
 
@@ -64,10 +72,23 @@ const support = createAgent({
     "`conversationId` to follow up in the same thread. Prefer",
     "aggregated queries for time-series and distributions.",
     "",
-    "To display a dataset as a chart, embed `[[chart:<chartId>]]` on",
-    "its own line where the chart should appear. Add interpretation",
-    "around the chart; quote specific numbers Genie called out in",
-    "`genieAnswer` exactly when you reference them.",
+    "Charting contract:",
+    "- Genie's `summary[]` may contain `visualize` items whose",
+    "  `dataset.chart.chartId` is a chart that is ALREADY rendered.",
+    "  To place it in your reply, embed `[[chart:<chartId>]]` on its",
+    "  own line at the position you want it to appear. Use the",
+    "  chartId verbatim.",
+    "- Do NOT call `render_data` for a dataset Genie already",
+    "  charted. It would render the same chart a second time and",
+    "  stall the stream while it runs.",
+    "- Only call `render_data` when you have a dataset Genie did",
+    "  not return (e.g. you computed it yourself) and a chart is",
+    "  the right format. Call it BEFORE you start writing prose so",
+    "  the stream doesn't pause mid-sentence.",
+    "",
+    "Add interpretation around each chart; quote specific numbers",
+    "Genie called out in its prose `string` items exactly when you",
+    "reference them.",
   ].join("\n"),
   tools(plugins) {
     return {
@@ -108,10 +129,13 @@ const host = process.env.HOST ?? (isDatabricksApp ? "0.0.0.0" : "127.0.0.1");
 await createApp({
   plugins: [
     server({ host }),
-    // `genie()` with no config reads `DATABRICKS_GENIE_SPACE_ID` from
-    // the env and registers it as the `default` alias. Pass
-    // `genie({ spaces: { sales: "...", ops: "..." } })` to register
-    // multiple aliases; each becomes a separate tool the LLM can pick.
+    // `genie()` with no config reads `DATABRICKS_GENIE_SPACE_ID`
+    // from the env and registers it as the `default` alias. The
+    // `mastra()` plugin's Genie agent auto-discovers these spaces
+    // and exposes one tool per alias to the calling agent. Pass
+    // `genie({ spaces: { sales: "...", ops: "..." } })` to wire
+    // multiple aliases, or set `mastra({ genieSpaces: { ... } })`
+    // if you want to declare them on the Mastra plugin directly.
     genie(),
     lakebase(),
     mastra({

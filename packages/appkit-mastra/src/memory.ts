@@ -28,7 +28,7 @@
  */
 
 import { lakebase } from "@databricks/appkit";
-import { logUtils, pluginUtils } from "@dbx-tools/shared";
+import { appkitUtils, logUtils } from "@dbx-tools/shared";
 import { fastembed } from "@mastra/fastembed";
 import { Memory } from "@mastra/memory";
 import { PgVector, PostgresStore } from "@mastra/pg";
@@ -75,10 +75,10 @@ export function needsLakebase(config: MastraPluginConfig): boolean {
  * condition we can recover from.
  */
 export function resolveLakebasePool(
-  context: pluginUtils.PluginContextLike | undefined,
+  context: appkitUtils.PluginContextLike | undefined,
   caller: MastraPluginConfig,
 ): LakebasePool {
-  return pluginUtils.require(context, lakebase, caller).exports().pool;
+  return appkitUtils.require(context, lakebase, caller).exports().pool;
 }
 
 /**
@@ -88,7 +88,7 @@ export function resolveLakebasePool(
  */
 export function createMemoryBuilder(
   config: MastraPluginConfig,
-  context: pluginUtils.PluginContextLike | undefined,
+  context: appkitUtils.PluginContextLike | undefined,
 ): MemoryBuilder {
   return new MemoryBuilder(config, context);
 }
@@ -104,7 +104,7 @@ export class MemoryBuilder {
 
   constructor(
     private readonly config: MastraPluginConfig,
-    private readonly context: pluginUtils.PluginContextLike | undefined,
+    private readonly context: appkitUtils.PluginContextLike | undefined,
   ) {}
 
   /**

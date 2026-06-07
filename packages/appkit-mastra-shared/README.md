@@ -45,7 +45,7 @@ interface MastraClientConfig {
 Charts don't show up here. The chart-render pipeline lives
 entirely on the agent-stream side: the `render_data` tool and
 Genie's `drainGenieStream` both run the chart-planner
-server-side and emit `kind: "chart"` writer events with the
+server-side and emit `type: "chart"` writer events with the
 resolved `EChartsOption`, so the client doesn't need a fetch
 URL for chart specs.
 
@@ -135,7 +135,7 @@ interface ServingEndpointsResponse {
 ### Inline charts (no wire types here)
 
 Chart rendering does not have HTTP wire types. The producer
-tools (`render_data`, Genie) both emit `kind: "chart"` events
+tools (`render_data`, Genie) both emit `type: "chart"` events
 on Mastra's writer channel - first an event with the dataset
 (`{chartId, title, description?, data}`), then a follow-up
 event with the resolved `EChartsOption`

@@ -14,7 +14,14 @@
 // the runtime lookup works) from that single value. No `<T>` annotation
 // or string literal needed at the call site.
 
+import {
+  CacheManager,
+  createApp,
+  getExecutionContext,
+  InitializationError,
+} from "@databricks/appkit";
 import type { NameLike } from "./common.js";
+import { memoize } from "./common.js";
 
 // Minimal structural shape of `this.context`. We mirror only the method
 // we touch instead of depending on AppKit's `PluginContext` type, which
@@ -81,9 +88,9 @@ export function data<F extends PluginDataFactory, D extends ReturnType<F>>(
  * @example
  * ```ts
  * import { lakebase } from "@databricks/appkit";
- * import { pluginUtils } from "@dbx-tools/shared";
+ * import { appkitUtils } from "@dbx-tools/shared";
  *
- * const lake = pluginUtils.instance(this.context, lakebase);
+ * const lake = appkitUtils.instance(this.context, lakebase);
  * //    ^^ inferred as LakebasePlugin | undefined
  * lake?.exports().pool;
  * ```
@@ -106,15 +113,15 @@ export function instance<F extends PluginDataFactory>(
  * `caller` is prepended to the error message so cross-plugin failures
  * are easy to attribute in logs.
  *
- * Always accessed through the namespace as `pluginUtils.require(...)`;
+ * Always accessed through the namespace as `appkitUtils.require(...)`;
  * the bare identifier is legal here because this package is pure ESM.
  *
  * @example
  * ```ts
  * import { lakebase } from "@databricks/appkit";
- * import { pluginUtils } from "@dbx-tools/shared";
+ * import { appkitUtils } from "@dbx-tools/shared";
  *
- * const pool = pluginUtils.require(this.context, lakebase, "mastra")
+ * const pool = appkitUtils.require(this.context, lakebase, "mastra")
  *   .exports().pool;
  * ```
  */
@@ -129,4 +136,26 @@ export function require<F extends PluginDataFactory>(
     typeof caller === "string" ? `${caller}: ` : caller?.name ? `${caller.name}: ` : "";
   const registeredName = data(factory).name;
   throw new Error(`${prefix}required plugin not registered: ${registeredName}`);
+}
+
+export function isInitialized(): boolean {
+  try {
+    const ctx = getExecutionContext();
+    if (ctx?.client) {
+      return true;
+    }
+  } catch (error) {
+    if (!(error instanceof InitializationError)) {
+      throw error;
+    }
+  }
+  return false;
+}
+
+export async function ensureInitialized() {
+  if (!isInitialized()) {
+    await createApp({
+      plugins: [],
+    });
+  }
 }

@@ -1,10 +1,10 @@
 {
   "name": "@dbx-tools/appkit-serving",
   "version": "0.1.13",
-  "type": "module",
-  "module": "index.ts",
   "dependencies": {
     "@databricks/appkit": "catalog:",
     "@dbx-tools/shared": "workspace:*"
-  }
+  },
+  "module": "index.ts",
+  "type": "module"
 }

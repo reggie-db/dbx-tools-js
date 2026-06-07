@@ -1,12 +1,10 @@
 {
-  "name": "@dbx-tools/appkit-mastra-shared",
+  "name": "@dbx-tools/genie-shared",
   "version": "0.1.13",
   "dependencies": {
-    "@dbx-tools/genie-shared": "workspace:*",
+    "@dbx-tools/sdk-shared": "workspace:*",
+    "@dbx-tools/shared": "workspace:*",
     "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@databricks/sdk-experimental": "catalog:"
   },
   "module": "index.ts",
   "peerDependencies": {

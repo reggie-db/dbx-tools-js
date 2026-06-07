@@ -10,7 +10,6 @@ import net from "node:net";
 
 export * from "./net.browser.js";
 
-
 /**
  * Bind a transient TCP listener on port `0`, read the OS-assigned
  * port, close the listener, and resolve with the port. Used to grab

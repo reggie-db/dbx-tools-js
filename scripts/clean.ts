@@ -6,13 +6,16 @@
 //
 // Run from the monorepo root via `bun run clean`.
 
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { discoverPackageJsons, ROOT } from "./util.js";
+import { exists } from "node:fs/promises";
 
 const targets: string[] = [];
 for await (const jsonPath of discoverPackageJsons(true)) {
-  targets.push(resolve(dirname(jsonPath), "node_modules"));
+  for (const dirName of ["node_modules", "dist"]) {
+    targets.push(resolve(dirname(jsonPath), dirName));
+  }
 }
 for (const lockfile of ["bun.lock", "bun.lockb"]) {
   targets.push(resolve(ROOT, lockfile));
@@ -20,7 +23,7 @@ for (const lockfile of ["bun.lock", "bun.lockb"]) {
 
 let removed = 0;
 for (const target of targets) {
-  if (!(await Bun.file(target).exists())) continue;
+  if (!existsSync(target)) continue;
   rmSync(target, { recursive: true, force: true });
   console.log(`Removed ${target}`);
   removed++;

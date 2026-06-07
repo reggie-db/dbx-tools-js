@@ -1,6 +1,24 @@
 import { describe, expect, it } from "bun:test";
 
-import { memoize, memoized } from "../src/common.js";
+import { memoize, memoized, shortId } from "../src/common.js";
+
+describe("shortId", () => {
+  it("returns 8 hex chars by default", () => {
+    const id = shortId();
+    expect(id).toHaveLength(8);
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it("respects a custom length", () => {
+    expect(shortId(4)).toHaveLength(4);
+    expect(shortId(12)).toHaveLength(12);
+  });
+
+  it("mints distinct ids across calls", () => {
+    const ids = new Set(Array.from({ length: 100 }, () => shortId()));
+    expect(ids.size).toBe(100);
+  });
+});
 
 describe("memoize (once)", () => {
   it("runs a zero-arg factory once and returns the same value", async () => {

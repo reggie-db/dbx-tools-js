@@ -37,7 +37,7 @@ import {
   type PluginManifest,
   type ResourceRequirement,
 } from "@databricks/appkit";
-import { logUtils, pluginUtils } from "@dbx-tools/shared";
+import { appkitUtils, logUtils } from "@dbx-tools/shared";
 import { chatRoute } from "@mastra/ai-sdk";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
@@ -57,8 +57,8 @@ import {
   type ServingEndpointSummary,
 } from "./serving.js";
 
-const GENIE_MANIFEST = pluginUtils.data(genie).plugin.manifest;
-const LAKEBASE_MANIFEST = pluginUtils.data(lakebase).plugin.manifest;
+const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
+const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;
 
 /**
  * AppKit plugin (registered name: `mastra`) that hosts Mastra agents
@@ -76,6 +76,14 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     resources: {
       required: [],
       optional: [
+        // Surface the Genie resource binding (space id) declared by
+        // AppKit's `genie` plugin manifest. The Mastra plugin no
+        // longer uses the genie plugin's tools at runtime - the
+        // built-in Genie agent talks to Genie directly via
+        // `@dbx-tools/genie` - but reusing the manifest keeps the
+        // resource-binding shape identical to AppKit's so existing
+        // `app.yaml` configs and `genie({ spaces })` wiring keep
+        // working without change.
         ...GENIE_MANIFEST.resources.required,
         ...LAKEBASE_MANIFEST.resources.required,
       ],
@@ -126,7 +134,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
    * already in the registry by the time this fires.
    */
   private applyLakebaseAutoDefaults(): void {
-    const hasLakebase = pluginUtils.instance(this.context, lakebase) !== undefined;
+    const hasLakebase = appkitUtils.instance(this.context, lakebase) !== undefined;
     if (!hasLakebase) return;
     if (this.config.storage === undefined) this.config.storage = true;
     if (this.config.memory === undefined) this.config.memory = true;
@@ -300,8 +308,11 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       customApiRoutes: [
         chatRoute({ path: "/route/chat", agent: this.built.defaultAgentId }),
         chatRoute({ path: "/route/chat/:agentId" }),
-        historyRoute({ path: "/route/history", agent: this.built.defaultAgentId }),
-        historyRoute({ path: "/route/history/:agentId" }),
+        // `historyRoute` registers both GET (load) and DELETE
+        // (clear) on the same path, so it returns an array we
+        // splice in.
+        ...historyRoute({ path: "/route/history", agent: this.built.defaultAgentId }),
+        ...historyRoute({ path: "/route/history/:agentId" }),
       ],
     });
     await this.mastraServer.init();
