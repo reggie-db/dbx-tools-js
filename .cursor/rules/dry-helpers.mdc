@@ -1,0 +1,56 @@
+---
+description: Shared helpers to use instead of reinventing common patterns
+globs: **/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Prefer the shared helpers
+
+Before writing a "small utility" inline, check if one already exists.
+Three patterns recur enough that inlining them is treated as a code smell.
+
+## Error message extraction
+
+Never inline `err instanceof Error ? err.message : String(err)`.
+
+```ts
+// BAD
+log.warn("write:error", {
+  error: err instanceof Error ? err.message : String(err),
+});
+
+// GOOD
+import { commonUtils } from "@dbx-tools/shared";
+log.warn("write:error", { error: commonUtils.errorMessage(err) });
+```
+
+Browser-safe (re-exported from `index.client.ts`).
+
+## Best-effort writer.write (appkit-mastra)
+
+Never reinvent the "downstream stream may be closed, swallow errors"
+pattern around Mastra's `ctx.writer`. Use the shared helper.
+
+```ts
+// In any file under packages/appkit-mastra/src/
+import { safeWrite } from "./writer.js";
+
+await safeWrite(log, writer, event, { chartId }); // last arg is optional log context
+```
+
+Pass the module's tagged `logUtils.logger(...)` so warnings carry the
+right prefix. The helper no-ops on undefined `writer`, logs `debug` on
+success, `warn` on failure, and never throws.
+
+## Sibling-plugin lookup
+
+Don't hand-cast `this.context.getPlugins().get("foo")`. Use
+`appkitUtils.instance()` (returns `Plugin | undefined`) or
+`appkitUtils.require()` (throws on missing).
+
+```ts
+import { lakebase } from "@databricks/appkit";
+import { appkitUtils } from "@dbx-tools/shared";
+
+const pool = appkitUtils.require(this.context, lakebase, "mastra").exports().pool;
+```

@@ -1,0 +1,72 @@
+---
+description: Conventions for workspace scripts under scripts/
+globs: scripts/**/*.ts
+alwaysApply: false
+---
+
+# Workspace script conventions
+
+Scripts run under `bun` (top of file: `#!/usr/bin/env bun`). Shared
+plumbing lives in `scripts/util.ts` - reach for it before pulling in
+new deps or rolling your own.
+
+## Always await `bunx` / `run`
+
+`bunx()` and `run()` from `util.ts` are **async**. Awaiting them is
+mandatory: errors only surface (and serial loops only stay serial)
+when the promise is awaited.
+
+```ts
+// BAD: build failures get swallowed and packages build in parallel.
+for (const pkg of packages) {
+  bunx(["tsc", "-p", "tsconfig.build.json"], { cwd: pkg.dir });
+}
+
+// GOOD
+for (const pkg of packages) {
+  await bunx(["tsc", "-p", "tsconfig.build.json"], { cwd: pkg.dir });
+}
+```
+
+## Walk workspaces through `discoverPackages`
+
+Don't re-implement the "scan `workspaces` glob → read each
+`package.json`" loop. `discoverPackages(filter?)` is the single
+source of truth.
+
+```ts
+import { discoverPackages } from "./util.js";
+
+// Default filter: skip private packages.
+const all = await discoverPackages();
+
+// Extra criteria: must have a build config.
+const buildable = await discoverPackages(
+  (pkg) =>
+    pkg.meta.private !== true &&
+    existsSync(resolve(pkg.dir, "tsconfig.build.json")),
+);
+```
+
+Use `discoverPackageJsons(includeRoot?)` when you only need paths
+(e.g. cleaning every `node_modules`) and want private workspaces in.
+
+## JSON I/O via `writeJson`
+
+`writeJson()` preserves the trailing newline of the original file,
+preventing churn against `prettier --write`. Use it instead of
+`Bun.write(path, JSON.stringify(value, null, 2))`.
+
+## AI calls via `aiQuery`
+
+`aiQuery(prompt, ctx?, model?)` wraps a Databricks model-serving
+call and returns `null` on any failure (no profile, no client,
+empty response). Designed so callers can do
+`await aiQuery(...) ?? fallback` without try/catch boilerplate.
+
+## File ops via `Bun.file` / `Bun.write`
+
+These scripts run under `bun`, so prefer `Bun.file(path).text()`
+and `Bun.write(path, contents)` over `node:fs`. Use `node:fs`
+synchronously only when there's no async equivalent (`rmSync`,
+`existsSync`).

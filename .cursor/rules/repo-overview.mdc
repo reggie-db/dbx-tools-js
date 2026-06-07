@@ -1,0 +1,43 @@
+---
+description: dbx-tools-appkit monorepo orientation
+alwaysApply: true
+---
+
+# dbx-tools-appkit
+
+Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
+Databricks Apps. Eight publishable packages plus a runnable demo.
+
+## Packages
+
+| Path | Package | Role |
+| --- | --- | --- |
+| `packages/shared` | `@dbx-tools/shared` | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper. Browser-safe surface via `index.client.ts`. |
+| `packages/sdk-shared` | `@dbx-tools/sdk-shared` | Zod schemas regenerated from Databricks SDK `.d.ts` (driven by `scripts/codegen.ts`). |
+| `packages/genie-shared` | `@dbx-tools/genie-shared` | Wire-format types + `GenieChatEvent` union for Genie streaming. |
+| `packages/genie` | `@dbx-tools/genie` | `genieChat` (raw) + `genieEventChat` (semantic events) drivers. |
+| `packages/appkit-autopg` | `@dbx-tools/appkit-autopg` | `autopg()` fills Lakebase Postgres env vars before `createApp`. |
+| `packages/appkit-serving` | `@dbx-tools/appkit-serving` | Typed accessors over `/api/2.0/serving-endpoints`. |
+| `packages/appkit-mastra` | `@dbx-tools/appkit-mastra` | AppKit plugin that mounts Mastra agents + chat route + Lakebase memory. |
+| `packages/appkit-mastra-shared` | `@dbx-tools/appkit-mastra-shared` | Dependency-free wire-format contract + URL helpers + Genie writer-event vocabulary. |
+| `demo` | `@dbx-tools/appkit-demo` | Private runnable Databricks App that wires everything up. |
+
+## Daily commands
+
+```bash
+bun install                 # from repo root
+bun run typecheck           # bunx --bun tsc --noEmit (workspace-wide)
+bun run build               # build every publishable package (tsc per pkg)
+bun test                    # run bun test across all packages
+bun run tag                 # patch bump + commit + push + tag + push tag
+bun run --filter '@dbx-tools/appkit-demo' dev  # run the demo app
+```
+
+## Workspace plumbing
+
+- Sibling packages depend on each other via `workspace:*`.
+- Catalog dependencies (`catalog:`) are declared in the root
+  `package.json`'s `catalog` field; the publish step rewrites both
+  protocols to real version ranges before `npm publish`.
+- All `@dbx-tools/*` packages are version-fixed via
+  `.changeset/config.json` and ship together.

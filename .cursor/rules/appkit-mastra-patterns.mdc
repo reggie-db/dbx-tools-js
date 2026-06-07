@@ -1,0 +1,75 @@
+---
+description: Patterns specific to the appkit-mastra plugin (agents, writer events, chart pipeline)
+globs: packages/appkit-mastra/**/*.ts
+alwaysApply: false
+---
+
+# appkit-mastra patterns
+
+## Agent registration
+
+Use `createAgent` (identity helper for type inference) + `tool`
+(AppKit-shaped factory). Reach for `createTool` only when you need
+Mastra-only fields (`outputSchema`, `suspendSchema`,
+`requireApproval`, `mcp`).
+
+```ts
+import { createAgent, tool } from "@dbx-tools/appkit-mastra";
+
+const support = createAgent({
+  instructions: "...",
+  tools(plugins) {
+    return {
+      ...plugins.analytics.toolkit(),
+      ...plugins.files.toolkit({ only: ["uploads.read"] }),
+      get_weather: tool({ description, schema, execute }),
+    };
+  },
+});
+```
+
+## Writer events are flat
+
+Mastra `ctx.writer` events use a flat `{ type, ...fields }` shape;
+subscribers narrow on `event.type` and read fields inline. The
+unified vocabulary lives in `@dbx-tools/appkit-mastra-shared` as
+`GenieWriterEvent` (wire-derived `GenieChatEvent` ∪ Mastra-only
+`GenieAgentEvent`).
+
+Always publish through `safeWrite` (see `dry-helpers` rule).
+
+## Chart pipeline
+
+Inline charts use the `[[chart:<chartId>]]` marker pattern. Two
+producers, one wire format:
+
+- `render_data` tool: generic dataset → chart. Mints a `chartId`,
+  awaits `runChartPlanner`, emits one `type: "chart"` writer event
+  with both `data` + resolved `option`, returns `{ chartId }` to
+  the LLM.
+- Genie agent: per-statement charting inside its workflow finalize
+  step. Same writer event shape.
+
+The Echarts spec lives off-band on `RequestContext` (via
+`recordChartInContext`) so downstream processors / tools can look
+up the full spec by `chartId` without re-fetching or re-planning.
+The LLM-bound payload stays flat regardless of dataset size.
+
+## Genie agent (vs the stock AppKit `genie` plugin)
+
+`appkit-mastra`'s Genie integration talks to Genie **directly** via
+`@dbx-tools/genie` (`genieEventChat`) and
+`statementExecution.getStatement`. AppKit's stock `genie()` plugin
+is honored only for its `spaces` config and the matching
+`app.yaml`-declared resources.
+
+Tool ids:
+- `genie` for the `"default"` alias
+- `genie_<alias>` for additional aliases
+
+## Conversation caching
+
+Per-user Genie conversation ids are persisted via `CacheManager`
+(AppKit's TTLCache equivalent) with sliding-TTL semantics. The
+stale-id recovery path (404 on follow-up) evicts the cache, clears
+the per-request context, and retries the turn once.

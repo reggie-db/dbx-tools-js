@@ -1,0 +1,61 @@
+---
+description: Docstring style for the workspace; no agent-speak or historical commentary
+globs: **/*.ts
+alwaysApply: false
+---
+
+# Docstring style
+
+Docstrings document the **current contract** of the code, not its
+history. Write for a developer who has never read a previous version.
+
+## Don't narrate the change history
+
+```ts
+// BAD: forces every future reader to know what "the legacy" was.
+/**
+ * The legacy AppKit `genie` plugin is no longer used at runtime.
+ * The inner agent talks to Genie directly via `@dbx-tools/genie`.
+ */
+
+// GOOD: just state the current contract.
+/**
+ * The inner agent talks to Genie directly via `@dbx-tools/genie`
+ * (`genieEventChat`) and `statementExecution.getStatement`.
+ */
+```
+
+Banned phrases (or close cousins) in docstrings:
+- "no longer used at runtime" / "is no longer consulted"
+- "used to be" / "previously did"
+- "kept private for now" / "for now"
+- "we recently moved" / "we now use"
+
+Tests are exempt - `// Regression: previously returned ""` style
+comments document the bug a test pins.
+
+## Don't restate the obvious
+
+```ts
+// BAD
+// Import the module
+import { x } from "./x.js";
+
+// Increment the counter
+counter++;
+```
+
+Code comments should explain non-obvious **intent, trade-offs, or
+constraints**. If the code is self-evident, don't comment it.
+
+## Module docstrings: lead with the contract
+
+Open with one paragraph describing what the module exposes and to
+whom. Reserve nested bullets for the per-symbol breakdown. Avoid
+"this file used to..." or "this was extracted from...".
+
+## JSDoc references
+
+Cross-link with `{@link Name}` so doc tooling resolves the symbol.
+Prefer real type links over prose paths like
+`"see ./other.ts line 42"`.

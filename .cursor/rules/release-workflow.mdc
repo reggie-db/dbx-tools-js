@@ -1,0 +1,61 @@
+---
+description: How releases work; use when the user mentions tag, release, publish, npm, version bump
+alwaysApply: false
+---
+
+# Release workflow
+
+Releases are **tag-driven**. Pushing a `v<version>` tag to `origin`
+fires `.github/workflows/release.yml`, which builds every publishable
+workspace and runs `scripts/release.ts` against npm.
+
+There is no PR-based versioning bot and no auto-publish on push to
+`main`. The tag push is the deliberate ship signal.
+
+## Cutting a release
+
+```bash
+bun run tag                 # patch bump (default)
+bun run tag minor           # minor bump
+bun run tag major           # major bump
+bun run tag --dry-run       # preview without writing or pushing
+```
+
+`scripts/tag.ts` handles the full sequence in one shot:
+
+1. Reads the shared version from the first publishable package and
+   sanity-checks every other publishable package matches it
+   (changesets `fixed` policy).
+2. Bumps the version with `semver.inc()` and writes it back to every
+   publishable `package.json`.
+3. Auto-stages dirty files (`git add -A`) and folds them into the
+   release commit `chore: release v<version>`.
+4. Pushes the commit, creates an annotated `v<version>` tag, pushes
+   the tag.
+
+The release-notes context (commits in `prevTag..HEAD` + working-tree
+dirty files + `git diff --stat <prevTag>`) is handed to
+`releaseNotes()` which calls a Databricks model-serving endpoint via
+`aiQuery()`. Returns `null` on failure; the tag falls back to a bare
+`Release v<version>` message.
+
+## Local publish (debugging / one-off)
+
+```bash
+bun scripts/build.ts
+bun scripts/release.ts --dry-run    # npm pack --dry-run per package
+bun run release                     # build + real publish
+```
+
+`scripts/release.ts` stages each package into
+`packages/<slug>/.npm-publish/` (gitignored), rewrites
+`workspace:*` / `catalog:` specifiers to real version ranges, then
+runs `npm publish` from the stage. Source `package.json` files are
+never mutated.
+
+## Don't auto-deploy
+
+Per workspace rules, never run `bun run tag`, `bun run release`,
+`databricks bundle deploy`, or `git push` without the user explicitly
+asking in the current message. "Tag it", "ship it", "release it",
+"deploy" all count as explicit consent.
