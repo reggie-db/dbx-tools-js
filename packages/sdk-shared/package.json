@@ -1,0 +1,19 @@
+{
+  "name": "@dbx-tools/sdk-shared",
+  "version": "0.1.13",
+  "codegen": {
+    "inputs": [
+      "node_modules/@databricks/sdk-experimental/dist/apis/dashboards/model.d.ts"
+    ]
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "exports": {
+    ".": "./generated/index.ts"
+  },
+  "main": "generated/index.ts",
+  "module": "generated/index.ts",
+  "private": true,
+  "type": "module"
+}

@@ -1,67 +1,82 @@
 #!/usr/bin/env bun
-// Codegen CLI: turn one or more upstream `.d.ts` files into a
-// workspace package full of zod schemas + matching inferred TS
-// types.
+// Codegen driver: walk every workspace package, find ones whose
+// `package.json` declares a `codegen` field, and turn the listed
+// upstream `.d.ts` inputs into a colocated `generated/` tree of
+// zod schemas + matching inferred TypeScript types.
 //
-// Usage:
+// No CLI args. The single source of truth for "which packages get
+// generated content, from which inputs" is each consumer package's
+// own `package.json`:
 //
-//   bun scripts/codegen.ts \
-//     --package <@scope/name> \
-//     <input>[=<name>] [<input>[=<name>]]...
+//   {
+//     "name": "@dbx-tools/sdk-shared",
+//     "codegen": {
+//       "inputs": [
+//         "node_modules/@databricks/sdk-experimental/dist/apis/dashboards/model.d.ts"
+//       ]
+//     }
+//   }
 //
-// One `<name>.zod.ts` is emitted per input under
-// `packages/<basename-of-package>/src/`, where each file contains
-// the zod schemas for every exported declaration in the source plus
-// an `export type X = z.infer<typeof xSchema>` line for each. A
-// barrel `src/index.ts` re-exports the per-input modules.
+// Each entry under `inputs` is a path relative to the monorepo
+// root, optionally suffixed with `=<name>` to override the
+// auto-derived basename:
+//
+//   - `apis/dashboards/model.d.ts`        -> `dashboards.zod.ts`
+//   - `apis/dashboards/model.d.ts=foo`    -> `foo.zod.ts`
+//
+// Per consumer package, codegen owns the `generated/` directory
+// end-to-end:
+//
+//   - `generated/<name>.zod.ts`  one module per input, schemas
+//     plus `export type X = z.infer<typeof xSchema>` lines.
+//   - `generated/index.ts`        barrel re-export of every
+//     module above.
+//   - `generated/.gitignore`      `*\n` so the whole tree
+//     (including this file) is excluded from source control.
+//
+// codegen also stamps the consumer's `package.json` so the
+// generated tree is visible to bun / TypeScript / `import` callers
+// without manual wiring:
+//
+//   - `module`  -> `"generated/index.ts"`
+//   - `main`    -> `"generated/index.ts"`
+//   - `exports` -> `{ ".": "./generated/index.ts" }`
+//
+// The rest of `package.json` is left untouched - dependencies,
+// version, the `codegen` field, and any other fields the developer
+// owns flow through unchanged. Project-references-mode tsc still
+// keys off `tsconfig.build.json`, which lives next to
+// `package.json` and is hand-maintained.
 //
 // Each input is preprocessed with the TypeScript compiler API
-// before being handed to ts-to-zod: every `import` declaration is
-// dropped, and any type reference that resolved through one of
-// those imports (`sql.StatementResponse` from
+// before ts-to-zod sees it: every `import` declaration is dropped,
+// and any type reference whose root identifier was introduced by
+// one of those imports (`sql.StatementResponse` from
 // `import * as sql from "../sql"`, `ApiClient` from
 // `import { ApiClient } from "../api-client"`, ...) is rewritten
-// to `unknown`. ts-to-zod then emits `z.unknown()` for those
-// fields, which is what we want - the codegen package is purely a
-// data-shape surface, the runtime details from peer SDK modules
-// don't belong here. Same outcome as a hand-tuned regex strip,
-// except the AST walk handles every imported name on every input
-// automatically without per-file tuning.
+// to `unknown`. Codegen output is a pure data-shape surface; peer
+// SDK runtime modules don't belong here.
 //
-// On first run the CLI bootstraps the output package's hand-written
-// boilerplate (`.gitignore`, `package.json`, `tsconfig.build.json`,
-// `index.ts`) from the conventions other workspace packages already
-// follow. On subsequent runs only the `src/` tree is regenerated;
-// the boilerplate is left alone.
-//
-// `<basename>` for each input defaults to:
-//   - the parent directory's name when the file is `model.d.ts`
-//     (the SDK's `apis/<api>/model.d.ts` convention)
-//   - the basename minus `.d.ts` / `.ts` otherwise
-// Override with the `<path>=<name>` form.
-//
-// The output package is treated as a fully generated artifact: the
-// `.gitignore` at the package root matches everything (`*`) so the
-// boilerplate (`package.json`, `tsconfig.build.json`, `index.ts`)
-// and the regenerated `src/` tree are both excluded from source
-// control. The CLI is the source of truth - clean checkouts must
-// run codegen before any workspace tooling that needs the package
-// (e.g. `bun install` for workspace resolution).
-//
-// Safety: the CLI refuses to write or delete any file that exists
-// and isn't already gitignored. The generator owns the gitignored
-// tree - everything else (boilerplate, hand-written code, READMEs)
-// is the developer's. If a stale checked-in artifact sits in the
-// codegen target, the run aborts with a clear error and leaves the
-// tree untouched.
+// Safety: codegen refuses to write or delete any file inside
+// `generated/` that isn't already gitignored at the start of the
+// run. The gitignore lives inside `generated/.gitignore` and
+// matches everything (`*`), so on a clean run every file passes.
+// The check exists to catch developers who manually drop a file
+// into `generated/` without updating the ignore - codegen aborts
+// with a clear error rather than overwriting their work.
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-import { Command } from "commander";
+import { basename, dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { generate } from "ts-to-zod";
-import { bootstrapPackage } from "./codegen-bootstrap.js";
-import { fail, ROOT, toRelative } from "./util.js";
+import {
+  discoverPackages,
+  fail,
+  ROOT,
+  toRelative,
+  writeJson,
+  type WorkspacePackage,
+} from "./util.js";
 
 interface CodegenInput {
   /** Absolute path to the source `.d.ts` file. */
@@ -70,11 +85,17 @@ interface CodegenInput {
   name: string;
 }
 
+interface CodegenConfig {
+  inputs: string[];
+}
+
 const HEADER = [
   "// AUTO-GENERATED by `bun scripts/codegen.ts` - DO NOT EDIT.",
-  "// Regenerate via the matching root `prebuild` script.",
+  "// Regenerate via `bun run prebuild`.",
   "",
 ].join("\n");
+
+const GENERATED_DIRNAME = "generated";
 
 function deriveName(path: string): string {
   const file = basename(path);
@@ -88,14 +109,6 @@ function parseInputArg(value: string): CodegenInput {
   const eq = value.indexOf("=");
   if (eq === -1) return { source: value, name: deriveName(value) };
   return { source: value.slice(0, eq), name: value.slice(eq + 1) };
-}
-
-function resolvePackage(npmName: string): { dir: string; slug: string } {
-  const slug = npmName.includes("/") ? (npmName.split("/").at(-1) ?? "") : npmName;
-  if (!/^[a-z][a-z0-9-]*$/.test(slug)) {
-    fail(`invalid package name: ${npmName} (slug ${JSON.stringify(slug)})`);
-  }
-  return { dir: resolve(ROOT, "packages", slug), slug };
 }
 
 /* ------------------------- ts-to-zod prep ------------------------- */
@@ -169,10 +182,8 @@ function stripImports(entryPath: string): string {
         }
 
         // `ns.X` in VALUE position (rare in `.d.ts`, but possible
-        // for `declare const x: typeof ns.foo` etc.). The
-        // surrounding TypeQueryNode will get re-pointed at a
-        // bare identifier; ts-to-zod will then either resolve it
-        // locally or, if absent, fall back to `z.unknown()`.
+        // for `declare const x: typeof ns.foo` etc.). Drop the
+        // namespace prefix so ts-to-zod sees a bare identifier.
         if (
           ts.isPropertyAccessExpression(node) &&
           ts.isIdentifier(node.expression) &&
@@ -286,37 +297,46 @@ async function isGitIgnored(absPath: string): Promise<boolean> {
 }
 
 /**
- * Refuse to clobber any file that exists and isn't already
- * gitignored. The CLI is supposed to own only the generated
- * (gitignored) tree; anything checked-in is a developer artifact
- * and must not be touched. Run before any write or delete.
+ * Refuse to clobber any file in `generated/` that exists and isn't
+ * already gitignored. The gitignore is the codegen contract: every
+ * file under `generated/` is owned by codegen, every file outside
+ * is owned by the developer. Run before any write or delete inside
+ * `generated/`.
  */
 async function assertWritable(absPath: string): Promise<void> {
   if (!existsSync(absPath)) return;
   if (await isGitIgnored(absPath)) return;
   fail(
     `refusing to overwrite ${toRelative(absPath)}: file exists and is not gitignored. ` +
-      `Move it out of the codegen target or add it to a parent .gitignore before regenerating.`,
+      `Move it out of \`generated/\` (codegen output) or update the ignore before regenerating.`,
   );
 }
 
-/* ---------------------------- driver ---------------------------- */
+/* --------------------------- per-package --------------------------- */
 
-async function runGenerate(inputs: CodegenInput[], npmName: string): Promise<void> {
-  if (inputs.length === 0) fail("at least one input file is required");
+/**
+ * Regenerate the `generated/` tree for one consumer package and
+ * stamp the package.json `module`/`main`/`exports` fields so the
+ * tree is visible to import callers without manual wiring.
+ */
+async function generatePackage(pkg: WorkspacePackage): Promise<void> {
+  const config = pkg.meta.codegen as CodegenConfig | undefined;
+  if (!config?.inputs?.length) {
+    fail(`${pkg.slug}: \`codegen.inputs\` is missing or empty`);
+  }
+  const inputs = config.inputs.map(parseInputArg);
 
-  const { dir: pkgDir, slug } = resolvePackage(npmName);
-  const srcDir = resolve(pkgDir, "src");
+  const generatedDir = resolve(pkg.dir, GENERATED_DIRNAME);
 
-  // Walk every existing file inside `srcDir` (the only tree we
-  // wipe) and require it to be gitignored at the current state -
-  // BEFORE bootstrap, so a freshly-dropped `.gitignore` doesn't
-  // retroactively protect a hand-written file the developer just
-  // added. Aborts with a clear error if any path is checked-in.
-  if (existsSync(srcDir)) {
+  // Walk every existing file inside `generated/` and require it
+  // to be gitignored as of right now (BEFORE we touch the
+  // gitignore itself), so a freshly-dropped `.gitignore` doesn't
+  // retroactively protect a hand-written file the developer
+  // staged. Aborts with a clear error if any path is checked-in.
+  if (existsSync(generatedDir)) {
     const glob = new Bun.Glob("**/*");
     for await (const f of glob.scan({
-      cwd: srcDir,
+      cwd: generatedDir,
       absolute: true,
       onlyFiles: true,
       dot: true,
@@ -325,30 +345,27 @@ async function runGenerate(inputs: CodegenInput[], npmName: string): Promise<voi
     }
   }
 
-  // Lay down (or refresh) the package skeleton via the same helper
-  // the `preinstall` hook uses. Idempotent - existing files are
-  // left in place, missing ones are created.
-  const rootMeta = (await Bun.file(resolve(ROOT, "package.json")).json()) as {
-    version?: string;
-  };
-  await bootstrapPackage(npmName, slug, rootMeta.version ?? "0.0.0");
+  // Wipe and recreate `generated/` so deleted inputs can't leave
+  // stale modules behind. The package's hand-written boilerplate
+  // (in `pkg.dir` directly) is left alone.
+  rmSync(generatedDir, { recursive: true, force: true });
+  mkdirSync(generatedDir, { recursive: true });
 
-  // Wipe `src/` so deleted inputs can't leave stale modules behind.
-  // The package's hand-written boilerplate (in `pkgDir` directly)
-  // is left alone.
-  rmSync(srcDir, { recursive: true, force: true });
-  mkdirSync(srcDir, { recursive: true });
+  // The gitignore lives inside `generated/`, matching everything
+  // (including itself, which is fine - git still consults the
+  // file during ignore evaluation). On a fresh clone the dir
+  // doesn't exist; codegen recreates it from scratch on demand.
+  await Bun.write(resolve(generatedDir, ".gitignore"), "*\n");
 
   const indexLines: string[] = [];
   let warnings = 0;
-
   for (const input of inputs) {
     const sourcePath = resolve(ROOT, input.source);
     if (!existsSync(sourcePath)) {
-      fail(`codegen input not found: ${input.source}`);
+      fail(`${pkg.slug}: codegen input not found: ${input.source}`);
     }
 
-    console.log(`Generating ${input.name} from ${input.source}`);
+    console.log(`  ${input.name} <- ${input.source}`);
 
     const sourceText = preprocess(stripImports(sourcePath));
     const { getZodSchemasFile, getInferredTypes, errors } = generate({
@@ -361,7 +378,7 @@ async function runGenerate(inputs: CodegenInput[], npmName: string): Promise<voi
     });
     if (errors.length) {
       warnings += errors.length;
-      for (const err of errors) console.warn(`  ! ${err}`);
+      for (const err of errors) console.warn(`    ! ${err}`);
     }
 
     // ts-to-zod only adds an `import { ... } from <typesImportPath>`
@@ -372,33 +389,46 @@ async function runGenerate(inputs: CodegenInput[], npmName: string): Promise<voi
     const schemas = getZodSchemasFile(importPath);
     const inferred = inlineInferredTypes(getInferredTypes(importPath));
     const content = HEADER + schemas.trimEnd() + "\n\n" + inferred + "\n";
-    await Bun.write(resolve(srcDir, `${input.name}.zod.ts`), content);
+    await Bun.write(resolve(generatedDir, `${input.name}.zod.ts`), content);
     indexLines.push(`export * from "./${input.name}.zod.js";`);
   }
 
-  await Bun.write(resolve(srcDir, "index.ts"), HEADER + indexLines.join("\n") + "\n");
+  await Bun.write(
+    resolve(generatedDir, "index.ts"),
+    HEADER + indexLines.join("\n") + "\n",
+  );
+
+  // Stamp the package.json so the generated tree is visible to
+  // import callers without manual wiring. Surgical merge: leave
+  // every other field (name, version, codegen, dependencies, ...)
+  // alone.
+  const entryRel = `${GENERATED_DIRNAME}/index.ts`;
+  const entryExport = `./${entryRel}`;
+  const updatedMeta = {
+    ...pkg.meta,
+    module: entryRel,
+    main: entryRel,
+    exports: { ".": entryExport },
+  };
+  await writeJson(pkg.jsonPath, updatedMeta);
 
   console.log(
-    `Generated ${inputs.length} module(s) in ${pkgDir}/src/` +
+    `${pkg.meta.name ?? pkg.slug}: ${inputs.length} module(s) -> ` +
+      `${relative(ROOT, generatedDir)}/` +
       (warnings ? ` (${warnings} warning(s))` : ""),
   );
 }
 
-await new Command()
-  .name("codegen")
-  .description(
-    "Generate zod schemas + inferred TypeScript types from one or more `.d.ts` files into a workspace package. The import + re-export graph rooted at each input is bundled via the TypeScript compiler API so peer modules (`import * as sql from \"../sql\"`) get inlined automatically.",
-  )
-  .argument(
-    "<inputs...>",
-    "Input `.d.ts` files. Use `<path>=<name>` to override the auto-derived basename.",
-  )
-  .requiredOption(
-    "-p, --package <name>",
-    "Output workspace package name (e.g. `@dbx-tools/sdk-shared`). Resolved to `packages/<basename>/`.",
-  )
-  .action(async (inputArgs: string[], opts: { package: string }) => {
-    const inputs = inputArgs.map(parseInputArg);
-    await runGenerate(inputs, opts.package);
-  })
-  .parseAsync(process.argv);
+/* ------------------------------ driver ------------------------------ */
+
+const targets = (await discoverPackages(() => true)).filter(
+  (pkg) => (pkg.meta as { codegen?: unknown }).codegen,
+);
+
+if (targets.length === 0) {
+  console.log("codegen: no workspace packages declare a `codegen` field");
+} else {
+  for (const pkg of targets) {
+    await generatePackage(pkg);
+  }
+}

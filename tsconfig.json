@@ -21,7 +21,12 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["${configDir}/index.ts", "${configDir}/src", "${configDir}/test"],
+  "include": [
+    "${configDir}/index.ts",
+    "${configDir}/src",
+    "${configDir}/generated",
+    "${configDir}/test"
+  ],
   "exclude": ["**/node_modules", "**/dist", "**/build", "**/tmp"],
   "files": [],
   "references": [
@@ -47,7 +52,7 @@
       "path": "./packages/genie/tsconfig.build.json"
     },
     {
-      "path": "./packages/sdk-type/tsconfig.build.json"
+      "path": "./packages/sdk-shared/tsconfig.build.json"
     },
     {
       "path": "./packages/shared/tsconfig.build.json"

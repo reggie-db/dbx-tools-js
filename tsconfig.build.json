@@ -11,7 +11,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext"
   },
-  "include": ["${configDir}/index.ts", "${configDir}/src"],
+  "include": ["${configDir}/index.ts", "${configDir}/src", "${configDir}/generated"],
   "exclude": [
     "**/node_modules",
     "**/dist",
