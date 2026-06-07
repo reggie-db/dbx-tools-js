@@ -36,7 +36,16 @@
 //   doesn't tell the whole story. If it returns null (no AI available, no Databricks
 //   profile, etc.) the script falls back to a bare
 //   `Release v<version>` message - no failure.
+//
+// GitHub Release:
+//   After the tag push, the script creates (or updates) a proper
+//   GitHub Release for the tag via `gh release create`, using the
+//   AI summary as the markdown body. GitHub's tag annotation page
+//   renders as plaintext, so the annotated message alone shows up
+//   monospaced; the Release object is what renders markdown. Step
+//   is skipped silently when `gh` is not on `PATH`.
 
+import { which } from "bun";
 import { Command, InvalidArgumentError } from "commander";
 import semver from "semver";
 import { agentQuery, discoverPackages, fail, run, writeJson } from "./util.js";
@@ -201,6 +210,54 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
   }
 }
 
+/**
+ * Create (or, on retry, update) the GitHub Release for `tag` with
+ * `body` as its markdown description. GitHub renders the Release
+ * body as markdown, unlike the bare tag annotation page which is
+ * monospace plaintext - this is what makes `## Features` etc. show
+ * up as real headings instead of literal `##` characters.
+ *
+ * Silently no-ops when `gh` is not on `PATH`. Failures are logged
+ * but never abort the script: the tag is already pushed at this
+ * point, so a missing/broken Release can be fixed by hand
+ * (`gh release create ... --notes-file <file>`).
+ */
+async function publishGithubRelease(tag: string, body: string): Promise<void> {
+  if (!which("gh")) {
+    console.log("(skipping GitHub Release: gh CLI not on PATH)");
+    return;
+  }
+  console.log(`Publishing GitHub Release ${tag}...`);
+  const gh = async (args: string[]): Promise<number> => {
+    const proc = Bun.spawn(["gh", ...args], {
+      stdout: "inherit",
+      stderr: "inherit",
+      stdin: "inherit",
+    });
+    return await proc.exited;
+  };
+  const createCode = await gh([
+    "release",
+    "create",
+    tag,
+    "--title",
+    tag,
+    "--notes",
+    body,
+  ]);
+  if (createCode === 0) return;
+  // Most common failure: the release already exists (e.g. the tag
+  // was pushed but a previous run aborted before this step). Update
+  // it in place so reruns are idempotent.
+  console.warn(`gh release create exited ${createCode}; trying gh release edit.`);
+  const editCode = await gh(["release", "edit", tag, "--notes", body]);
+  if (editCode !== 0) {
+    console.warn(
+      `gh release edit exited ${editCode}; release may need manual creation.`,
+    );
+  }
+}
+
 const program = new Command()
   .name("tag")
   .description("Bump every workspace, commit, tag HEAD, and push to origin.")
@@ -322,6 +379,10 @@ await git(["tag", "-a", tag, "-m", tagMessage]);
 
 console.log(`Pushing ${tag} to origin...`);
 await git(["push", "origin", tag]);
+
+// The annotated tag message shows up as plaintext on GitHub's tag
+// page. The Release object renders the same body as markdown.
+await publishGithubRelease(tag, aiSummary ?? `Release ${tag}`);
 
 console.log();
 console.log(`✓ Released ${tag}.`);
