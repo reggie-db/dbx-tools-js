@@ -30,14 +30,16 @@
 //   The script collects commit log + diff stat since the previous
 //   tag, hands them to `releaseNotes()`, and uses the returned text
 //   as the annotated tag's message body. The default
-//   `releaseNotes()` asks a Databricks model-serving endpoint via
-//   `aiQuery()` from `util.ts`. If it returns null (no AI available,
-//   no Databricks profile, etc.) the script falls back to a bare
+//   `releaseNotes()` runs a Mastra agent via `agentQuery()` from
+//   `util.ts`; the agent can call a `read_files` tool to open
+//   touched source files (in batches) if the diff stat alone
+//   doesn't tell the whole story. If it returns null (no AI available, no Databricks
+//   profile, etc.) the script falls back to a bare
 //   `Release v<version>` message - no failure.
 
 import { Command, InvalidArgumentError } from "commander";
 import semver from "semver";
-import { aiQuery, discoverPackages, fail, run, writeJson } from "./util.js";
+import { agentQuery, discoverPackages, fail, run, writeJson } from "./util.js";
 
 type Bump = "major" | "minor" | "patch";
 
@@ -114,6 +116,14 @@ interface ReleaseNotesContext {
 const NOTES_INSTRUCTIONS = `
 Generate markdown release notes for the following tag.
 
+The prompt already includes the commit log + working-tree stat. Use
+the agent's tools sparingly to fill gaps the summary can't capture:
+- read_files on a batch of touched source files when a refactor needs explanation
+- git_diff with a path filter to inspect a specific file's diff
+- git_log with a path filter to trace recent history of a subdir
+
+Skip the tools when commit subjects already tell the story.
+
 Requirements:
 - Be terse
 - Group by theme (Features, Fixes, Internals); skip empty sections
@@ -177,13 +187,14 @@ async function buildReleaseNotesContext(
 }
 
 /**
- * Hook for an AI-generated release summary. Defaults to a Databricks
- * model-serving call via `aiQuery()`. Returns null on any failure so
- * the caller can fall back to a default tag message.
+ * Hook for an AI-generated release summary. Runs the Mastra script
+ * agent (which can call `read_files` to inspect touched source) via
+ * `agentQuery()`. Returns null on any failure so the caller can
+ * fall back to a default tag message.
  */
 async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
   try {
-    return await aiQuery(NOTES_INSTRUCTIONS, ctx);
+    return await agentQuery(NOTES_INSTRUCTIONS, ctx);
   } catch (error) {
     console.warn("Release notes hook failed, falling back:", error);
     return null;
