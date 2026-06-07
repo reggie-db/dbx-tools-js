@@ -332,6 +332,24 @@ export function shortId(length: number = 8): string {
   return globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, length);
 }
 
+/**
+ * Extract a human-readable message from any thrown value. Returns
+ * `value.message` when `value` is an `Error`, otherwise coerces
+ * via `String(value)`. Collapses the ubiquitous
+ *
+ * ```ts
+ * err instanceof Error ? err.message : String(err)
+ * ```
+ *
+ * dance into a single helper, useful for log attributes and any
+ * other "give me something printable" context where the caller
+ * doesn't want to re-throw or rely on `console.error`'s default
+ * formatting.
+ */
+export function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
 export function fnvHash(...values: string[]): string {
   return fnvHashWithOptions({}, ...values);
 }

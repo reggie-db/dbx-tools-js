@@ -9,7 +9,6 @@
 import { existsSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { discoverPackageJsons, ROOT } from "./util.js";
-import { exists } from "node:fs/promises";
 
 const targets: string[] = [];
 for await (const jsonPath of discoverPackageJsons(true)) {

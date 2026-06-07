@@ -10,13 +10,24 @@ TypeScript types and three small URL helpers.
 
 ```ts
 import {
+  // URL helpers
   chatUrl,
   historyUrl,
+  // Protocol types + schemas
   type MastraClientConfig,
   type ServingEndpointSummary,
   type ServingEndpointsResponse,
   type MastraHistoryUIMessage,
   type MastraHistoryResponse,
+  type MastraClearHistoryResponse,
+  // Genie writer-event vocabulary + workflow output shapes
+  type GenieAgentResult,
+  type GenieSummaryItem,
+  type GenieDataset,
+  type GenieWriterEvent,
+  type MinimalWriter,
+  isGenieAgentResult,
+  genieResultToWriterEvents,
 } from "@dbx-tools/appkit-mastra-shared";
 ```
 
@@ -132,22 +143,46 @@ interface ServingEndpointsResponse {
 }
 ```
 
-### Inline charts (no wire types here)
+### Genie writer-event vocabulary
 
-Chart rendering does not have HTTP wire types. The producer
-tools (`render_data`, Genie) both emit `type: "chart"` events
-on Mastra's writer channel - first an event with the dataset
-(`{chartId, title, description?, data}`), then a follow-up
-event with the resolved `EChartsOption`
-(`{chartId, option}`) once the server-side chart-planner agent
-finishes. The chat client merges them by `chartId` and renders
-inline at the model's `[[chart:<chartId>]]` marker.
+The Mastra Genie agent publishes a unified
+[`GenieWriterEvent`](src/genie.ts) union through Mastra's
+`ctx.writer`. Subscribers narrow on `event.type` and read the
+event's flat fields directly - no payload wrapper, no
+translation layer:
 
-The exact field shape lives on the writer-event consumer side
-(see `demo/client/src/components/chat-view.tsx`'s `ToolProgress`
-union for the canonical TypeScript). This package only ships
-URL helpers and HTTP wire types - chart events ride the agent
-stream and don't need any of that.
+```ts
+import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
+
+function handleEvent(event: GenieWriterEvent) {
+  switch (event.type) {
+    case "started":          // Mastra-only: tool invocation began
+    case "ask_genie_done":   // Mastra-only: one ask_genie turn finished
+    case "summary":          // Mastra-only: structured-output coercion landed
+    case "chart":            // Mastra-only: chart rendered for the active turn
+    case "error":            // Mastra-only: terminal error
+    case "status":           // wire: status transition
+    case "thinking":         // wire: Genie thought
+    case "text":             // wire: text delta
+    case "query":            // wire: SQL emitted
+    case "statement":        // wire: warehouse statement submitted
+    case "rows":             // wire: row-count progress
+    case "suggested_questions": // wire: follow-up suggestions
+      // ...
+  }
+}
+```
+
+`isGenieAgentResult(value)` is an O(1) structural guard that
+detects the agent's tool-result payload off Mastra's
+`tool-result` chunks without coupling to a specific tool name.
+
+`genieResultToWriterEvents(result)` replays the terminal
+`error` event from a completed `GenieAgentResult`, useful for
+reconstructing lifecycle pills on history reload. Live-only
+chart specs are intentionally not replayed (the resolved
+Echarts spec is held off-band on the per-request
+`RequestContext`, not on the persisted summary).
 
 ## License
 

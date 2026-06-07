@@ -183,10 +183,6 @@ export function toContext(
  * `cancellationToken.onCancellationRequested` to it, so this
  * adapter is the one-line bridge from "platform-standard
  * cancellation" to "the SDK aborts the fetch on your behalf".
- *
- * Kept private for now: the genie package is the only consumer in
- * the workspace. Lift to `@dbx-tools/shared` (`apiUtils`) the
- * moment a second package needs SDK-call cancellation.
  */
 function signalToCancellationToken(signal: AbortSignal): CancellationToken {
   return {

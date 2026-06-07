@@ -190,65 +190,72 @@ that implements the standard `getAgentTools()` + `executeAgentTool()` +
 `executeAgentTool`, so OBO auth (`asUser`) and telemetry spans stay
 intact.
 
-`plugins.genie` is special-cased: it swaps the generic AppKit toolkit
-(which only emits a single final result chunk per call) for a
-streaming-aware tools record built on top of the plugin's
-`exports().sendMessage` AsyncGenerator. Each Genie wire event
-(`FETCHING_METADATA`, `ASKING_AI`, `EXECUTING_QUERY`, attached SQL,
-errors) is normalised into a `GenieProgress` payload and pushed
-mid-flight through Mastra's `ctx.writer`, surfacing as
-`tool-output` chunks the React client can render as inline status
-pills and SQL blocks while the LLM is still waiting on the final
-`tool-result`. Tool ids are stable: `genie` for the default alias,
-`genie-<alias>` for additional aliases, and one shared
-`genie_get_conversation`.
+`plugins.genie` is special-cased: it talks to Genie directly via
+`@dbx-tools/genie` (`genieEventChat`) rather than calling AppKit's
+stock `genie` toolkit. Each invocation spins up a per-call inner
+Mastra `Agent` with three tools (`ask_genie`,
+`get_space_description`, `get_space_serialized`), runs it with
+`structuredOutput`, and produces a hydrated
+{@link GenieAgentResult}. AppKit's `genie()` plugin is honored
+only for its `spaces` config (and the matching
+`app.yaml`-declared resources). Tool ids are stable: `genie` for
+the default alias, `genie_<alias>` for additional aliases.
 
-Genie tool-result shape (LLM-bound):
+Genie tool-result shape (LLM-bound) is the
+[`GenieAgentResult`](../appkit-mastra-shared/src/genie.ts) type:
 
+```ts
+type GenieAgentResult = {
+  spaceId: string;
+  conversationId?: string;        // thread back to continue the same Genie thread
+  summary: Array<                 // ordered prose + visualize slots
+    | { type: "string"; text: string }
+    | {
+        type: "visualize";
+        statementId: string;
+        title?: string;
+        description?: string;
+        dataset: {
+          data: { columns: string[]; rows: Row[]; rowCount: number };
+          chart?: { chartId: string; chartType: "bar" | "line" | "area" | "scatter" | "pie" };
+        };
+      }
+  >;
+  error?: string;
+};
 ```
-{
-  conversationId?: string,        // pass back to continue the same Genie thread
-  genieAnswer?: string,           // Genie's prose answer; pass through verbatim
-  datasets?: [{                   // metadata only, one per executed SQL statement
-    chartId: string,              // embed [[chart:<chartId>]] to render inline
-    title?: string,
-    description?: string,
-    columns: string[],
-    rowCount: number,
-    sql?: string,
-  }],
-  suggestedFollowUps?: string[],  // UI shows as buttons; don't list in reply
-  error?: string,
-}
-```
 
-`datasets[]` is metadata only - column names, row count, the SQL
-Genie ran. The actual rows ride a separate `type: "chart"` writer
-event so the LLM never has them in context (token cost stays flat
-regardless of dataset size). The model references each dataset by
-its `chartId` via the `[[chart:<chartId>]]` marker to display the
-chart inline; see the `render_data` section below for how the
-client resolves those markers.
+The `summary` is the user-facing renderable: a mixed sequence of
+prose paragraphs (`type: "string"`) and `visualize` slots that
+mark where a chart should appear in the model's final answer.
+Visualize slots embed the dataset (rows + columns) plus a slim
+`chart` reference (just `chartId` + `chartType`); the resolved
+Echarts spec rides a separate `type: "chart"` writer event so the
+LLM never holds it in context. The host UI joins the dataset and
+the writer event by `chartId` and renders inline at the matching
+`[[chart:<chartId>]]` marker.
 
-Genie data flow:
+Genie writer event flow:
 
-- The writer emits `type: "started" | "status" | "sql" |
-  "suggested" | "error"` events for the live loading pill. SQL
-  text is shown via a small Shiki-highlighted block.
-- The writer **also** emits two `type: "chart"` events per
-  executed SQL statement, sharing the same `chartId`: the first
-  carries `{chartId, title, description?, data}` (rows converted
-  to objects keyed by column name with best-effort numeric
-  coercion); the second, when the chart-planner agent finishes,
-  carries `{chartId, option}` (the resolved Echarts spec). The
-  chat client's `<ChartSlot>` merges them by `chartId` and
-  renders inline at the matching `[[chart:<chartId>]]` marker.
-  This is the exact same wire format as the `render_data` tool,
-  so Genie and hand-built charts are indistinguishable on the
-  client.
-- After a hard reload, `synthesizeToolEventsFromHistory` rebuilds
-  `suggested` events from the persisted tool-result; the SQL pill
-  and chart events are live-only and don't replay.
+- The writer emits the flat
+  [`GenieWriterEvent`](../appkit-mastra-shared/src/genie.ts)
+  union for the live loading pill - the wire-derived
+  `GenieChatEvent` (status / thinking / sql / rows / suggested)
+  plus the Mastra-only lifecycle events (`started`,
+  `ask_genie_done`, `summary`, `chart`, `error`).
+- The writer emits one `type: "chart"` event per executed SQL
+  statement carrying `{chartId, title, description?, data,
+  option, statementId, messageId}`. The chat client's
+  `<ChartSlot>` renders inline at the matching
+  `[[chart:<chartId>]]` marker. This is the exact same wire
+  format as the `render_data` tool, so Genie and hand-built
+  charts are indistinguishable on the client.
+- After a hard reload, `synthesizeToolEventsFromHistory`
+  reconstructs lifecycle events from the persisted summary
+  (`error` events via `genieResultToWriterEvents`); live-only
+  events (rows, SQL pill, chart specs) don't replay because the
+  resolved Echarts spec is held off-band on the per-request
+  `RequestContext`.
 
 ### `render_data` (system-default ambient tool)
 
@@ -710,20 +717,25 @@ function Chat() {
 mount, so a custom `mastra({ name: "myMastra" })` rewrites every path):
 
 
-| Field              | Example                             | Description                                              |
-| ------------------ | ----------------------------------- | -------------------------------------------------------- |
-| `basePath`         | `"/api/mastra"`                     | Plugin mount path.                                       |
-| `chatPath`         | `"/api/mastra/route/chat"`          | Default-agent chat URL. Use `chatUrl(config)` to get it. |
-| `chatPathTemplate` | `"/api/mastra/route/chat/:agentId"` | OpenAPI-style template for tools / docs.                 |
-| `modelsPath`       | `"/api/mastra/models"`              | `GET` cached endpoint catalogue.                         |
-| `defaultAgent`     | `"analyst"`                         | Agent id `chatRoute` binds to when none is supplied.     |
-| `agents`           | `["analyst", "helper"]`             | Every registered agent id in order.                      |
+| Field                 | Example                                | Description                                                          |
+| --------------------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `basePath`            | `"/api/mastra"`                        | Plugin mount path.                                                   |
+| `chatPath`            | `"/api/mastra/route/chat"`             | Default-agent chat URL. Use `chatUrl(config)` to get it.             |
+| `chatPathTemplate`    | `"/api/mastra/route/chat/:agentId"`    | OpenAPI-style template for tools / docs.                             |
+| `modelsPath`          | `"/api/mastra/models"`                 | `GET` cached endpoint catalogue.                                     |
+| `historyPath`         | `"/api/mastra/route/history"`          | Default-agent thread history. Use `historyUrl(config, opts)`.        |
+| `historyPathTemplate` | `"/api/mastra/route/history/:agentId"` | OpenAPI-style template for tools / docs.                             |
+| `defaultAgent`        | `"analyst"`                            | Agent id `chatRoute` binds to when none is supplied.                 |
+| `agents`              | `["analyst", "helper"]`                | Every registered agent id in order.                                  |
 
 
 `chatUrl(config, agentId?)` returns `config.chatPath` for the default
 agent (the registered `chatRoute` mount that omits `:agentId`), and
-`${config.chatPath}/${encodeURIComponent(agentId)}` otherwise. Pure
-function: no React, no hooks, safe in service workers and SSR.
+`${config.chatPath}/${encodeURIComponent(agentId)}` otherwise. The
+sibling `historyUrl(config, { agentId?, page?, perPage? })` mirrors
+that pattern for the `/history` endpoint and appends pagination
+query parameters when provided. Both are pure functions: no React,
+no hooks, safe in service workers and SSR.
 
 ## License
 

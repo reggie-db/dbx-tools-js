@@ -7,6 +7,9 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 | Package                                                                    | Path                            | Published            |
 | -------------------------------------------------------------------------- | ------------------------------- | -------------------- |
 | [`@dbx-tools/shared`](packages/shared)                                     | `packages/shared`               | yes                  |
+| [`@dbx-tools/sdk-shared`](packages/sdk-shared)                             | `packages/sdk-shared`           | yes                  |
+| [`@dbx-tools/genie-shared`](packages/genie-shared)                         | `packages/genie-shared`         | yes                  |
+| [`@dbx-tools/genie`](packages/genie)                                       | `packages/genie`                | yes                  |
 | [`@dbx-tools/appkit-autopg`](packages/appkit-autopg)                       | `packages/appkit-autopg`        | yes                  |
 | [`@dbx-tools/appkit-serving`](packages/appkit-serving)                     | `packages/appkit-serving`       | yes                  |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra)                       | `packages/appkit-mastra`        | yes                  |
@@ -17,10 +20,18 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 string case helpers, console log prefixes with `LOG_LEVEL` filtering,
 memoization, and an auth-aware Databricks REST helper that resolves the
 workspace client off the AppKit execution context) without pulling AppKit
-types into every consumer. `appkit-autopg` is a one-line `autopg()` helper that
-fills in every Lakebase Postgres env var the AppKit `lakebase` plugin needs
-from whatever fragments your deployment carries (resource paths, bare hostnames,
-Postgres URIs). `appkit-serving` is a tiny set of typed accessors over the
+types into every consumer. `sdk-shared` ships generated Zod schemas + inferred
+types for the Databricks SDK shapes the workspace consumes (regenerated from
+upstream `.d.ts` via `scripts/codegen.ts`). `genie-shared` is the pure wire
+contract for Genie - widened `GenieMessage` / `GenieAttachment` schemas plus
+a discriminated `GenieChatEvent` union for live streaming. `genie` is the
+client-side driver: `genieChat` (raw poll-observed snapshots) and
+`genieEventChat` (semantic deduplicated events), built on the workspace
+client with cancellation, conversation seeding, and stale-id recovery.
+`appkit-autopg` is a one-line `autopg()` helper that fills in every Lakebase
+Postgres env var the AppKit `lakebase` plugin needs from whatever fragments
+your deployment carries (resource paths, bare hostnames, Postgres URIs).
+`appkit-serving` is a tiny set of typed accessors over the
 `/api/2.0/serving-endpoints` listing - `servingEndpoints()` plus
 `foundationModel{Class,Profile,Version}` helpers that pull `model_class`,
 the AI Gateway speed/quality/cost profile, and a derived semver out of
@@ -36,8 +47,8 @@ chart-planner agent runs server-side per dataset and ships its `EChartsOption`
 straight back through the writer, so the client never has to round-trip for
 chart specs.
 `appkit-mastra-shared` is the dependency-free wire-format contract (types +
-`chatUrl` / `historyUrl` helpers) that the React client imports without
-dragging in `pg`, `fastembed`, or Mastra itself.
+`chatUrl` / `historyUrl` helpers + Genie writer-event vocabulary) that the
+React client imports without dragging in `pg`, `fastembed`, or Mastra itself.
 
 ### Memory in action
 
@@ -84,7 +95,7 @@ Publishable packages under `@dbx-tools/*` are configured as `fixed` in
 [`.changeset/config.json`](.changeset/config.json), so they version together.
 Releases are **tag-driven**: pushing a `v<version>` tag to `origin` fires the
 [release workflow](.github/workflows/release.yml), which builds every
-publishable workspace and runs `scripts/publish.ts` against npm. No PR-based
+publishable workspace and runs `scripts/release.ts` against npm. No PR-based
 versioning bot, no auto-publish on push to `main` - the tag push is the
 deliberate signal that this commit ships.
 
@@ -115,7 +126,7 @@ on `ubuntu-latest`.
 
 ### What the publish step does
 
-`scripts/publish.ts` keeps the on-disk source tree read-only and instead
+`scripts/release.ts` keeps the on-disk source tree read-only and instead
 **stages** each package into `packages/<slug>/.npm-publish/` (gitignored).
 For every publishable workspace it:
 
@@ -139,7 +150,7 @@ Ctrl-C, or a `git add -A` from another process can't wedge the workspace.
 The worst-case recovery is `rm -rf packages/*/.npm-publish` (and even that
 isn't needed - the next run wipes the directory before reusing it).
 
-`bun scripts/publish.ts --dry-run` runs the same flow but swaps `npm
+`bun scripts/release.ts --dry-run` runs the same flow but swaps `npm
 publish` for `npm pack --dry-run`, so you can inspect exactly what would
 ship without touching the registry.
 
@@ -164,10 +175,10 @@ debugging the augmentation:
 ```bash
 # Inspect the staged tarballs without uploading anything.
 bun scripts/build.ts
-bun scripts/publish.ts --dry-run
+bun scripts/release.ts --dry-run
 
 # For real (auth: ~/.npmrc needs //registry.npmjs.org/:_authToken=npm_xxx)
-bun run release            # bun scripts/build.ts && bun scripts/publish.ts
+bun run release            # bun scripts/build.ts && bun scripts/release.ts
 ```
 
 ## License

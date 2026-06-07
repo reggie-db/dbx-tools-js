@@ -658,13 +658,12 @@ function buildPluginsMap(
  * Genie agent inherits the same model resolver / fallback
  * ladder the calling agents use.
  *
- * The legacy AppKit `genie` plugin's tools are no longer consulted
- * at runtime - the Genie agent talks to Genie directly via
- * `@dbx-tools/genie` (`genieEventChat`) and the workspace
- * `statementExecution.getStatement` API. But the plugin's
- * resource manifest and `spaces` config are still honored so
- * existing `app.yaml` configs and `genie({ spaces })` wiring
- * keep working without change.
+ * The Genie agent talks to Genie directly via `@dbx-tools/genie`
+ * (`genieEventChat`) and the workspace
+ * `statementExecution.getStatement` API. AppKit's stock `genie`
+ * plugin is honored only for its resource manifest and `spaces`
+ * config so existing `app.yaml` configs and `genie({ spaces })`
+ * wiring keep working without change.
  */
 function resolveProvider(
   config: MastraPluginConfig,

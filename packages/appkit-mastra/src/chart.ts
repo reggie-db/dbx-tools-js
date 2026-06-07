@@ -36,6 +36,7 @@ import { z } from "zod";
 
 import type { MastraPluginConfig } from "./config.js";
 import { ModelTier, modelForTier, buildModel } from "./model.js";
+import { safeWrite } from "./writer.js";
 
 /**
  * Module-level logger tagged `[mastra/chart]`. Uses the shared
@@ -425,58 +426,41 @@ export function buildRenderDataTool(config: MastraPluginConfig) {
         // for the table-like fallback / hover, option for the
         // actual render. Best-effort write so a closed
         // downstream stream can't take the tool down.
-        await safeWrite(writer, chartId, {
-          type: "chart",
-          chartId,
-          title,
-          ...(description ? { description } : {}),
-          data,
-          option,
-        });
+        await safeWrite(
+          log,
+          writer,
+          {
+            type: "chart",
+            chartId,
+            title,
+            ...(description ? { description } : {}),
+            data,
+            option,
+          },
+          { chartId },
+        );
       } catch (err) {
         log.warn("render:error", {
           chartId,
           elapsedMs: Date.now() - startedAt,
-          error: err instanceof Error ? err.message : String(err),
+          error: commonUtils.errorMessage(err),
         });
         // Surface as a writer-level error so the slot can
         // transition to "couldn't render chart" without the
         // parent agent surfacing a stack trace.
-        await safeWrite(writer, chartId, {
-          type: "error",
-          error: err instanceof Error ? err.message : String(err),
-        });
+        await safeWrite(
+          log,
+          writer,
+          {
+            type: "error",
+            error: commonUtils.errorMessage(err),
+          },
+          { chartId },
+        );
       }
       return { chartId };
     },
   });
-}
-
-/**
- * Best-effort writer.write. Failures are logged at `warn` (a
- * persistently-closed writer is the most likely culprit when
- * chart events go missing client-side) but swallowed so a closed
- * downstream stream (cancelled request, client navigated away)
- * can't take a tool down.
- */
-async function safeWrite(
-  writer: MinimalWriter | undefined,
-  chartId: string,
-  chunk: unknown,
-): Promise<void> {
-  if (!writer) {
-    log.debug("write:no-writer", { chartId });
-    return;
-  }
-  try {
-    await writer.write(chunk);
-    log.debug("write:ok", { chartId });
-  } catch (err) {
-    log.warn("write:error", {
-      chartId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 /**

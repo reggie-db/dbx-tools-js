@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nanoid } from "nanoid";
 import type { UIMessage } from "ai";
-import { logUtils } from "@dbx-tools/shared";
+import { commonUtils, logUtils } from "@dbx-tools/shared";
 import {
   ChatView,
   type ApprovalDecision,
@@ -391,7 +391,7 @@ const Stream = () => {
         setStatus("ready");
       } catch (error) {
         log.error("stream error", {
-          error: error instanceof Error ? error.message : String(error),
+          error: commonUtils.errorMessage(error),
         });
         setStatus("error");
       }
@@ -446,7 +446,7 @@ const Stream = () => {
         setStatus("ready");
       } catch (error) {
         log.error("approval resume error", {
-          error: error instanceof Error ? error.message : String(error),
+          error: commonUtils.errorMessage(error),
         });
         setStatus("error");
       }
@@ -483,7 +483,7 @@ const Stream = () => {
       log.info("history cleared", { cleared: result.cleared });
     } catch (error) {
       log.error("history clear error", {
-        error: error instanceof Error ? error.message : String(error),
+        error: commonUtils.errorMessage(error),
       });
       // Reset UI anyway so the user isn't stuck staring at a stale
       // transcript; the server-side cleanup will catch up on next
@@ -561,7 +561,7 @@ const Stream = () => {
       .catch((error: unknown) => {
         if (cancelled || (error as { name?: string }).name === "AbortError") return;
         log.error("history load error", {
-          error: error instanceof Error ? error.message : String(error),
+          error: commonUtils.errorMessage(error),
         });
         setHasMoreHistory(false);
       })
@@ -613,7 +613,7 @@ const Stream = () => {
       .catch((error: unknown) => {
         log.error("history load-more error", {
           page,
-          error: error instanceof Error ? error.message : String(error),
+          error: commonUtils.errorMessage(error),
         });
         // Roll back the page so a manual retry hits the same page,
         // and stop the trigger so we don't thrash the failed call.

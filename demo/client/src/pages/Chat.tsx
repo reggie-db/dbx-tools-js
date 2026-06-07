@@ -1,7 +1,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { logUtils } from "@dbx-tools/shared";
+import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { ChatView, type ApprovalDecision } from "@/components/chat-view";
 import {
   clearMastraHistory,
@@ -65,7 +65,7 @@ const Chat = () => {
       log.info("history cleared", { cleared: result.cleared });
     } catch (error) {
       log.error("history clear error", {
-        error: error instanceof Error ? error.message : String(error),
+        error: commonUtils.errorMessage(error),
       });
     }
     setMessages([]);

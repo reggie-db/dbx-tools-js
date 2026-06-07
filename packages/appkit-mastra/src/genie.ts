@@ -32,12 +32,11 @@
  *      {@link GenieSummaryItem} `string` variant, and returns the
  *      hydrated {@link GenieAgentResult}.
  *
- * The legacy AppKit `genie` plugin (`@databricks/appkit`'s `genie`)
- * is no longer used at runtime. The inner agent talks to Genie
- * directly via `@dbx-tools/genie` (`genieEventChat`) and the
- * workspace `statementExecution.getStatement` API. The plugin's
- * `spaces` config is still honored so existing AppKit-style wiring
- * keeps working without change.
+ * The inner agent talks to Genie directly via
+ * `@dbx-tools/genie` (`genieEventChat`) and the workspace
+ * `statementExecution.getStatement` API. AppKit's stock `genie`
+ * plugin is honored only for its `spaces` config so existing
+ * AppKit-style wiring keeps working without change.
  */
 
 import { CacheManager, genie } from "@databricks/appkit";
@@ -73,6 +72,7 @@ import { runChartPlanner } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { MASTRA_USER_KEY, type User } from "./config.js";
 import { buildModel } from "./model.js";
+import { safeWrite } from "./writer.js";
 
 const log = logUtils.logger("mastra/genie");
 
@@ -167,28 +167,6 @@ function extractStatementId(message: GenieMessage): string | undefined {
     if (id) return id;
   }
   return undefined;
-}
-
-/**
- * Best-effort `writer.write`. The writer carries the unified flat
- * event vocabulary directly - no translation layer - so
- * subscribers narrow on `event.type` and read fields inline.
- * Failures (downstream stream closed, cancelled request) are
- * swallowed with a `warn` log so an in-flight Genie turn isn't
- * taken down by a navigated-away client.
- */
-async function safeWrite(
-  writer: MinimalWriter | undefined,
-  chunk: unknown,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write(chunk);
-  } catch (err) {
-    log.warn("writer:error", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 /**
@@ -362,7 +340,7 @@ async function readCachedConversationId(
     return v ?? undefined;
   } catch (err) {
     log.warn("conversation-cache:read-error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: commonUtils.errorMessage(err),
     });
     return undefined;
   }
@@ -386,7 +364,7 @@ async function saveCachedConversationId(
     });
   } catch (err) {
     log.warn("conversation-cache:write-error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: commonUtils.errorMessage(err),
     });
   }
 }
@@ -398,7 +376,7 @@ async function evictCachedConversationId(cacheKey: string | undefined): Promise<
     await CacheManager.getInstanceSync().delete(cacheKey);
   } catch (err) {
     log.warn("conversation-cache:delete-error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: commonUtils.errorMessage(err),
     });
   }
 }
@@ -523,7 +501,7 @@ function buildAskGenieTool(deps: InnerToolDeps) {
           ...(seedConversationId ? { conversationId: seedConversationId } : {}),
           ...(signal ? { context: signal } : {}),
         })) {
-          await safeWrite(writer, event);
+          await safeWrite(log, writer, event);
           // Wire events come in two flavors: the lifecycle `message`
           // event embeds the raw `GenieMessage` (read its
           // `conversation_id`), and the rest carry a flat
@@ -564,7 +542,7 @@ function buildAskGenieTool(deps: InnerToolDeps) {
           log.warn("conversation-cache:stale, resetting", {
             spaceId,
             conversationId: seeded,
-            error: err instanceof Error ? err.message : String(err),
+            error: commonUtils.errorMessage(err),
           });
           await evictCachedConversationId(cacheKey);
           writeContextConversationId(requestContext, spaceId, undefined);
@@ -852,7 +830,7 @@ export function createGenieTool(opts: CreateGenieToolOptions) {
         spaceId,
         content: input.question,
       };
-      await safeWrite(writer, startedEvent);
+      await safeWrite(log, writer, startedEvent);
 
       const resultSets = new Map<string, StatementEntry>();
 
@@ -999,7 +977,7 @@ export function createGenieTool(opts: CreateGenieToolOptions) {
         textItems: textItemCount,
         dataItems: dataItemCount,
       };
-      await safeWrite(writer, summaryEvent);
+      await safeWrite(log, writer, summaryEvent);
 
       // Chart every `data` item in parallel; map `text` items to
       // the shared `string` summary variant verbatim. Missing
@@ -1011,87 +989,89 @@ export function createGenieTool(opts: CreateGenieToolOptions) {
       // chart slot the moment its planner returns rather than
       // waiting for the entire batch to finish.
       const hydrated = await Promise.all(
-        submission.summary.map(async (item: AgentSummaryItem): Promise<GenieSummaryItem | undefined> => {
-          if (item.type === "text") {
-            return { type: "string", text: item.text };
-          }
-          const entry = resultSets.get(item.statementId);
-          if (!entry) {
-            log.warn("data:missing-statement", {
-              statementId: item.statementId,
-            });
-            return undefined;
-          }
-          const { data, messageId } = entry;
-          let dataset: GenieDataset = { data };
-          try {
-            const planned = await runChartPlanner({
-              config,
-              requestContext,
-              title: item.title ?? "Genie result",
-              ...(item.description ? { description: item.description } : {}),
-              data: data.rows,
-              ...(signal ? { signal } : {}),
-            });
-            const chartId = commonUtils.shortId();
-            // Slim chart reference for the LLM-bound result: just
-            // `chartId` + `chartType`. The full Echarts spec goes
-            // to the UI via the writer event AND into the
-            // request-scoped chart inventory below; the model
-            // only needs the id to place `[[chart:<id>]]`.
-            dataset = {
-              data,
-              chart: {
+        submission.summary.map(
+          async (item: AgentSummaryItem): Promise<GenieSummaryItem | undefined> => {
+            if (item.type === "text") {
+              return { type: "string", text: item.text };
+            }
+            const entry = resultSets.get(item.statementId);
+            if (!entry) {
+              log.warn("data:missing-statement", {
+                statementId: item.statementId,
+              });
+              return undefined;
+            }
+            const { data, messageId } = entry;
+            let dataset: GenieDataset = { data };
+            try {
+              const planned = await runChartPlanner({
+                config,
+                requestContext,
+                title: item.title ?? "Genie result",
+                ...(item.description ? { description: item.description } : {}),
+                data: data.rows,
+                ...(signal ? { signal } : {}),
+              });
+              const chartId = commonUtils.shortId();
+              // Slim chart reference for the LLM-bound result: just
+              // `chartId` + `chartType`. The full Echarts spec goes
+              // to the UI via the writer event AND into the
+              // request-scoped chart inventory below; the model
+              // only needs the id to place `[[chart:<id>]]`.
+              dataset = {
+                data,
+                chart: {
+                  chartId,
+                  chartType: planned.chartType,
+                },
+              };
+              const chartEvent: ChartEvent = {
+                type: "chart",
                 chartId,
-                chartType: planned.chartType,
-              },
-            };
-            const chartEvent: ChartEvent = {
-              type: "chart",
-              chartId,
+                statementId: item.statementId,
+                messageId,
+                ...(item.title ? { title: item.title } : {}),
+                ...(item.description ? { description: item.description } : {}),
+                data: data.rows,
+                option: planned.option,
+              };
+              await safeWrite(log, writer, chartEvent);
+              // Stash the resolved chart on the per-request
+              // `RequestContext` so downstream code in the same
+              // request (output processors, follow-up tool calls,
+              // any post-run hook) can look up the full spec by
+              // `chartId` without re-fetching or re-planning.
+              recordChartInContext(requestContext, chartEvent);
+            } catch (err) {
+              const errorMessage = commonUtils.errorMessage(err);
+              log.warn("chart:error", {
+                statementId: item.statementId,
+                messageId,
+                error: errorMessage,
+              });
+              // Surface the chart-planner failure as a writer event
+              // stamped with the same `messageId` the rest of this
+              // ask's wire events carry, so the host UI groups the
+              // failure into the same pill bucket and can surface
+              // a "couldn't render chart" note next to the table
+              // fallback instead of silently dropping the chart.
+              const errorEvent: MastraGenieErrorEvent = {
+                type: "error",
+                spaceId,
+                messageId,
+                error: `chart-planner: ${errorMessage}`,
+              };
+              await safeWrite(log, writer, errorEvent);
+            }
+            return {
+              type: "visualize",
               statementId: item.statementId,
-              messageId,
               ...(item.title ? { title: item.title } : {}),
               ...(item.description ? { description: item.description } : {}),
-              data: data.rows,
-              option: planned.option,
+              dataset,
             };
-            await safeWrite(writer, chartEvent);
-            // Stash the resolved chart on the per-request
-            // `RequestContext` so downstream code in the same
-            // request (output processors, follow-up tool calls,
-            // any post-run hook) can look up the full spec by
-            // `chartId` without re-fetching or re-planning.
-            recordChartInContext(requestContext, chartEvent);
-          } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            log.warn("chart:error", {
-              statementId: item.statementId,
-              messageId,
-              error: errorMessage,
-            });
-            // Surface the chart-planner failure as a writer event
-            // stamped with the same `messageId` the rest of this
-            // ask's wire events carry, so the host UI groups the
-            // failure into the same pill bucket and can surface
-            // a "couldn't render chart" note next to the table
-            // fallback instead of silently dropping the chart.
-            const errorEvent: MastraGenieErrorEvent = {
-              type: "error",
-              spaceId,
-              messageId,
-              error: `chart-planner: ${errorMessage}`,
-            };
-            await safeWrite(writer, errorEvent);
-          }
-          return {
-            type: "visualize",
-            statementId: item.statementId,
-            ...(item.title ? { title: item.title } : {}),
-            ...(item.description ? { description: item.description } : {}),
-            dataset,
-          };
-        }),
+          },
+        ),
       );
       const summary = hydrated.filter((x): x is GenieSummaryItem => x !== undefined);
 

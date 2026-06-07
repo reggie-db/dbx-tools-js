@@ -172,7 +172,7 @@ const name = await projectUtils.name();
 projectUtils.parseGitRemote("git@github.com:org/my-repo.git"); // "my-repo"
 ```
 
-## `commonUtils` - memoize + hashing
+## `commonUtils` - memoize, ids, hashing, polling, error messages
 
 ```ts
 import { commonUtils } from "@dbx-tools/shared";
@@ -180,11 +180,24 @@ import { commonUtils } from "@dbx-tools/shared";
 // Memoize by all-args; sync results cache forever, async failures bust.
 const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));
 
+// Marker-friendly short id (default 8 hex chars from a v4 UUID).
+// Safe within a single conversation / job / batch. Use a full UUID
+// when global uniqueness is needed.
+commonUtils.shortId(); // e.g. "a3f1c92b"
+
 // Short, deterministic hash for cache keys / slug suffixes / etc.
 // Pure-JS FNV-1a in Crockford-style base-32 (digits + lowercase
 // alphabet minus i/l/o/u). Browser-safe.
 commonUtils.fnvHash("databricks-claude-sonnet-4-6"); // e.g. "k3p9q7"
 commonUtils.fnvHashWithOptions({ length: 4 }, "user@example.com");
+
+// Poll an async fn until it returns truthy or the timeout fires.
+await commonUtils.poll(() => isReady(), { intervalMs: 250, timeoutMs: 30_000 });
+
+// Pull a printable message out of any thrown value. Folds the
+// `err instanceof Error ? err.message : String(err)` dance into
+// one helper for log attributes and similar contexts.
+log.warn("write:error", { error: commonUtils.errorMessage(err) });
 ```
 
 `@memoized` is a TC39 stage-1 method decorator built on the same

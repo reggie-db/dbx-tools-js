@@ -16,7 +16,7 @@
  * session-cookie logic stays the single source of truth in `server.ts`.
  */
 
-import { logUtils } from "@dbx-tools/shared";
+import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { toAISdkV5Messages } from "@mastra/ai-sdk/ui";
 import type { Agent } from "@mastra/core/agent";
 import type { MastraDBMessage } from "@mastra/core/agent/message-list";
@@ -154,7 +154,7 @@ export async function clearHistory(
     log.debug("clear:probe-failed", {
       agentId: opts.agent.id,
       threadId: opts.threadId,
-      error: err instanceof Error ? err.message : String(err),
+      error: commonUtils.errorMessage(err),
     });
   }
 
@@ -169,7 +169,7 @@ export async function clearHistory(
     log.warn("clear:delete-soft-failed", {
       agentId: opts.agent.id,
       threadId: opts.threadId,
-      error: err instanceof Error ? err.message : String(err),
+      error: commonUtils.errorMessage(err),
     });
   }
   log.info("clear:done", {
