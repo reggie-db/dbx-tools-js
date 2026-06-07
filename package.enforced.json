@@ -1,12 +1,12 @@
 {
   "files": ["dist", "index*.ts", "src"],
   "license": "Apache-2.0",
-  "homepage": "https://github.com/reggie-db/dbx-tools-appkit#readme",
+  "homepage": "https://github.com/reggie-db/dbx-tools-js#readme",
   "bugs": {
-    "url": "https://github.com/reggie-db/dbx-tools-appkit/issues"
+    "url": "https://github.com/reggie-db/dbx-tools-js/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/reggie-db/dbx-tools-appkit.git"
+    "url": "git+https://github.com/reggie-db/dbx-tools-js.git"
   }
 }

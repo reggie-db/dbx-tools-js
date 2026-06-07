@@ -1,5 +1,5 @@
 {
-  "name": "dbx-tools-appkit",
+  "name": "dbx-tools-js",
   "version": "0.1.13",
   "catalog": {
     "@databricks/appkit": "^0.35",

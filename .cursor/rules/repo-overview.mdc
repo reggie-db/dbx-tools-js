@@ -1,9 +1,9 @@
 ---
-description: dbx-tools-appkit monorepo orientation
+description: dbx-tools-js monorepo orientation
 alwaysApply: true
 ---
 
-# dbx-tools-appkit
+# dbx-tools-js
 
 Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
 Databricks Apps. Eight publishable packages plus a runnable demo.

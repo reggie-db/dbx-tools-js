@@ -51,7 +51,7 @@ resources:
   postgres_projects:
     demo_project:
       project_id: dbx-tools-demo
-      display_name: dbx-tools-appkit demo
+      display_name: dbx-tools-js demo
       pg_version: 17
       # Settings that flow into every auto-created endpoint (including
       # the `primary` endpoint on every branch). 0.5 CU floor is the

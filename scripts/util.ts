@@ -335,9 +335,9 @@ function resolveScopePath(base: string, relPath: string): string {
 /** Short, human-readable label for the agent's filesystem scope. */
 function scopeLabel(base: string): string {
   const rel = relative(ROOT, base);
-  if (rel === "") return "the dbx-tools-appkit repo root";
+  if (rel === "") return "the dbx-tools-js repo root";
   if (rel.startsWith("..")) return base;
-  return `${rel} (under the dbx-tools-appkit repo)`;
+  return `${rel} (under the dbx-tools-js repo)`;
 }
 
 /**
@@ -498,7 +498,7 @@ function createGitTools() {
       id: "git_status",
       description:
         "Show working-tree status as `git status --porcelain` output. " +
-        "Use to discover which files in the dbx-tools-appkit repo " +
+        "Use to discover which files in the dbx-tools-js repo " +
         "are modified, added, untracked, or staged.",
       inputSchema: z.object({}),
       outputSchema: result,
@@ -590,7 +590,7 @@ function loadCursorRules(): string {
 }
 
 const DEFAULT_AGENT_INSTRUCTIONS = `
-You are a code-aware assistant for the dbx-tools-appkit monorepo (Bun + TypeScript, packages under packages/* and demo/).
+You are a code-aware assistant for the dbx-tools-js monorepo (Bun + TypeScript, packages under packages/* and demo/).
 
 Tools (use only when the answer materially benefits; don't read speculatively):
 - list_files / read_files: walk and read source inside the current scope.

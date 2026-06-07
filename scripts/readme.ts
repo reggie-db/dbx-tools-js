@@ -29,7 +29,7 @@ import { resolve } from "node:path";
 import { agentQuery, discoverPackages, fail, toRelative } from "./util.js";
 
 const README_INSTRUCTIONS = `
-You document a TypeScript package in the dbx-tools-appkit monorepo.
+You document a TypeScript package in the dbx-tools-js monorepo.
 
 OUTPUT CONTRACT (read this carefully):
 Your final assistant message is written verbatim to disk as the

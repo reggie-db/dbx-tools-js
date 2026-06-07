@@ -1,4 +1,4 @@
-# dbx-tools-appkit
+# dbx-tools-js
 
 Bun monorepo for `@dbx-tools` AppKit add-ons: shared helpers, a Lakebase
 auto-discovery helper, a Mastra plugin, and the pure-types client surface
@@ -160,7 +160,7 @@ The workflow reads `NPM_TOKEN` from a repository secret (npm Automation token
 with publish access to the `@dbx-tools` scope). After the very first publish
 of each package on npm, you can configure **trusted publishing** per package
 (`npmjs.com → @dbx-tools/<pkg> → Settings → Trusted Publishing → GitHub
-Actions → workflow `release.yml`, repo `reggie-db/dbx-tools-appkit``) and then
+Actions → workflow `release.yml`, repo `reggie-db/dbx-tools-js``) and then
 drop the `NODE_AUTH_TOKEN:` env line from the workflow - `id-token: write` is
 already granted, and npm CLI 11.5.1+ on the runner (pinned via `node-version:
 24.x` in the workflow) will negotiate the OIDC publish token automatically.

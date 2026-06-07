@@ -97,6 +97,6 @@ describe("name", () => {
 
   it("resolves this repository from the workspace root", async () => {
     const repoRoot = resolve(import.meta.dirname, "../../..");
-    expect(await projectUtils.name({ cwd: repoRoot })).toBe("dbx-tools-appkit");
+    expect(await projectUtils.name({ cwd: repoRoot })).toBe("dbx-tools-js");
   });
 });

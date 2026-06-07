@@ -417,5 +417,5 @@ console.log();
 console.log(`✓ Released ${tag}.`);
 console.log("  The Release workflow will fire on the tag push:");
 console.log(
-  "  https://github.com/reggie-db/dbx-tools-appkit/actions/workflows/release.yml",
+  "  https://github.com/reggie-db/dbx-tools-js/actions/workflows/release.yml",
 );
