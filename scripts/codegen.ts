@@ -34,19 +34,14 @@
 //   - `generated/.gitignore`      `*\n` so the whole tree
 //     (including this file) is excluded from source control.
 //
-// codegen also stamps the consumer's `package.json` so the
-// generated tree is visible to bun / TypeScript / `import` callers
-// without manual wiring:
-//
-//   - `module`  -> `"generated/index.ts"`
-//   - `main`    -> `"generated/index.ts"`
-//   - `exports` -> `{ ".": "./generated/index.ts" }`
-//
-// The rest of `package.json` is left untouched - dependencies,
-// version, the `codegen` field, and any other fields the developer
-// owns flow through unchanged. Project-references-mode tsc still
-// keys off `tsconfig.build.json`, which lives next to
-// `package.json` and is hand-maintained.
+// `package.json` is read-only to codegen - it sources `inputs` from
+// the `codegen` field but never writes back. The generated tree is
+// exposed through the hand-written top-level `index.ts` re-export
+// (`export * from "./generated/index.js"`), which follows the same
+// convention the rest of the workspace packages use and lets the
+// publish merge in `scripts/release.ts` pick up the standard
+// `package.default.json` exports map without any per-package
+// wiring.
 //
 // Each input is preprocessed with the TypeScript compiler API
 // before ts-to-zod sees it: every `import` declaration is dropped,
