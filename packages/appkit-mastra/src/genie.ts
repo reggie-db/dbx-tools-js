@@ -44,10 +44,11 @@
  * across requests and the central agent owns the loop.
  *
  * The tools talk to Genie directly via `@dbx-tools/genie`
- * (`genieEventChat`) and the workspace
- * `statementExecution.getStatement` API. AppKit's stock `genie`
- * plugin is honored only for its `spaces` config so existing
- * AppKit-style wiring keeps working without change.
+ * (`genieEventChat`); statement-row fetching is delegated to
+ * {@link fetchStatementData} from `./statement.js`, which wraps
+ * the workspace `statementExecution.getStatement` API. AppKit's
+ * stock `genie` plugin is honored only for its `spaces` config
+ * so existing AppKit-style wiring keeps working without change.
  *
  * Suggested orchestration prompt for the central agent lives in
  * {@link GENIE_INSTRUCTIONS}; compose it into the agent's own
@@ -61,7 +62,6 @@ import { genieEventChat } from "@dbx-tools/genie";
 import { type GenieMessage } from "@dbx-tools/genie-shared";
 import {
   ChartSchema,
-  type GenieDatasetData,
   type MinimalWriter,
   type StartedEvent,
 } from "@dbx-tools/appkit-mastra-shared";
@@ -81,6 +81,7 @@ import type { MastraTools } from "./agents.js";
 import { chartPlannerRequestSchema, prepareChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { MASTRA_USER_KEY, type User } from "./config.js";
+import { fetchStatementData } from "./statement.js";
 import { safeWrite } from "./writer.js";
 
 const log = logUtils.logger("mastra/genie");
@@ -133,7 +134,10 @@ type ToolExecuteCtx =
  * that means the Mastra plugin isn't running (e.g. a tool was
  * invoked outside the chat route).
  */
-function requireClient(ctx: ToolExecuteCtx, toolId: string): {
+function requireClient(
+  ctx: ToolExecuteCtx,
+  toolId: string,
+): {
   client: WorkspaceClient;
   requestContext: RequestContext;
 } {
@@ -145,69 +149,9 @@ function requireClient(ctx: ToolExecuteCtx, toolId: string): {
   }
   const user = requestContext.get(MASTRA_USER_KEY) as User | undefined;
   if (!user) {
-    throw new Error(
-      `${toolId}: no user on requestContext (MASTRA_USER_KEY not set)`,
-    );
+    throw new Error(`${toolId}: no user on requestContext (MASTRA_USER_KEY not set)`);
   }
   return { client: user.executionContext.client, requestContext };
-}
-
-/* ------------------------- helpers ------------------------- */
-
-/** Best-effort numeric coercion for Genie's all-strings cells. */
-function coerceCell(cell: string | null): unknown {
-  if (cell === null) return null;
-  if (/^-?\d+(\.\d+)?$/.test(cell)) {
-    const n = Number(cell);
-    if (Number.isFinite(n)) return n;
-  }
-  return cell;
-}
-
-/**
- * Fetch a single Genie statement's rows via the Statement
- * Execution API and reshape into the shared
- * {@link GenieDatasetData} shape (column array + row records).
- *
- * Optional `limit` slices the returned `rows` client-side so the
- * agent can scan a small sample without paging the full result
- * set into context. `rowCount` always reflects the upstream total
- * so callers know when it truncated.
- *
- * Exported so the plugin's `/statements/:statementId` route can
- * reuse the exact same fetch + coercion pipeline the `ask_genie`
- * / `get_statement` tools run, keeping LLM-side `get_statement`
- * output and UI-side `[data:<id>]` rendering shape-identical for
- * the same statement.
- */
-export async function fetchStatementData(
-  client: WorkspaceClient,
-  statementId: string,
-  options?: { limit?: number; signal?: AbortSignal },
-): Promise<GenieDatasetData> {
-  const ctx = options?.signal ? apiUtils.toContext(options.signal) : undefined;
-  const r = await client.statementExecution.getStatement(
-    { statement_id: statementId },
-    ctx,
-  );
-  const columns = (r.manifest?.schema?.columns ?? []).map((c) => c.name ?? "");
-  const dataArray = (r.result?.data_array ?? []) as Array<Array<string | null>>;
-  const sliced =
-    options?.limit !== undefined && options.limit >= 0
-      ? dataArray.slice(0, options.limit)
-      : dataArray;
-  const rows = sliced.map((row) => {
-    const obj: Record<string, unknown> = {};
-    columns.forEach((col, i) => {
-      obj[col] = coerceCell(row[i] ?? null);
-    });
-    return obj;
-  });
-  return {
-    columns,
-    rows,
-    rowCount: r.manifest?.total_row_count ?? dataArray.length,
-  };
 }
 
 /**
@@ -453,6 +397,25 @@ function aliasSuffix(alias: string): string {
 
 /* --------------------------- per-space tools --------------------------- */
 
+/**
+ * Drop `suggested_questions` attachments from a {@link GenieMessage}
+ * before handing it to the central LLM. Those entries already
+ * surface in the UI as one-tap pills via the writer's
+ * `suggested_questions` events (see `collectSuggestions` on the
+ * client); if we let them ride back in the tool result the LLM
+ * tends to quote them inline in its prose, double-showing the
+ * same questions and stepping on the dedicated suggestion UI.
+ * Query / text / row attachments are preserved so the model can
+ * still read `statement_id`, SQL, and the answer text.
+ */
+function stripSuggestedQuestions(message: GenieMessage): GenieMessage {
+  const attachments = message.attachments;
+  if (!attachments || attachments.length === 0) return message;
+  const filtered = attachments.filter((att) => !att.suggested_questions);
+  if (filtered.length === attachments.length) return message;
+  return { ...message, attachments: filtered };
+}
+
 function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string }) {
   const { spaceId, alias, hint } = opts;
   const toolId = `ask_genie${aliasSuffix(alias)}`;
@@ -460,19 +423,27 @@ function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string
   return createTool({
     id: toolId,
     description: stringUtils.toDescription(`
-      Send ONE focused natural-language question to the Genie space
-      "${alias}"${hintLine} and wait for the turn to complete.
+      Ask the Genie space "${alias}"${hintLine} ONE focused
+      natural-language sub-question and wait for the turn to
+      complete. Genie answers best when each call covers a
+      single metric / dimension / time window, so expect to
+      call this tool MULTIPLE TIMES per user turn (typically
+      two to six) and let the results from earlier calls inform
+      later ones - that's the normal pattern, not the exception.
+      Do NOT try to cram a multi-part question into a single
+      call; decompose first, then ask each piece.
+
       Returns the final \`GenieMessage\`. Rows are NOT included -
       the Genie wire response carries the \`statement_id\` for any
       SQL that ran (at \`message.query_result.statement_id\` or the
       first attachment's \`query.statement_id\`); call
-      \`get_statement\` with that id only when you need to read the
-      underlying values. If you just need to display results to the
-      user, embed a \`[data:<statement_id>]\` marker in your prose
-      instead - the host UI fetches and renders the rows on its
-      own. Wire events (status, thinking, sql) stream to the user
-      automatically. Call multiple times to gather different
-      angles before composing the final response.
+      \`get_statement\` with that id only when you need to read
+      the underlying values to reason about them. If you just
+      want to display the rows to the user, embed a
+      \`[data:<statement_id>]\` marker in your prose instead -
+      the host UI fetches and renders the rows on its own. Wire
+      events (status, thinking, sql) stream to the user
+      automatically while the call is in flight.
     `),
     inputSchema: z.object({
       question: z.string().min(1, "question is required"),
@@ -534,18 +505,10 @@ function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string
           ...(seedConversationId ? { conversationId: seedConversationId } : {}),
           ...(signal ? { context: signal } : {}),
         })) {
-          await safeWrite(log, writer, event);
-          // Wire events come in two flavors: the lifecycle `message`
-          // event embeds the raw `GenieMessage` (read its
-          // `conversation_id`), and the rest carry a flat
-          // `conversation_id` field at the top level. The terminal
-          // `result` event also carries the final `GenieMessage`
-          // inline so we can capture the snapshot without re-reading
-          // a buffered `message` event.
-          const eventConversationId =
-            event.type === "message"
-              ? event.message.conversation_id
-              : event.conversation_id;
+          if (event.type !== "message") {
+            await safeWrite(log, writer, event);
+          }
+          const eventConversationId = event.conversation_id;
           if (eventConversationId) {
             writeContextConversationId(requestContext, spaceId, eventConversationId);
           }
@@ -593,7 +556,7 @@ function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string
         readContextConversationId(requestContext, spaceId),
       );
 
-      return { message: finalMessage };
+      return { message: stripSuggestedQuestions(finalMessage) };
     },
   });
 }
@@ -605,8 +568,13 @@ function buildSpaceDescriptionTool(opts: { spaceId: string; alias: string }) {
     id: toolId,
     description: stringUtils.toDescription(`
       Return the Genie space "${alias}"'s title, description, and
-      warehouse id. Cheap. Call once at the start of a turn to
-      ground yourself in what data the space covers.
+      warehouse id. Cheap (single REST call, no LLM round-trip).
+      Call this FIRST on any user turn that's going to touch
+      \`ask_genie\`, unless the same description already landed
+      earlier in this conversation - the title + description tell
+      you what tables, metrics, and time windows the space
+      actually covers, which is what lets you decompose the
+      user's question into the right \`ask_genie\` sub-questions.
     `),
     inputSchema: z.object({}),
     outputSchema: z.object({
@@ -816,16 +784,31 @@ export const GENIE_INSTRUCTIONS = stringUtils.toDescription([
   {
     numbered: [
       `
-        Optionally call \`get_space_description\` to ground; reach for
-        \`get_space_serialized\` only when you need exact column / table
-        names the description doesn't expose.
+        Start by calling \`get_space_description\` to ground yourself
+        in what the space covers (tables, metrics, time windows),
+        unless you already saw the same description earlier in this
+        conversation. Reach for \`get_space_serialized\` only when you
+        need exact column / table identifiers the description doesn't
+        expose - it's a much larger payload.
       `,
       `
-        Decompose the question into focused sub-questions (one per
-        distinct metric / dimension / time window) and call
-        \`ask_genie\` once per sub-question. Two to six calls is
-        typical for a non-trivial question; one call is fine when the
-        question is genuinely atomic.
+        Decompose the user's question into focused sub-questions
+        BEFORE asking Genie anything. One sub-question per distinct
+        metric, dimension, or time window. Then call \`ask_genie\`
+        once per sub-question - usually two to six calls per turn,
+        and let earlier answers inform what you ask next. Cramming
+        a multi-part question into one \`ask_genie\` call almost
+        always produces a worse answer than asking the pieces
+        separately. Only collapse to a single call when the question
+        is genuinely atomic ("what was Q3 revenue?").
+
+        Worked example: user asks "How did SKU 1234's revenue
+        compare to its category average last quarter, and which
+        regions drove the gap?" Decomposes to: (a) \`ask_genie\`
+        for SKU 1234's Q3 revenue, (b) \`ask_genie\` for the
+        category-average Q3 revenue, (c) \`ask_genie\` for SKU
+        1234's Q3 revenue split by region. Three focused calls,
+        each grounded in the prior results.
       `,
       `
         Each \`ask_genie\` call returns the terminal \`GenieMessage\`.

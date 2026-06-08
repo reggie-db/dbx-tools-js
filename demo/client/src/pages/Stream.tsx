@@ -58,6 +58,17 @@ const isToolProgress = (value: unknown): value is ToolProgress =>
   value !== null &&
   typeof (value as { type?: unknown }).type === "string";
 
+const PLACEHOLDER_MARKER_RE =
+  /\[\[?([^\s:\]]+):(?![0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\]?\]?)([^\s\]]+)\]\]?/i;
+
+const replaceNextPlaceholder = (text: string, type: string, id: string): string => {
+  const marker = `[${type}:${id}]`;
+
+  return PLACEHOLDER_MARKER_RE.test(text)
+    ? text.replace(PLACEHOLDER_MARKER_RE, marker)
+    : `${text}${text.endsWith("\n") || text.length === 0 ? "" : "\n"}\n${marker}`;
+};
+
 const Stream = () => {
   const [model, setModel] = useState("");
   // `useMastraClient(model)` rebuilds the client with
@@ -131,9 +142,7 @@ const Stream = () => {
    */
   const processStream = useCallback(
     async (
-      stream: Awaited<
-        ReturnType<ReturnType<typeof mastraClient.getAgent>["stream"]>
-      >,
+      stream: Awaited<ReturnType<ReturnType<typeof mastraClient.getAgent>["stream"]>>,
       assistantId: string,
       runIdRef: { current: string | null },
     ) => {
@@ -175,9 +184,7 @@ const Stream = () => {
 
       // Patch the tool-event list for `assistantId` without clobbering
       // events that belong to other assistant turns in `messages`.
-      const patchToolEvents = (
-        update: (list: ToolEvent[]) => ToolEvent[],
-      ) => {
+      const patchToolEvents = (update: (list: ToolEvent[]) => ToolEvent[]) => {
         setToolEventsByMessage((prev) => ({
           ...prev,
           [assistantId]: update(prev[assistantId] ?? []),
@@ -275,6 +282,16 @@ const Stream = () => {
             case "tool-result": {
               const toolCallId = chunk.payload?.toolCallId;
               if (typeof toolCallId !== "string") break;
+              const toolName = chunk.payload?.toolName;
+              const chartId =
+                toolName === "prepare_chart" &&
+                typeof chunk.payload?.result?.chartId === "string"
+                  ? chunk.payload.result.chartId
+                  : null;
+              if (chartId) {
+                assistantText = replaceNextPlaceholder(assistantText, chartId);
+                upsertAssistant();
+              }
               // Genie tools (`ask_genie`, `get_statement`,
               // `prepare_chart`) stream their entire progress
               // surface through `ctx.writer` and arrive on this
@@ -282,9 +299,7 @@ const Stream = () => {
               // tool-result return value is opaque to the UI -
               // we only need it to flip the pill to `done`.
               patchToolEvents((list) =>
-                list.map((e) =>
-                  e.id === toolCallId ? { ...e, status: "done" } : e,
-                ),
+                list.map((e) => (e.id === toolCallId ? { ...e, status: "done" } : e)),
               );
               break;
             }
@@ -292,9 +307,7 @@ const Stream = () => {
               const toolCallId = chunk.payload?.toolCallId;
               if (typeof toolCallId !== "string") break;
               patchToolEvents((list) =>
-                list.map((e) =>
-                  e.id === toolCallId ? { ...e, status: "error" } : e,
-                ),
+                list.map((e) => (e.id === toolCallId ? { ...e, status: "error" } : e)),
               );
               break;
             }

@@ -485,6 +485,60 @@ describe("genieEventChat", () => {
     expect(events.some((e) => e.type === "result")).toBe(false);
   });
 
+  it("backfills message_id from the legacy id field when Genie ships only id", async () => {
+    // Regression: Genie's `startConversation` / `createMessage` inner
+    // `message` payload sometimes lands with `id` set but `message_id`
+    // undefined. Downstream subscribers (e.g. the demo UI's tool
+    // pill) group every event for a turn by `message_id`; if it's
+    // undefined on snapshot 1, the first batch of events lands in a
+    // separate "anon" bucket from the later snapshots and the turn
+    // looks split. `genieEventChat` defends against this by
+    // back-filling `message_id` from `id` before yielding.
+    const messages: GenieMessage[] = [
+      // Snapshot 1: only `id` populated, no `message_id`. Mimics the
+      // wire shape some Genie deployments emit on the first turn -
+      // the legacy `id` carries the canonical message id while the
+      // newer `message_id` field lands undefined.
+      {
+        ...makeMessage({ status: "SUBMITTED" }),
+        id: "msg-1",
+        message_id: undefined as never,
+      },
+      // Snapshot 2: terminal, both fields populated as normal.
+      { ...makeMessage({ status: "COMPLETED" }), id: "msg-1" },
+    ];
+    let i = 0;
+    const client = makeClient({
+      startConversation: async () => ({
+        conversation_id: "conv-1",
+        message_id: "msg-1",
+        message: messages[i++]!,
+      }),
+      getMessage: async () => messages[i++]!,
+    });
+
+    const events: GenieChatEvent[] = [];
+    for await (const event of genieEventChat(SPACE, "q?", {
+      workspaceClient: client,
+      pollIntervalMs: 0,
+    })) {
+      events.push(event);
+    }
+
+    // Every event tagged with a `message_id` field should carry it,
+    // even on the first snapshot where Genie only shipped `id`. The
+    // `message` event holds the snapshot inline, so check both its
+    // top-level field absence and its embedded message's
+    // back-filled `message_id`.
+    for (const e of events) {
+      if (e.type === "message") {
+        expect(e.message.message_id).toBe("msg-1");
+      } else if ("message_id" in e) {
+        expect(e.message_id).toBe("msg-1");
+      }
+    }
+  });
+
   it("rejects when the underlying SDK call throws", async () => {
     const boom = new Error("nope");
     const client = makeClient({

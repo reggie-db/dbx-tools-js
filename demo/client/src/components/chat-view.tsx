@@ -1121,7 +1121,7 @@ const CHART_HEIGHT_PX = 320;
  *     is needed above the chart frame.
  */
 const ChartSlot = ({ chartId }: { chartId: string }) => {
-  const { chart } = useChartFetch(chartId);
+  const { data: chart } = useChartFetch(chartId);
   if (!chart?.result) return null;
   return (
     <div className={CHART_FRAME_CLASSES}>
@@ -1209,6 +1209,24 @@ const DataSlot = ({ statementId }: { statementId: string }) => {
 const CHART_MARKER_RE = /\[\[?chart:([A-Za-z0-9_-]+)\]\]?/g;
 const DATA_MARKER_RE = /\[data:([A-Za-z0-9_-]+)\]/g;
 
+/**
+ * Trailing `[<non-whitespace-non-bracket>...` lookalike that
+ * hasn't received its closing `]` yet. While the model streams
+ * text-deltas a marker arrives across several chunks (`[chart`,
+ * `:abc-`, `def]`...), and rendering each interim state would
+ * briefly flash literal `[chart:abc-` text before the closing
+ * bracket finally swaps it for a chart slot.
+ *
+ * Hiding any trailing `[…` suffix keeps the prose stable: the
+ * partial is buffered until either a `]` (full marker -> embed
+ * slot) or whitespace (definitely not a marker -> plain prose)
+ * lands and the regex stops matching. Persisted transcripts
+ * never end mid-marker, so this is a no-op on reload.
+ */
+const INCOMPLETE_MARKER_TAIL_RE = /\[[^\s[\]]*$/;
+const stripIncompleteMarkerTail = (text: string): string =>
+  text.replace(INCOMPLETE_MARKER_TAIL_RE, "");
+
 /** One slice of an assistant message: prose, a chart slot, or a data slot. */
 type RenderSegment =
   | { kind: "text"; text: string }
@@ -1222,10 +1240,10 @@ type RenderSegment =
  * a `chart` segment ({@link ChartSlot}) or a `data` segment
  * ({@link DataSlot}); prose between markers stays as `text`.
  *
- * Marker matching is greedy and tolerant of partial-stream
- * chunks: an unclosed `[chart:abc` or `[data:abc` falls through
- * as plain text and matches once the closing bracket arrives in
- * a later chunk.
+ * Callers are responsible for buffering trailing partial markers
+ * (`[chart:abc` mid-stream) via {@link stripIncompleteMarkerTail}
+ * before splitting, so the prose doesn't flash the literal
+ * `[chart:` prefix before the closing bracket arrives.
  */
 const splitTextWithEmbeds = (text: string): RenderSegment[] => {
   type Hit = { start: number; end: number; seg: RenderSegment };
@@ -1284,7 +1302,7 @@ const splitTextWithEmbeds = (text: string): RenderSegment[] => {
  * dropped on reload so the prose around them stays clean.
  */
 const MarkdownWithEmbeds = ({ text }: { text: string }) => {
-  const segments = splitTextWithEmbeds(text);
+  const segments = splitTextWithEmbeds(stripIncompleteMarkerTail(text));
   return (
     <>
       {segments.map((seg, i) => {
@@ -1784,18 +1802,12 @@ export const ChatView = ({
 
   const lastMessage = messages.at(-1);
   const lastEvents = lastMessage ? toolEventsByMessage[lastMessage.id] : undefined;
-  // Two waiting states the chat-level indicator distinguishes:
-  //  - `isWaitingForFirstByte`: the user just sent a turn and no
-  //    content of any kind (text, reasoning, tool pill) has come
-  //    back yet. Show "Thinking..." prominently.
-  //  - `isWaitingForMoreContent`: streaming is still active but
-  //    the model isn't *currently* writing text - either a tool
-  //    is in flight or the model has finished a pill and hasn't
-  //    started the final response yet. Show "Working..." so the
-  //    user knows more is coming and a partial pill stack isn't
-  //    mistaken for the final answer. Suppressed while text is
-  //    actively streaming because the text itself is the
-  //    indicator; doubling it up reads as redundant noise.
+  // Single in-flight indicator for the whole turn: visible from the
+  // moment the agent run opens (`status === "submitted"`) until the
+  // server signals done (`status === "ready"` / `"error"`). The label
+  // refines based on what the turn is currently doing so the user
+  // gets a finer-grained hint without the spinner blinking on/off
+  // between text, tool, and "between-step" phases.
   const lastAssistantParts =
     lastMessage?.role === "assistant" ? lastMessage.parts : [];
   const lastAssistantHasContent =
@@ -1804,22 +1816,13 @@ export const ChatView = ({
         (p.type === "text" || p.type === "reasoning") &&
         Boolean((p as { text?: string }).text),
     ) || (lastEvents?.length ?? 0) > 0;
-  const lastPart = lastAssistantParts.at(-1);
-  const isTextStreaming =
-    status === "streaming" &&
-    lastPart?.type === "text" &&
-    Boolean((lastPart as { text?: string }).text);
   const hasRunningTool = (lastEvents ?? []).some((e) => e.status === "running");
-  const isStreamingTurn = status === "submitted" || status === "streaming";
-  const isWaitingForFirstByte = isStreamingTurn && !lastAssistantHasContent;
-  const isWaitingForMoreContent =
-    isStreamingTurn && lastAssistantHasContent && !isTextStreaming;
-  const waitingLabel = isWaitingForFirstByte
+  const showWaiting = status === "submitted" || status === "streaming";
+  const waitingLabel = !lastAssistantHasContent
     ? "Thinking..."
     : hasRunningTool
       ? "Working..."
       : "Composing response...";
-  const showWaiting = isWaitingForFirstByte || isWaitingForMoreContent;
 
   const showModelPicker = Boolean(models && models.length > 0 && onModelChange);
   const showClear = Boolean(onClear);

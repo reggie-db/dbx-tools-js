@@ -132,9 +132,7 @@ export async function* genieChat(
         // `conversation_id`, retrying would just open conversation
         // after conversation.
         if (ctx.attempt > 0) {
-          throw new Error(
-            "Genie did not return a conversation id; refusing to retry",
-          );
+          throw new Error("Genie did not return a conversation id; refusing to retry");
         }
         const startResponse = await client.genie.startConversation(
           { space_id, content },
@@ -151,11 +149,10 @@ export async function* genieChat(
         // ... }`). Strip `wait` here so downstream serializers
         // (e.g. yaml.stringify in poll-chat) don't choke on the
         // AsyncFunction value.
-        const { wait: _wait, ...createResponse } =
-          await client.genie.createMessage(
-            { space_id, conversation_id: conversationId, content },
-            context,
-          );
+        const { wait: _wait, ...createResponse } = await client.genie.createMessage(
+          { space_id, conversation_id: conversationId, content },
+          context,
+        );
         messageId = createResponse.message_id;
         return createResponse;
       }
@@ -249,8 +246,25 @@ export async function* genieEventChat(
   // as the grouping key for every event in this turn). The first
   // snapshot is the earliest point that id exists.
   let questionEmitted = false;
-  for await (const message of genieChat(space_id, content, options)) {
-    yield { type: "message", message };
+  for await (const rawMessage of genieChat(space_id, content, options)) {
+    // Normalize `message_id` from the legacy `id` field when Genie's
+    // wire response only populates one of them. The SDK schema marks
+    // both as required, but in practice the `startConversation` /
+    // `createMessage` inner `message` payload sometimes ships only
+    // `id` while the new `message_id` field lands undefined. Every
+    // downstream event detector keys grouping off `message_id`; the
+    // fallback keeps one Genie turn's events from splitting across
+    // an anon group + the real-id group when subscribers bucket by
+    // `message_id` (see `summarizeProgress` in the demo UI).
+    const message: GenieMessage = rawMessage.message_id
+      ? rawMessage
+      : { ...rawMessage, message_id: rawMessage.id };
+    yield {
+      type: "message",
+      space_id: message.space_id,
+      message_id: message.message_id,
+      message,
+    };
     if (!questionEmitted) {
       yield {
         type: "question",

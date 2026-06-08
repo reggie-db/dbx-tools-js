@@ -50,7 +50,6 @@ import type {
 } from "@dbx-tools/appkit-mastra-shared";
 import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
-import { fetchStatementData } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { buildObservability } from "./observability.js";
@@ -61,15 +60,11 @@ import {
   resolveServingConfig,
   type ServingEndpointSummary,
 } from "./serving.js";
-
-/**
- * Hard server-side cap on rows returned by
- * `GET /statements/:statementId`. Sized to keep responses small
- * enough for the inline table to render snappily; the host UI
- * surfaces a `truncated` flag whenever the upstream `rowCount`
- * exceeds this so end users know they're seeing a sample.
- */
-const STATEMENT_ROW_CAP = 500;
+import {
+  fetchStatementData,
+  isStatementNotFoundError,
+  STATEMENT_ROW_CAP,
+} from "./statement.js";
 
 const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;
@@ -370,7 +365,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     } catch (err) {
       // The Databricks SDK throws on 404; surface as `undefined`
       // so the route maps to a clean HTTP 404 instead of a 500.
-      if (isNotFoundError(err)) return undefined;
+      if (isStatementNotFoundError(err)) return undefined;
       throw err;
     }
   }
@@ -506,29 +501,6 @@ function parseStatementLimit(raw: unknown): number | undefined {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return undefined;
   return Math.floor(n);
-}
-
-/**
- * Structural 404 detector for the Databricks SDK. The SDK throws
- * either an `ApiError` (typed) or an `HttpError` (lower-level)
- * with `statusCode` / `code` 404 when the workspace can't find
- * a statement id; a loose `does not exist` message sniff
- * backstops shapes we haven't catalogued.
- *
- * Pulled into its own helper (vs reaching into `@databricks/sdk`
- * here) so the route stays decoupled from SDK error-class
- * identity and the conversion logic is testable in isolation.
- */
-function isNotFoundError(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { statusCode?: unknown; code?: unknown; message?: unknown };
-  if (e.statusCode === 404) return true;
-  if (e.code === 404) return true;
-  if (e.code === "RESOURCE_DOES_NOT_EXIST") return true;
-  if (typeof e.message === "string" && /does not exist|not found/i.test(e.message)) {
-    return true;
-  }
-  return false;
 }
 
 export const mastra = toPlugin(MastraPlugin);

@@ -367,7 +367,9 @@ export type QuestionEvent = z.infer<typeof QuestionEventSchema>;
  * fields) is exposed inline as `message`; consumers narrow on
  * `event.type === "message"` and reach for `event.message`.
  */
-export const MessageEventSchema = z.object({
+export const MessageEventSchema = GenieChatLocationSchema.omit({
+  attachment_id: true,
+}).extend({
   type: z.literal("message"),
   message: GenieMessageSchema,
 });

@@ -176,210 +176,240 @@ export const clearMastraHistory = async (
 };
 
 /**
- * Hook state returned by {@link useChartFetch}. Mirrors the cache
- * lifecycle inferred from the {@link Chart}'s two
- * optional fields:
- *
- *   - `chart === undefined` while the first request is in flight
- *     or after a 404 (the slot stays empty - markers that point
- *     at expired ids resolve as nothing rather than as broken
- *     placeholders).
- *   - `chart` with neither `result` nor `error` set: planner is
- *     still working - the hook keeps polling.
- *   - `chart.result` set: planner finished. The embedded `option`
- *     is a full Echarts spec.
- *   - `chart.error` set: planner / data fetch failed; the slot
- *     can surface `chart.error` directly.
+ * Hook state for {@link useByIdFetch}. Generic over the
+ * resource's payload shape; consumers read `data` / `loading` /
+ * `error` exactly as the chart and statement slots do. A 404 on
+ * the server resolves as `data === undefined` with `error ===
+ * null` so the slot renders nothing (matches "expired /
+ * unknown id" semantics across all by-id resources).
  */
-export interface ChartFetchState {
-  chart: Chart | undefined;
+export interface ByIdFetchState<T> {
+  data: T | undefined;
   loading: boolean;
   error: Error | null;
 }
 
 /**
- * Long-poll the Mastra plugin's `/charts/:chartId` endpoint until
- * the cache entry settles (`result` or `error` set), then stop.
+ * Module-level by-URL cache for `/<resource>/:id` fetches.
  *
- * Resolution flow:
+ * Statements are immutable by construction (a `statement_id`
+ * always materializes the same rows), and a settled chart entry
+ * (`result` or `error` set) never changes either, so caching for
+ * the tab's lifetime is safe. The cache solves two problems the
+ * chat UI hits constantly:
  *
- *   1. Initial fetch with a 60s long-poll budget. The server
- *      blocks until the entry settles or the budget elapses.
- *   2. If the entry comes back still-processing (neither `result`
- *      nor `error` set), the hook re-fires after a short backoff.
- *      This handles the race where the planner needs more than one
- *      server-side budget.
- *   3. Settled entries (`result` or `error` set) are terminal -
- *      the hook stops fetching.
- *   4. A 404 is also terminal - we treat the chartId as missing
- *      (TTL elapsed, never minted) and leave `chart` undefined.
+ *   1. Re-mount churn: streaming assistant text re-renders the
+ *      markdown on every chunk, React StrictMode double-mounts
+ *      effects in dev, and any parent re-render can shift slot
+ *      identity. Without a cache, each remount cancels the
+ *      in-flight `fetch()` and starts another. With it,
+ *      remounts hit the cache synchronously - zero network,
+ *      zero spinner flash.
+ *   2. Concurrent consumers: two slots pointing at the same id
+ *      (e.g. user toggles a thread that already rendered the
+ *      same chart in history) dedupe to a single in-flight
+ *      promise instead of racing parallel fetches.
  *
- * The returned `error` only surfaces unexpected network / parse
- * failures; a successful `error`-field entry is exposed via
- * `chart.error` so the UI distinguishes "we couldn't reach the
- * server" from "the server told us the chart failed".
+ * Two-state entry shape: `pending` while a fetch is in flight,
+ * `ready` once it settles (including 404 -> `data: undefined`).
+ * Errors are NOT cached - the entry is deleted on rejection so
+ * the next consumer retries. Per-consumer cancellation only
+ * detaches that consumer from the promise; the fetch keeps
+ * running for any other live consumer. Page reload clears
+ * everything.
  */
-export const useChartFetch = (chartId: string | undefined): ChartFetchState => {
-  const { chartsPathTemplate } = useMastraConfig();
-  const [chart, setChart] = useState<Chart | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+type FetchCacheEntry<T> =
+  | { kind: "pending"; promise: Promise<T | undefined> }
+  | { kind: "ready"; data: T | undefined };
 
-  useEffect(() => {
-    if (!chartId) {
-      setChart(undefined);
-      setLoading(false);
-      setError(null);
-      return;
+const fetchCache = new Map<string, FetchCacheEntry<unknown>>();
+
+/**
+ * Resolve `url` through the by-id cache. See {@link fetchCache}
+ * for the lifecycle. `isTerminal` lets callers opt out of
+ * caching responses that aren't actually settled yet (e.g. a
+ * chart whose planner is still working): only `true` answers
+ * land as `kind: "ready"`, everything else is dropped so the
+ * next mount refetches.
+ *
+ * 404s always cache (as `data: undefined`) - unknown ids stay
+ * unknown for the tab's lifetime, mirroring the slot semantics
+ * ("expired / never minted -> render nothing").
+ */
+async function fetchByIdCached<T>(
+  url: string,
+  isTerminal: (data: T) => boolean,
+): Promise<T | undefined> {
+  const existing = fetchCache.get(url) as FetchCacheEntry<T> | undefined;
+  if (existing?.kind === "ready") return existing.data;
+  if (existing?.kind === "pending") return existing.promise;
+
+  const promise = (async (): Promise<T | undefined> => {
+    const res = await fetch(url, { credentials: "include" });
+    if (res.status === 404) {
+      fetchCache.set(url, { kind: "ready", data: undefined });
+      return undefined;
     }
-    let cancelled = false;
-    const controller = new AbortController();
-    setChart(undefined);
-    setError(null);
-    setLoading(true);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as T;
+    if (isTerminal(data)) {
+      fetchCache.set(url, { kind: "ready", data });
+    } else {
+      fetchCache.delete(url);
+    }
+    return data;
+  })().catch((err: unknown) => {
+    fetchCache.delete(url);
+    throw err;
+  });
 
-    const poll = async (): Promise<void> => {
-      const url = chartUrl({ chartsPathTemplate }, chartId);
-      while (!cancelled) {
-        let res: Response;
-        try {
-          res = await fetch(url, {
-            credentials: "include",
-            signal: controller.signal,
-          });
-        } catch (e) {
-          if (cancelled || controller.signal.aborted) return;
-          setError(e instanceof Error ? e : new Error(String(e)));
-          setLoading(false);
-          return;
-        }
-        if (cancelled) return;
-        if (res.status === 404) {
-          setChart(undefined);
-          setLoading(false);
-          return;
-        }
-        if (!res.ok) {
-          setError(new Error(`HTTP ${res.status}`));
-          setLoading(false);
-          return;
-        }
-        const payload = (await res.json()) as Chart;
-        if (cancelled) return;
-        setChart(payload);
-        if (payload.result !== undefined || payload.error !== undefined) {
-          setLoading(false);
-          return;
-        }
-      }
-    };
-    void poll();
+  fetchCache.set(url, { kind: "pending", promise } as FetchCacheEntry<unknown>);
+  return promise;
+}
 
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [chartId, chartsPathTemplate]);
-
-  return { chart, loading, error };
-};
-
-/**
- * Hook state returned by {@link useStatementFetch}. Mirrors a
- * single-shot fetch (no long-polling needed - the agent only
- * embeds `[data:<id>]` markers for statements that have already
- * terminated upstream): one of `data` / `error` settles and the
- * hook stops.
- *
- *   - `data === undefined`, `loading === true`: first fetch in
- *     flight.
- *   - `data === undefined`, `loading === false`, `error === null`:
- *     404 - the statement id is unknown or no longer resolvable
- *     through the workspace; the slot should render nothing.
- *   - `data` set: rows are ready to render. `data.truncated`
- *     signals that the server clipped to its row cap.
- *   - `error` set: an unexpected network / parse failure.
- *     Distinguishes "we couldn't reach the server" from "the
- *     server told us the statement is missing".
- */
-export interface StatementFetchState {
-  data: StatementData | undefined;
-  loading: boolean;
-  error: Error | null;
+/** Synchronous cache peek used to seed initial state on mount. */
+function readFetchCache<T>(url: string | undefined): T | undefined {
+  if (!url) return undefined;
+  const e = fetchCache.get(url) as FetchCacheEntry<T> | undefined;
+  return e?.kind === "ready" ? e.data : undefined;
 }
 
 /**
- * Fetch the rows of a Databricks statement by id from the Mastra
- * plugin's `/statements/:statementId` endpoint. Used by the chat
- * UI to resolve `[data:<statement_id>]` markers the agent
- * embeds in prose.
+ * React hook for any resource the Mastra plugin exposes as
+ * `/<resource>/:id`. Powers both the chart and statement slots
+ * in the chat UI; the slot-specific hooks below are thin
+ * adapters that pick the right path template and terminal check.
  *
- * Resolution flow:
- *
- *   1. Single OBO-scoped fetch via the published
- *      `statementsPathTemplate`. The server reuses the
- *      `get_statement` tool's fetch+coercion pipeline so the
- *      shape matches what the LLM saw for the same statement.
- *   2. 200 -> `data` settles; render the rows.
- *   3. 404 -> `data` stays `undefined`; the slot renders
- *      nothing (matches how unknown chartIds resolve).
- *   4. Any other failure -> `error` settles for the caller to
- *      surface or swallow.
- *
- * Cookies travel with the request so the per-session OBO token
- * scopes the workspace fetch.
+ * Cached through {@link fetchByIdCached} - re-mounts (StrictMode,
+ * markdown re-parses during streaming, parent re-renders) hit
+ * the cache synchronously instead of re-firing the network call.
+ * Per-consumer unmount only detaches that consumer from the
+ * shared promise; the underlying fetch keeps running for any
+ * other live consumer.
  */
-export const useStatementFetch = (
-  statementId: string | undefined,
-): StatementFetchState => {
-  const { statementsPathTemplate } = useMastraConfig();
-  const [data, setData] = useState<StatementData | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
+function useByIdFetch<T>(
+  id: string | undefined,
+  url: string | undefined,
+  isTerminal: (data: T) => boolean,
+): ByIdFetchState<T> {
+  const [data, setData] = useState<T | undefined>(() => readFetchCache<T>(url));
+  const [loading, setLoading] = useState(
+    () => id !== undefined && url !== undefined && readFetchCache<T>(url) === undefined,
+  );
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (!statementId) {
+    if (!id || !url) {
       setData(undefined);
       setLoading(false);
       setError(null);
       return;
     }
+    const cached = readFetchCache<T>(url);
+    if (cached !== undefined) {
+      setData(cached);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
-    const controller = new AbortController();
     setData(undefined);
     setError(null);
     setLoading(true);
 
-    const url = statementUrl({ statementsPathTemplate }, statementId);
-    fetch(url, { credentials: "include", signal: controller.signal })
-      .then(async (res) => {
-        if (cancelled) return;
-        if (res.status === 404) {
-          setData(undefined);
-          setLoading(false);
-          return;
-        }
-        if (!res.ok) {
-          setError(new Error(`HTTP ${res.status}`));
-          setLoading(false);
-          return;
-        }
-        const payload = (await res.json()) as StatementData;
+    fetchByIdCached<T>(url, isTerminal)
+      .then((payload) => {
         if (cancelled) return;
         setData(payload);
         setLoading(false);
       })
       .catch((e: unknown) => {
-        if (cancelled || controller.signal.aborted) return;
+        if (cancelled) return;
         setError(e instanceof Error ? e : new Error(String(e)));
         setLoading(false);
       });
 
     return () => {
       cancelled = true;
-      controller.abort();
     };
-  }, [statementId, statementsPathTemplate]);
+  }, [id, url, isTerminal]);
 
   return { data, loading, error };
+}
+
+/**
+ * `isTerminal` for {@link useChartFetch}. A chart entry is
+ * "ready to cache forever" only once the planner has either
+ * landed an Echarts spec (`result`) or surfaced a failure
+ * (`error`). Entries with neither field are pathologically slow
+ * planners that exceeded the server's long-poll budget; leaving
+ * them uncached means a re-mount can retry instead of being
+ * stuck on a stale "in-flight" snapshot for the tab's lifetime.
+ *
+ * Module-level so the {@link useByIdFetch} effect's dep array
+ * stays stable - inlining a fresh closure would refire the
+ * effect on every render.
+ */
+const chartIsTerminal = (c: Chart): boolean =>
+  c.result !== undefined || c.error !== undefined;
+
+/**
+ * `isTerminal` for {@link useStatementFetch}. A statement
+ * response is always terminal - the Statement Execution API
+ * returns the rows in one shot, so any 200 is cacheable.
+ */
+const statementIsTerminal = (_: StatementData): boolean => true;
+
+/**
+ * Fetch a chart by id from the Mastra plugin's
+ * `/charts/:chartId` endpoint. Used by the chat UI to resolve
+ * `[chart:<chartId>]` markers the agent embeds in prose.
+ *
+ * The chart planner runs in the background after `prepare_chart`
+ * mints the id, so the server long-polls the cache until the
+ * entry settles (`result` or `error` set) and returns the final
+ * payload in a single response. The hook performs ONE cached
+ * fetch and surfaces:
+ *
+ *   - `data.result` set → render the Echarts spec.
+ *   - `data.error` set → surface via `data.error`.
+ *   - `data` with neither field (planner exceeded the server's
+ *     long-poll budget) → render nothing; this answer is NOT
+ *     cached, so a re-mount will retry.
+ *   - `data === undefined` (404) → unknown / expired id; render
+ *     nothing.
+ */
+export const useChartFetch = (
+  chartId: string | undefined,
+): ByIdFetchState<Chart> => {
+  const { chartsPathTemplate } = useMastraConfig();
+  const url = useMemo(
+    () => (chartId ? chartUrl({ chartsPathTemplate }, chartId) : undefined),
+    [chartId, chartsPathTemplate],
+  );
+  return useByIdFetch<Chart>(chartId, url, chartIsTerminal);
+};
+
+/**
+ * Fetch the rows of a Databricks statement by id from the Mastra
+ * plugin's `/statements/:statementId` endpoint. Used by the chat
+ * UI to resolve `[data:<statement_id>]` markers the agent embeds
+ * in prose. Server-side, the route reuses the `get_statement`
+ * tool's fetch + coercion pipeline so the shape matches what the
+ * LLM saw for the same statement; `data.truncated` signals the
+ * server clipped to its row cap. Cached for the tab's lifetime
+ * because a `statement_id` materializes the same rows forever.
+ */
+export const useStatementFetch = (
+  statementId: string | undefined,
+): ByIdFetchState<StatementData> => {
+  const { statementsPathTemplate } = useMastraConfig();
+  const url = useMemo(
+    () =>
+      statementId
+        ? statementUrl({ statementsPathTemplate }, statementId)
+        : undefined,
+    [statementId, statementsPathTemplate],
+  );
+  return useByIdFetch<StatementData>(statementId, url, statementIsTerminal);
 };

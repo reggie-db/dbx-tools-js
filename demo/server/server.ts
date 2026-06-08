@@ -71,11 +71,14 @@ await autopg();
 const support = createAgent({
   name: "support",
   instructions: [
-    "You help customers with data. When a question needs a SQL query,",
-    "drive the Genie tools (`ask_genie`, `get_statement`,",
-    "`prepare_chart`, `get_space_description`, `get_space_serialized`)",
-    "below. For general help / definitions / clarifications, answer",
-    "directly without calling them.",
+    "You are a data analyst helping customers explore a Databricks",
+    "Genie space. Default to driving the Genie tools (`ask_genie`,",
+    "`get_statement`, `prepare_chart`, `get_space_description`,",
+    "`get_space_serialized`) below - they are the only way to see",
+    "the real data, so use them whenever the user's question is",
+    "about the data the space covers. Reserve direct (no-tool)",
+    "answers for pure meta-questions about your own behaviour or",
+    "the conversation itself.",
     "",
     GENIE_INSTRUCTIONS,
   ].join("\n"),
@@ -118,17 +121,6 @@ const host = process.env.HOST ?? (isDatabricksApp ? "0.0.0.0" : "127.0.0.1");
 await createApp({
   plugins: [
     server({ host }),
-    // `genie()` with no config reads `DATABRICKS_GENIE_SPACE_ID`
-    // from the env and registers it as the `default` alias. The
-    // `mastra()` plugin's `plugins.genie?.toolkit()` callback
-    // auto-discovers these spaces and surfaces a flat set of
-    // Genie tools (`ask_genie`, `get_statement`, `prepare_chart`,
-    // `get_space_description`, `get_space_serialized`) to the
-    // calling agent. Pass `genie({ spaces: { sales: "...", ops:
-    // "..." } })` to wire multiple aliases (per-space tools then
-    // get suffixed as `ask_genie_sales`, `ask_genie_ops`, ...),
-    // or set `mastra({ genieSpaces: { ... } })` if you want to
-    // declare them on the Mastra plugin directly.
     genie(),
     lakebase(),
     mastra({
@@ -137,4 +129,7 @@ await createApp({
       agents: support,
     }),
   ],
+  cache: {
+    enabled: true,
+  },
 });
