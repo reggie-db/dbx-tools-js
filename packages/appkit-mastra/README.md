@@ -102,18 +102,18 @@ The plugin is opinionated about what "no config" should mean. Everything
 below can be overridden, but the bare path works:
 
 
-| Scenario                                            | What you get                                                                                                                                                                                                                                                                         |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mastra()`                                          | One built-in `default` analyst agent, model from `/serving-endpoints`; memory + storage auto-on if the `lakebase` plugin is registered                                                                                                                                               |
-| `mastra({ agents: def })`                           | Single-agent shorthand - `def` is registered and marked as default                                                                                                                                                                                                                   |
-| `mastra({ agents: [def1, def2] })`                  | Array shorthand - keys come from each `def.name` (or `agent_<i>`); first one is default                                                                                                                                                                                              |
-| `mastra({ agents: { x: def, y: def }})`             | Record - keys are the registered ids; first key is the default                                                                                                                                                                                                                       |
-| No `defaultAgent` set                               | First registered agent wins                                                                                                                                                                                                                                                          |
+| Scenario                                            | What you get                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mastra()`                                          | One built-in `default` analyst agent, model from `/serving-endpoints`; memory + storage auto-on if the `lakebase` plugin is registered                                                                                                                                                                                               |
+| `mastra({ agents: def })`                           | Single-agent shorthand - `def` is registered and marked as default                                                                                                                                                                                                                                                                   |
+| `mastra({ agents: [def1, def2] })`                  | Array shorthand - keys come from each `def.name` (or `agent_<i>`); first one is default                                                                                                                                                                                                                                              |
+| `mastra({ agents: { x: def, y: def }})`             | Record - keys are the registered ids; first key is the default                                                                                                                                                                                                                                                                       |
+| No `defaultAgent` set                               | First registered agent wins                                                                                                                                                                                                                                                                                                          |
 | No `model` on an agent                              | Falls back to `config.defaultModel`, then `DATABRICKS_SERVING_ENDPOINT_NAME`, then walks `defaultModelFallbacks` (Thinking → Balanced → Fast tiers, Claude ↔ GPT ↔ Gemini interleaved within each, then open-weights) and picks the first endpoint actually present in the workspace |
-| No `name` on a definition                           | Uses the registry key as `Agent.name`                                                                                                                                                                                                                                                |
-| No `tools` on an agent                              | Inherits plugin-level `config.tools` ambient set (if any)                                                                                                                                                                                                                            |
-| No `storage` / `memory` and `lakebase()` registered | Both auto-default to `true`. Pass `false` (or a custom config object) on the plugin or an agent to opt out / override.                                                                                                                                                               |
-| `storage` / `memory` on an agent                    | Cascades from plugin: storage namespaces **per-agent** (`schemaName: "mastra_<agentId>"`), vector recall is **shared** across agents on one `PgVector` singleton.                                                                                                                    |
+| No `name` on a definition                           | Uses the registry key as `Agent.name`                                                                                                                                                                                                                                                                                                |
+| No `tools` on an agent                              | Inherits plugin-level `config.tools` ambient set (if any)                                                                                                                                                                                                                                                                            |
+| No `storage` / `memory` and `lakebase()` registered | Both auto-default to `true`. Pass `false` (or a custom config object) on the plugin or an agent to opt out / override.                                                                                                                                                                                                               |
+| `storage` / `memory` on an agent                    | Cascades from plugin: storage namespaces **per-agent** (`schemaName: "mastra_<agentId>"`), vector recall is **shared** across agents on one `PgVector` singleton.                                                                                                                                                                    |
 
 
 Every field on `MastraAgentDefinition`:
@@ -278,34 +278,27 @@ set, an API response, a hand-built array, etc.).
 
 #### How it works
 
-`render_data` is a thin wrapper around `runChartPlanner`, a
-pure async function that takes a dataset and returns a fully-
-resolved Echarts `EChartsOption`. No id-then-promise dance, no
-background work: the planner runs inline, and the tool emits a
-single chart event with everything attached.
+`render_data` is a thin wrapper around `prepareChart`, the same
+orchestrator the Genie `prepare_chart` tool uses. It mints a
+`chartId` synchronously, caches an empty placeholder, and kicks
+off the chart-planner in the background. The tool returns just
+`{ chartId }` so the model can embed `[chart:<chartId>]` in
+prose immediately without blocking on chart generation.
 
 1. Mint a short `chartId` (8 hex chars).
-2. `await runChartPlanner({ title, description?, data })`. The
-   planner is its own Mastra `Agent` (`modelForTier(ModelTier.Fast)`)
-   whose `structuredOutput` schema is a compact "chart plan"
-   (chart type + axis labels + categories + series); the helper
-   expands the plan into an `EChartsOption` JSON.
-3. Push one `{ type: "chart", chartId, title, description?, data,
-   option }` event to `ctx.writer`. The chat client's
-   `<ChartSlot>` mounts straight to the rendered Echarts
-   visualisation - no skeleton frame, because the option arrives
-   in the same event as the dataset.
-4. If the planner throws, the tool emits a `type: "error"` writer
-   event instead. The slot transitions to a "couldn't render
-   chart" fallback frame.
+2. Cache an empty `{ chartId }` placeholder so the first
+   `fetchChart` call always sees an entry (no spurious 404 race).
+3. Fire-and-forget: resolve the dataset (trivial for
+   `render_data` since the rows are already in hand) and run
+   `runChartPlanner` in the background. On success the cache
+   entry settles with `{ chartId, result }` (containing the
+   `chartType` and full `EChartsOption`). On failure it settles
+   with `{ chartId, error }`.
+4. Return `{ chartId }` to the LLM immediately.
 
-Planner latency lands under the tool's trace span (it's
-`await`ed directly), and the LLM-bound payload is just
-`{ chartId }` so the model's context stays flat regardless of
-dataset size. The Genie agent reuses `runChartPlanner` the
-same way to embed charts in its structured summary, so the
-backbone is shared without coupling the two paths to a
-fire-and-forget writer contract.
+The host UI resolves `[chart:<chartId>]` markers by hitting
+the plugin's `GET /charts/:chartId` route, which long-polls
+until the entry settles or the server-side timeout elapses.
 
 #### Inline placement contract
 
@@ -328,23 +321,22 @@ Service time is the outlier at 162.5s, up from a target of 150s.
 
 The chat client splits the assistant text on these markers and
 drops a `<ChartSlot>` in at each spot. A marker that arrives
-before its `chart` event (rare; only during fast streaming) shows
-a "Queueing chart" skeleton; a chart whose marker the model
-forgot to place falls through to the end of the reply as a
-fallback. All three states (queueing, rendering, rendered) share
-the same fixed-height frame so the layout doesn't jump as
-charts resolve.
+before its chart settles in the cache shows a "Queueing chart"
+skeleton; a chart whose marker the model forgot to place falls
+through to the end of the reply as a fallback. All three states
+(queueing, rendering, rendered) share the same fixed-height
+frame so the layout doesn't jump as charts resolve.
 
 #### Trade-offs
 
-- Both events ride the writer, not the persisted tool-result, so
-  charts don't re-render after a hard reload. The model can call
-  `render_data` again (or re-ask Genie) on the next turn if the
-  user wants the chart back.
+- Chart entries live in the cache with a 1h TTL. After expiry
+  the `/charts/:chartId` route returns 404. The model can call
+  `render_data` again on the next turn if the user wants the
+  chart back.
 - The chart-planner is a separate model call per dataset (fast
   tier, but still ~1-3s each). For an N-chart turn, latency is
-  `Genie + max(planners)` since the planners run concurrently
-  with the rest of Genie's stream and with each other.
+  `max(planners)` since the planners run concurrently in the
+  background and the tool returns immediately.
 
 Plugins that aren't registered (or don't implement the toolkit
 interface) resolve to `undefined` at runtime, so guard with `?.` /
@@ -557,192 +549,4 @@ Same payload from a sibling plugin or script (no HTTP round-trip):
 import { appkitUtils } from "@dbx-tools/shared";
 import { mastra } from "@dbx-tools/appkit-mastra";
 
-const m = appkitUtils.require(this.context, mastra).exports();
-const endpoints = await m.asUser(req).listModels(); // user-scoped
-m.clearModelsCache(); // force the next call to re-fetch
-```
-
-### Per-request model override
-
-Any in-flight request can pick a different backing endpoint without
-redeploying. Sources, checked in priority order:
-
-
-| Source                    | Example                                          |
-| ------------------------- | ------------------------------------------------ |
-| `X-Mastra-Model` header   | `curl -H 'X-Mastra-Model: claude-haiku' ...`     |
-| `?model=` query parameter | `POST /api/mastra/route/chat?model=llama-70b`    |
-| Body `model` or `modelId` | `{ "messages": [...], "model": "claude-haiku" }` |
-
-
-The override flows through the same fuzzy matcher as static ids, so
-`X-Mastra-Model: claude sonnet` still snaps to
-`databricks-claude-sonnet-4-6`. Set `modelOverride: false` on the
-plugin config to disable the override path entirely (e.g. for a
-multi-tenant deployment where untrusted clients shouldn't pick the
-endpoint).
-
-## Memory + storage
-
-Memory and storage are split into two independent knobs and both auto-on
-the moment the `lakebase` plugin is registered. Bare `mastra()` next to
-`lakebase()` already gets you per-agent threads + shared semantic recall;
-zero extra config required.
-
-
-| Knob      | Default when `lakebase()` is registered                                                                           | What it backs                                                                                  |
-| --------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `storage` | **Per-agent** `PostgresStore` namespaced by `schemaName: "mastra_<agentId>"` so threads + messages stay isolated, plus a Mastra-instance-level `PostgresStore` in schema `mastra_instance`. | Mastra threads, messages, working memory; Mastra-instance-level workflow snapshots (`requireApproval` / `agent.resumeStream()`). |
-| `memory`  | **Shared singleton** `PgVector` across every agent (cross-agent semantic recall on one index).                    | RAG-style recall over past messages via FastEmbed vectors.                                     |
-
-
-Override either at the plugin level, the agent level, or both. The agent
-value wins when set; otherwise the plugin value cascades.
-
-```ts
-mastra({
-  // Plugin defaults. Either field becomes the cascading baseline.
-  // Omit entirely to inherit "auto-on when lakebase is present".
-  storage: true,      // (default behavior when lakebase is registered)
-  memory: true,       // (default behavior when lakebase is registered)
-
-  agents: {
-    analyst: createAgent({
-      instructions: "...",
-      // No overrides: inherits the auto-on defaults above.
-      //   - threads stored under schema "mastra_analyst"
-      //   - recalls from the shared vector index
-    }),
-
-    router: createAgent({
-      instructions: "Stateless routing agent.",
-      // Opt out of both for a fully stateless agent.
-      storage: false,
-      memory: false,
-    }),
-
-    legal: createAgent({
-      instructions: "Compliance-bounded assistant.",
-      // Private vector index so legal's recall doesn't bleed into
-      // analyst's. Threads still get their own per-agent schema.
-      memory: { connectionString: process.env.LEGAL_PG_URL!, /* ... */ },
-    }),
-
-    archive: createAgent({
-      instructions: "Read-only archive viewer.",
-      // Pin to a specific schema (e.g. shared with another service).
-      storage: {
-        schemaName: "shared_history",
-        pool: archivePool,
-      },
-    }),
-  },
-});
-```
-
-Notes:
-
-- `PostgresStore` runs `CREATE SCHEMA IF NOT EXISTS` on `init()`, so
-per-agent schemas (and the shared `mastra_instance` schema) spring
-into existence the first time the agent saves anything. No bundle /
-migration step required.
-- The `mastra_instance` schema exists so that Mastra-instance-level
-artifacts (workflow snapshots used by `agent.resumeStream()`,
-`requireApproval` flows, etc.) live in their own namespace and never
-collide with per-agent thread / message tables. Disable the instance
-store by setting `storage: false` at plugin level - approval-gated
-tool calls will then error on resume.
-- Disabling `lakebase()` from your plugin list while leaving `storage` /
-`memory` truthy fails fast at setup with a clear "lakebase plugin not
-registered" error.
-- The `lakebase` plugin is declared as a **required** resource only when
-`storage` / `memory` is explicitly truthy at registration time. Auto-on
-defaults activate inside `setup:complete`, after lakebase is already
-proven to be present.
-
-## Runtime exports
-
-Other plugins / route handlers can introspect the registry via the
-`exports()` surface, modeled on AppKit's:
-
-```ts
-import { appkitUtils } from "@dbx-tools/shared";
-import { mastra } from "@dbx-tools/appkit-mastra";
-
-const m = appkitUtils.require(this.context, mastra).exports();
-m.list(); // ["analyst", "helper"]
-m.get("analyst"); // Agent | null
-m.getDefault(); // Agent | null
-m.getMastra(); // underlying Mastra instance (advanced)
-m.listModels(); // Promise<ServingEndpointSummary[]> - cached + OBO when wrapped with asUser(req)
-m.clearModelsCache(); // force the next listModels() to re-fetch
-```
-
-## Client wiring
-
-`clientConfig()` publishes the mount paths, default agent id, and the
-full registry to `usePluginClientConfig("mastra")` so the React client
-never has to hardcode `/api/mastra` or rely on `DEFAULT_AGENT_ID`
-constants. A tiny URL helper (`chatUrl`) and the `MastraClientConfig`
-type ship from the standalone `@dbx-tools/appkit-mastra-shared`
-package; that package is pure (no `pg` / `fastembed` / Mastra
-dependencies) so it imports cleanly into Vite / Webpack / esbuild
-builds.
-
-```tsx
-import { usePluginClientConfig } from "@databricks/appkit-ui/react";
-import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { useMemo, useState } from "react";
-
-function Chat() {
-  const config = usePluginClientConfig<MastraClientConfig>("mastra");
-  const [selected, setSelected] = useState<string>();
-  const api = chatUrl(config, selected); // defaults to config.defaultAgent
-
-  const transport = useMemo(() => new DefaultChatTransport({ api }), [api]);
-  const { messages, sendMessage } = useChat({ transport });
-
-  return (
-    <>
-      <select onChange={(e) => setSelected(e.target.value)}>
-        {config.agents.map((id) => (
-          <option key={id} value={id}>
-            {id}
-          </option>
-        ))}
-      </select>
-      {/* render messages, etc. */}
-    </>
-  );
-}
-```
-
-`MastraClientConfig` fields (all derived from the server-side plugin
-mount, so a custom `mastra({ name: "myMastra" })` rewrites every path):
-
-
-| Field                 | Example                                | Description                                                          |
-| --------------------- | -------------------------------------- | -------------------------------------------------------------------- |
-| `basePath`            | `"/api/mastra"`                        | Plugin mount path.                                                   |
-| `chatPath`            | `"/api/mastra/route/chat"`             | Default-agent chat URL. Use `chatUrl(config)` to get it.             |
-| `chatPathTemplate`    | `"/api/mastra/route/chat/:agentId"`    | OpenAPI-style template for tools / docs.                             |
-| `modelsPath`          | `"/api/mastra/models"`                 | `GET` cached endpoint catalogue.                                     |
-| `historyPath`         | `"/api/mastra/route/history"`          | Default-agent thread history. Use `historyUrl(config, opts)`.        |
-| `historyPathTemplate` | `"/api/mastra/route/history/:agentId"` | OpenAPI-style template for tools / docs.                             |
-| `defaultAgent`        | `"analyst"`                            | Agent id `chatRoute` binds to when none is supplied.                 |
-| `agents`              | `["analyst", "helper"]`                | Every registered agent id in order.                                  |
-
-
-`chatUrl(config, agentId?)` returns `config.chatPath` for the default
-agent (the registered `chatRoute` mount that omits `:agentId`), and
-`${config.chatPath}/${encodeURIComponent(agentId)}` otherwise. The
-sibling `historyUrl(config, { agentId?, page?, perPage? })` mirrors
-that pattern for the `/history` endpoint and appends pagination
-query parameters when provided. Both are pure functions: no React,
-no hooks, safe in service workers and SSR.
-
-## License
-
-Apache-2.0
+const m = appkitUtils.require(this.context, ma

@@ -120,10 +120,7 @@ export function isStatementNotFoundError(err: unknown): boolean {
     if (err.errorCode === "RESOURCE_DOES_NOT_EXIST") return true;
   }
   if (err instanceof HttpError && err.code === 404) return true;
-  if (
-    err instanceof Error &&
-    /does not exist|not found/i.test(err.message)
-  ) {
+  if (err instanceof Error && /does not exist|not found/i.test(err.message)) {
     return true;
   }
   return false;

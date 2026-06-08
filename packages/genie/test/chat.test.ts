@@ -22,10 +22,7 @@ import { describe, expect, it, mock } from "bun:test";
 
 import type { WorkspaceClient } from "@databricks/sdk-experimental";
 
-import type {
-  GenieChatEvent,
-  GenieMessage,
-} from "@dbx-tools/genie-shared";
+import type { GenieChatEvent, GenieMessage } from "@dbx-tools/genie-shared";
 import { genieChat, genieEventChat } from "../src/chat.js";
 
 /* ----------------------------- fixtures ---------------------------- */
@@ -48,10 +45,7 @@ function makeMessage(over: Partial<GenieMessage> = {}): GenieMessage {
  * test that uses an unmocked method fails loudly.
  */
 interface ClientHooks {
-  startConversation?: (req: {
-    space_id: string;
-    content: string;
-  }) => Promise<{
+  startConversation?: (req: { space_id: string; content: string }) => Promise<{
     conversation_id?: string;
     message_id?: string;
     message?: GenieMessage;

@@ -148,11 +148,17 @@ lower-case at the type level (the `lowerCase` option literal is fixed to
 ```ts
 import { stringUtils } from "@dbx-tools/shared";
 
-stringUtils.toIdentifier("My Cool Project!"); // "my_cool_project"
-stringUtils.toSlug("My Cool Project!"); // "my-cool-project"
+stringUtils.toIdentifier("My Cool Project!"); // "my-cool-project"
+stringUtils.toSlug("My Cool Project!");       // "my-cool-project"
 
-stringUtils.toIdentifierWithOptions({ maxLength: 12 }, "very long project name");
-// "very_long_43c1"  <- hash suffix when truncated
+// Custom delimiter via toIdentifierWithOptions:
+stringUtils.toIdentifierWithOptions(
+  { delimiter: "_" },
+  "My Cool Project!",
+); // "my_cool_project"
+
+stringUtils.toIdentifierWithOptions({ maxLength: 16 }, "very long project name");
+// "very-long-2m8wk4"  <- hash suffix when truncated
 ```
 
 ## `projectUtils` - project name + git-remote parsing

@@ -6,7 +6,7 @@ This package exists so the React client (and any browser bundle)
 can import the types and URL helpers the Mastra plugin's
 `clientConfig()` publishes without pulling in `pg`, `fastembed`,
 Mastra, or anything else server-only. The surface is lightweight
-Zod schemas, inferred TypeScript types, two URL helpers, and a
+Zod schemas, inferred TypeScript types, URL helpers, and a
 handful of structural guards.
 
 ```ts
@@ -14,6 +14,8 @@ import {
   // URL helpers
   chatUrl,
   historyUrl,
+  chartUrl,
+  statementUrl,
   // Protocol types + schemas
   type MastraClientConfig,
   type ServingEndpointSummary,
@@ -21,10 +23,16 @@ import {
   type MastraHistoryUIMessage,
   type MastraHistoryResponse,
   type MastraClearHistoryResponse,
+  type Chart,
+  type ChartResult,
+  type ChartType,
+  type StatementData,
   // Genie writer-event vocabulary + workflow output shapes
   type GenieAgentResult,
   type GenieSummaryItem,
   type GenieDataset,
+  type GenieDatasetData,
+  type GenieDatasetChart,
   type GenieWriterEvent,
   type MinimalWriter,
   isGenieAgentResult,
@@ -43,23 +51,26 @@ stays correct even if the plugin is renamed.
 
 ```ts
 interface MastraClientConfig {
-  basePath: string;            // /api/<plugin name>
-  chatPath: string;            // ${basePath}/route/chat (default agent)
-  chatPathTemplate: string;    // ${basePath}/route/chat/:agentId
-  modelsPath: string;          // ${basePath}/models
-  historyPath: string;         // ${basePath}/route/history (default agent)
-  historyPathTemplate: string; // ${basePath}/route/history/:agentId
-  defaultAgent: string;        // agent id chatRoute uses when no :agentId
-  agents: string[];            // every registered agent id
+  basePath: string;              // /api/<plugin name>
+  chatPath: string;              // ${basePath}/route/chat (default agent)
+  chatPathTemplate: string;      // ${basePath}/route/chat/:agentId
+  modelsPath: string;            // ${basePath}/models
+  historyPath: string;           // ${basePath}/route/history (default agent)
+  historyPathTemplate: string;   // ${basePath}/route/history/:agentId
+  chartsPathTemplate: string;    // ${basePath}/charts/:chartId
+  statementsPathTemplate: string; // ${basePath}/statements/:statementId
+  defaultAgent: string;          // agent id chatRoute uses when no :agentId
+  agents: string[];              // every registered agent id
 }
 ```
 
-Charts don't show up here. The chart-render pipeline lives
-entirely on the agent-stream side: the `render_data` tool and
-Genie's `drainGenieStream` both run the chart-planner
-server-side and emit `type: "chart"` writer events with the
-resolved `EChartsOption`, so the client doesn't need a fetch
-URL for chart specs.
+The chart-render pipeline uses `chartsPathTemplate` as a long-poll
+endpoint: the host UI encounters a `[chart:<chartId>]` marker in
+an assistant reply, calls `chartUrl(config, chartId)`, and
+long-polls until the server resolves the chart to a `ready` or
+`error` state. Similarly, `statementsPathTemplate` resolves
+`[data:<statement_id>]` markers to inline table data via
+`statementUrl(config, statementId)`.
 
 ## URL helpers
 
@@ -97,6 +108,36 @@ const url = historyUrl(config, { page: 0, perPage: 20 });
 const res = await fetch(url, { credentials: "include" });
 const payload = (await res.json()) as MastraHistoryResponse;
 // payload.uiMessages is oldest -> newest, ready to prepend to live transcript
+```
+
+### `chartUrl(config, chartId, options?)`
+
+Substitutes the `:chartId` placeholder in `chartsPathTemplate` and
+optionally appends `?timeoutMs=<n>` to tune the long-poll window.
+The server blocks until the chart cache entry transitions to
+`ready` / `error` or the budget elapses.
+
+```ts
+import { chartUrl, type MastraClientConfig, type Chart } from "@dbx-tools/appkit-mastra-shared";
+
+const url = chartUrl(config, chartId, { timeoutMs: 30_000 });
+const res = await fetch(url, { credentials: "include" });
+const chart = (await res.json()) as Chart;
+```
+
+### `statementUrl(config, statementId, options?)`
+
+Substitutes the `:statementId` placeholder in
+`statementsPathTemplate` and optionally appends `?limit=<n>` to
+cap the returned rows. Resolves `[data:<statement_id>]` markers
+the agent embeds in prose.
+
+```ts
+import { statementUrl, type MastraClientConfig, type StatementData } from "@dbx-tools/appkit-mastra-shared";
+
+const url = statementUrl(config, statementId, { limit: 100 });
+const res = await fetch(url, { credentials: "include" });
+const data = (await res.json()) as StatementData;
 ```
 
 ## Wire-format types
@@ -141,6 +182,39 @@ interface ServingEndpointSummary {
 
 interface ServingEndpointsResponse {
   endpoints: ServingEndpointSummary[];
+}
+```
+
+### Charts
+
+The `Chart` type represents a chart cache entry in three lifecycle
+states: processing (both `result` and `error` absent), ready
+(`result` set), or failed (`error` set).
+
+```ts
+interface Chart {
+  chartId: string;
+  error?: string;
+  result?: {
+    chartType: "bar" | "line" | "area" | "scatter" | "pie";
+    option: Record<string, unknown>; // full EChartsOption spec
+  };
+}
+```
+
+### Statements
+
+`StatementData` is the payload returned by
+`GET ${basePath}/statements/:statementId`. Mirrors the agent-side
+`get_statement` tool output so the host UI and the LLM see the
+same shape.
+
+```ts
+interface StatementData {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  truncated: boolean;
 }
 ```
 
@@ -194,7 +268,7 @@ bun add @dbx-tools/appkit-mastra-shared
 ## Usage
 
 ```ts
-import { chatUrl, historyUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
+import { chatUrl, historyUrl, chartUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 
 declare const config: MastraClientConfig;
 
@@ -203,19 +277,26 @@ const chat = chatUrl(config);
 
 // History with pagination
 const history = historyUrl(config, { page: 0, perPage: 50 });
+
+// Chart long-poll URL
+const chart = chartUrl(config, "abc123", { timeoutMs: 30_000 });
 ```
 
 ## API
 
 - `chatUrl(config, agentId?)` - returns the chat endpoint URL for a given agent (or the default).
 - `historyUrl(config, options?)` - builds the paginated history URL for an agent.
+- `chartUrl(config, chartId, options?)` - builds the long-poll chart fetch URL for a given chart id.
+- `statementUrl(config, statementId, options?)` - builds the statement fetch URL for a given statement id.
 - `isGenieAgentResult(value)` - O(1) structural type guard for `GenieAgentResult`.
 - `genieResultToWriterEvents(result)` - replays terminal writer events from a completed result.
 - `MastraClientConfig` - shape published by the plugin's `clientConfig()`.
 - `MastraHistoryUIMessage` / `MastraHistoryResponse` / `MastraClearHistoryResponse` - history endpoint types.
 - `ServingEndpointSummary` / `ServingEndpointsResponse` - model catalogue types.
+- `Chart` / `ChartResult` / `ChartType` - chart cache entry and resolved plan types.
+- `StatementData` - statement fetch response type.
 - `GenieWriterEvent` - unified writer-event union (wire + Mastra-only).
-- `GenieAgentResult` / `GenieSummaryItem` / `GenieDataset` - workflow output shapes.
+- `GenieAgentResult` / `GenieSummaryItem` / `GenieDataset` / `GenieDatasetData` / `GenieDatasetChart` - workflow output shapes.
 - `MinimalWriter` - structural interface for `ctx.writer`.
 
 ## License

@@ -379,9 +379,7 @@ const statementIsTerminal = (_: StatementData): boolean => true;
  *   - `data === undefined` (404) → unknown / expired id; render
  *     nothing.
  */
-export const useChartFetch = (
-  chartId: string | undefined,
-): ByIdFetchState<Chart> => {
+export const useChartFetch = (chartId: string | undefined): ByIdFetchState<Chart> => {
   const { chartsPathTemplate } = useMastraConfig();
   const url = useMemo(
     () => (chartId ? chartUrl({ chartsPathTemplate }, chartId) : undefined),
@@ -406,9 +404,7 @@ export const useStatementFetch = (
   const { statementsPathTemplate } = useMastraConfig();
   const url = useMemo(
     () =>
-      statementId
-        ? statementUrl({ statementsPathTemplate }, statementId)
-        : undefined,
+      statementId ? statementUrl({ statementsPathTemplate }, statementId) : undefined,
     [statementId, statementsPathTemplate],
   );
   return useByIdFetch<StatementData>(statementId, url, statementIsTerminal);

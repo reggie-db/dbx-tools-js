@@ -594,9 +594,7 @@ const MessageGroupBody = ({
         >
           <CollapsibleTrigger className="group flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground">
             <ChevronDownIcon className="size-3 shrink-0 transition-transform group-data-[state=closed]:-rotate-90" />
-            <span>
-              {proseBuckets.length > 1 ? `Answer ${i + 1}` : "Answer"}
-            </span>
+            <span>{proseBuckets.length > 1 ? `Answer ${i + 1}` : "Answer"}</span>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="flex flex-col gap-1 px-2 pb-2">
@@ -683,11 +681,7 @@ const ToolProgressDetails = ({
  * {@link ToolCallRow} and the outer {@link ToolSessionPill} so
  * the affordances stay in lock-step.
  */
-const ToolStatusIcon = ({
-  status,
-}: {
-  status: "running" | "done" | "error";
-}) => {
+const ToolStatusIcon = ({ status }: { status: "running" | "done" | "error" }) => {
   if (status === "running") return <Spinner className="size-3 text-primary" />;
   if (status === "error") return <XIcon className="size-3 text-destructive" />;
   return <CheckIcon className="size-3 text-muted-foreground" />;
@@ -1313,7 +1307,9 @@ const MarkdownWithEmbeds = ({ text }: { text: string }) => {
         if (seg.kind === "chart") {
           return <ChartSlot key={`c-${i}-${seg.chartId}`} chartId={seg.chartId} />;
         }
-        return <DataSlot key={`d-${i}-${seg.statementId}`} statementId={seg.statementId} />;
+        return (
+          <DataSlot key={`d-${i}-${seg.statementId}`} statementId={seg.statementId} />
+        );
       })}
     </>
   );
@@ -1808,8 +1804,7 @@ export const ChatView = ({
   // refines based on what the turn is currently doing so the user
   // gets a finer-grained hint without the spinner blinking on/off
   // between text, tool, and "between-step" phases.
-  const lastAssistantParts =
-    lastMessage?.role === "assistant" ? lastMessage.parts : [];
+  const lastAssistantParts = lastMessage?.role === "assistant" ? lastMessage.parts : [];
   const lastAssistantHasContent =
     lastAssistantParts.some(
       (p) =>
