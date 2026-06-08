@@ -190,72 +190,78 @@ that implements the standard `getAgentTools()` + `executeAgentTool()` +
 `executeAgentTool`, so OBO auth (`asUser`) and telemetry spans stay
 intact.
 
-`plugins.genie` is special-cased: it talks to Genie directly via
-`@dbx-tools/genie` (`genieEventChat`) rather than calling AppKit's
-stock `genie` toolkit. Each invocation spins up a per-call inner
-Mastra `Agent` with three tools (`ask_genie`,
-`get_space_description`, `get_space_serialized`), runs it with
-`structuredOutput`, and produces a hydrated
-{@link GenieAgentResult}. AppKit's `genie()` plugin is honored
-only for its `spaces` config (and the matching
-`app.yaml`-declared resources). Tool ids are stable: `genie` for
-the default alias, `genie_<alias>` for additional aliases.
+`plugins.genie` is special-cased: it returns a flat set of
+Mastra tools the central agent drives directly (no inner
+orchestrator agent). Two shared, space-agnostic tools register
+once regardless of how many spaces are wired:
 
-Genie tool-result shape (LLM-bound) is the
-[`GenieAgentResult`](../appkit-mastra-shared/src/genie.ts) type:
+- `get_statement(statement_id, limit?)` - fetch rows for a
+  Genie statement. Use only when the agent needs to read values
+  to reason about them; otherwise embed `[data:<statement_id>]`.
+- `prepare_chart({statement_id, title?, description?})` - mint a
+  short `chartId`, kick off a background chart-planner task,
+  cache the resolved Echarts spec under the id for one hour.
+  Returns `{chartId}` synchronously so the agent can embed
+  `[chart:<chartId>]` in prose without blocking.
+
+Three per-space tools register per wired alias (`ask_genie`,
+`get_space_description`, `get_space_serialized` for the
+`default` alias; `ask_genie_<alias>`, etc. for additional
+aliases):
+
+- `ask_genie({question})` - drives one `genieEventChat` turn
+  and streams wire events (status / thinking / sql) through
+  `ctx.writer`. Returns `{message: GenieMessage}`; rows are
+  NOT fetched eagerly.
+- `get_space_description()` - cheap title / description /
+  warehouse id lookup.
+- `get_space_serialized()` - full `GenieSpace` JSON for
+  column-level grounding when the description isn't enough.
+
+AppKit's `genie()` plugin is honored only for its `spaces`
+config (and the matching `app.yaml`-declared resources). The
+tools talk to Genie directly via `@dbx-tools/genie`
+(`genieEventChat`) and the workspace
+`statementExecution.getStatement` API.
+
+The orchestration prompt (decompose, ask Genie focused
+sub-questions, place markers in prose) ships as the exported
+`GENIE_INSTRUCTIONS` string - compose it into your agent's
+`instructions` to get the canonical behavior:
 
 ```ts
-type GenieAgentResult = {
-  spaceId: string;
-  conversationId?: string;        // thread back to continue the same Genie thread
-  summary: Array<                 // ordered prose + visualize slots
-    | { type: "string"; text: string }
-    | {
-        type: "visualize";
-        statementId: string;
-        title?: string;
-        description?: string;
-        dataset: {
-          data: { columns: string[]; rows: Row[]; rowCount: number };
-          chart?: { chartId: string; chartType: "bar" | "line" | "area" | "scatter" | "pie" };
-        };
-      }
-  >;
-  error?: string;
-};
+import { createAgent, GENIE_INSTRUCTIONS } from "@dbx-tools/appkit-mastra";
+
+const support = createAgent({
+  instructions: `${baseInstructions}\n\n${GENIE_INSTRUCTIONS}`,
+  tools(plugins) {
+    return { ...plugins.genie?.toolkit() };
+  },
+});
 ```
 
-The `summary` is the user-facing renderable: a mixed sequence of
-prose paragraphs (`type: "string"`) and `visualize` slots that
-mark where a chart should appear in the model's final answer.
-Visualize slots embed the dataset (rows + columns) plus a slim
-`chart` reference (just `chartId` + `chartType`); the resolved
-Echarts spec rides a separate `type: "chart"` writer event so the
-LLM never holds it in context. The host UI joins the dataset and
-the writer event by `chartId` and renders inline at the matching
-`[[chart:<chartId>]]` marker.
+`GENIE_INSTRUCTIONS` references the default (`default` alias)
+tool names. Multi-space deployments should write a custom
+variant that names the suffixed per-space tools
+(e.g. `ask_genie_sales`).
 
 Genie writer event flow:
 
-- The writer emits the flat
-  [`GenieWriterEvent`](../appkit-mastra-shared/src/genie.ts)
-  union for the live loading pill - the wire-derived
-  `GenieChatEvent` (status / thinking / sql / rows / suggested)
-  plus the Mastra-only lifecycle events (`started`,
-  `ask_genie_done`, `summary`, `chart`, `error`).
-- The writer emits one `type: "chart"` event per executed SQL
-  statement carrying `{chartId, title, description?, data,
-  option, statementId, messageId}`. The chat client's
-  `<ChartSlot>` renders inline at the matching
-  `[[chart:<chartId>]]` marker. This is the exact same wire
-  format as the `render_data` tool, so Genie and hand-built
-  charts are indistinguishable on the client.
-- After a hard reload, `synthesizeToolEventsFromHistory`
-  reconstructs lifecycle events from the persisted summary
-  (`error` events via `genieResultToWriterEvents`); live-only
-  events (rows, SQL pill, chart specs) don't replay because the
-  resolved Echarts spec is held off-band on the per-request
-  `RequestContext`.
+- Each `ask_genie` call emits a Mastra-only `started` event
+  before any network round-trip, then forwards every wire
+  `GenieChatEvent` (status / thinking / sql / rows / suggested
+  / message / result / error) through `ctx.writer`.
+- Charts ride out-of-band: `prepare_chart` mints a `chartId`
+  synchronously, the planner runs in the background and writes
+  the spec to the chart cache (1h TTL). The host UI long-polls
+  `${MastraClientConfig.chartsPathTemplate}` by id and renders
+  inline at the matching `[chart:<chartId>]` marker.
+- After a hard reload, the live `started` / `status` / `sql`
+  events are gone (they only ride the writer, not persisted
+  tool results); the central agent's text reply (with embedded
+  `[data:<statement_id>]` / `[chart:<chartId>]` markers) is
+  preserved in the message history and the host UI re-resolves
+  the markers on its own.
 
 ### `render_data` (system-default ambient tool)
 

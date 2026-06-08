@@ -176,11 +176,18 @@ export type SummaryEvent = z.infer<typeof SummaryEventSchema>;
 
 /**
  * Mastra-only render event: a chart was rendered for the active
- * turn. Emitted by the chart-rendering tool (and replayed from
- * `genieResultToWriterEvents` on history reload) so the host UI
- * can drop an `[[chart:<chartId>]]`-keyed slot inline. Carries
- * the dataset (for the table fallback / hover) and the resolved
- * Echarts `option` in a single event keyed by `chartId`.
+ * turn. Carries the dataset (for the table-fallback / hover) and
+ * the resolved Echarts `option` in a single event keyed by
+ * `chartId`.
+ *
+ * @deprecated The Mastra plugin no longer emits `chart` events.
+ * Charts are queued by the `prepare_chart` / `render_data` tools
+ * and resolved out-of-band via the chart cache: the host UI
+ * long-polls `${MastraClientConfig.chartsPathTemplate}` for a
+ * {@link Chart} payload keyed on `chartId`. The schema is kept
+ * in the wire-format vocabulary so external producers can still
+ * emit `chart` events through their own pipelines, but the
+ * built-in plugin no longer relies on it.
  */
 export const ChartEventSchema = z.object({
   type: z.literal("chart"),
@@ -264,27 +271,17 @@ export const GenieDatasetDataSchema = z.object({
 export type GenieDatasetData = z.infer<typeof GenieDatasetDataSchema>;
 
 /**
- * Slim chart reference attached to a visualize dataset once the
- * workflow's finalize step runs the chart-planner. Only present
- * when planning succeeded.
+ * Slim chart reference attached to a visualize dataset. Only
+ * present when planning succeeded.
  *
  * `option` is intentionally NOT included. The resolved Echarts
- * spec lives off-band:
- *
- *   - On the wire to the UI: in the matching {@link ChartEvent}
- *     writer event (the host UI receives both this dataset and
- *     the writer event and joins them on `chartId`).
- *   - On the server: in the per-request {@link RequestContext}
- *     under the chart inventory key (see appkit-mastra's
- *     `chartInventoryFromContext`), so output processors and
- *     downstream tools can look up the full payload by `chartId`
- *     without round-tripping through the LLM.
- *
- * Why slim: full Echarts options nest deeply and are several
- * KB per chart. Embedding them in the tool result means every
- * subsequent turn of the agent loop reads them back into context
- * for zero LLM benefit (the model only needs the `chartId` to
- * place a `[[chart:<chartId>]]` marker).
+ * spec lives off-band in the chart cache: the host UI fetches it
+ * by `chartId` via `${MastraClientConfig.chartsPathTemplate}`
+ * (see {@link Chart}). Embedding the full spec inline would
+ * inflate every dataset by several KB per chart and round-trip
+ * through the LLM context for zero benefit (the model only needs
+ * the `chartId` to place a `[chart:<chartId>]` marker in its
+ * reply).
  */
 export const GenieDatasetChartSchema = z.object({
   chartId: z.string(),

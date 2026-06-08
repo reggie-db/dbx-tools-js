@@ -10,9 +10,10 @@
  * without hard-coding `/api/mastra` anywhere - rename the plugin
  * and the React client keeps working.
  *
- * URL helpers ({@link chatUrl}, {@link historyUrl}) live in the
- * sibling `mastra.ts` module so this file stays purely declarative
- * (schemas + inferred types only).
+ * URL helpers ({@link chatUrl}, {@link historyUrl},
+ * {@link chartUrl}) live in the sibling `mastra.ts` module so
+ * this file stays purely declarative (schemas + inferred types
+ * only).
  *
  * @example
  * ```tsx
@@ -51,6 +52,24 @@ import { z } from "zod";
  *     `${basePath}/route/history/:agentId`. Use this to reach a
  *     non-default agent's history; clients should normally call
  *     {@link historyUrl} instead.
+ *   - `chartsPathTemplate`: templated chart fetch endpoint:
+ *     `${basePath}/charts/:chartId`. The host UI long-polls this
+ *     to resolve `[chart:<chartId>]` markers - the route blocks
+ *     until the cached entry transitions to `ready` / `error` (or
+ *     the server-side budget elapses, returning a `processing`
+ *     entry the client polls again). Returns 404 once the 1h TTL
+ *     elapses. Optional `?timeoutMs=<n>` knob (default 60s,
+ *     capped at 5min) tunes the long-poll window. Clients should
+ *     normally call {@link chartUrl} instead of substituting the
+ *     placeholder by hand.
+ *   - `statementsPathTemplate`: templated statement fetch endpoint:
+ *     `${basePath}/statements/:statementId`. The host UI hits this
+ *     to resolve `[data:<statement_id>]` markers in agent prose -
+ *     a single OBO-scoped fetch returns the rows of a Genie /
+ *     Statement Execution result so the client can render a table
+ *     inline. Optional `?limit=<n>` query knob caps the rows
+ *     returned (server clamps to a sane upper bound). Returns 404
+ *     when the statement id is unknown / expired upstream.
  *   - `defaultAgent`: agent id `chatRoute` binds to when the client
  *     doesn't name one.
  *   - `agents`: every registered agent id in registration order.
@@ -62,6 +81,8 @@ export const MastraClientConfigSchema = z.object({
   modelsPath: z.string(),
   historyPath: z.string(),
   historyPathTemplate: z.string(),
+  chartsPathTemplate: z.string(),
+  statementsPathTemplate: z.string(),
   defaultAgent: z.string(),
   agents: z.array(z.string()),
 });
@@ -164,3 +185,123 @@ export const MastraClearHistoryResponseSchema = z.object({
   cleared: z.number(),
 });
 export type MastraClearHistoryResponse = z.infer<typeof MastraClearHistoryResponseSchema>;
+
+/* --------------------------------- charts --------------------------------- */
+
+/**
+ * Allowed chart types the planner can pick. Defined as a
+ * discriminated literal union so each variant carries its own
+ * `.describe()` clause - the server-side planner's prompt
+ * formatter walks `.options` to inline the descriptions into the
+ * model instructions, keeping the prompt in lock-step with the
+ * schema by construction. The runtime type is the plain string
+ * union (`"bar" | "line" | ...`), so consumers that just need a
+ * discriminator value behave the same as if it were a
+ * `z.enum([...])`.
+ */
+export const ChartTypeSchema = z
+  .union([
+    z
+      .literal("bar")
+      .describe(
+        "comparing a numeric value across a small/medium set of discrete categories (top-N, ranking, group-by)",
+      ),
+    z
+      .literal("line")
+      .describe(
+        "ordered-axis trend (time series, sequence, rank) where the x-axis has natural order",
+      ),
+    z
+      .literal("area")
+      .describe("stacked-trend emphasis - cumulative or composition over time"),
+    z
+      .literal("scatter")
+      .describe(
+        "two-numeric-axis correlations between fields (e.g. price vs. quantity)",
+      ),
+    z
+      .literal("pie")
+      .describe("parts-of-a-whole when 2-7 categories sum to a meaningful total"),
+  ])
+  .describe("The chart shape that best matches the data and intent.");
+export type ChartType = z.infer<typeof ChartTypeSchema>;
+
+/**
+ * Resolved chart plan a settled chart entry carries on its
+ * `result` field. `option` is the full Echarts spec; pass
+ * straight into `<ReactECharts option={...}>`.
+ */
+export const ChartResultSchema = z.object({
+  chartType: ChartTypeSchema,
+  option: z
+    .record(z.string(), z.unknown())
+    .describe(
+      "Fully-resolved Echarts `EChartsOption` JSON for this chart - drop directly into an Echarts instance (or `<ReactECharts option={...} />`) without further processing. Includes title / tooltip / legend / grid / axis / series defaults already merged in.",
+    ),
+});
+export type ChartResult = z.infer<typeof ChartResultSchema>;
+
+/**
+ * Wire-format AND server-side cache shape for a chart entry.
+ * Three lifecycle states inferred from the two optional fields
+ * (no discriminator needed):
+ *
+ *   - `result` set                    -> chart is ready to render
+ *   - `error` set                     -> planner / data fetch failed
+ *   - both `result` and `error` unset -> still processing
+ *
+ * `option` is typed as a generic record so this package stays
+ * dependency-free of `echarts`. The server (`chart.ts`) imports
+ * this schema directly; the demo client polls the
+ * `/charts/:chartId` route and parses responses against it.
+ */
+export const ChartSchema = z.object({
+  chartId: z
+    .string()
+    .describe(
+      "Opaque id minted by the chart subsystem. Embed verbatim as `[chart:<chartId>]` in agent prose; the host UI resolves it against this cache entry.",
+    ),
+  error: z
+    .string()
+    .optional()
+    .describe(
+      "Error message when the chart failed (data fetch error, planner error, empty dataset). Mutually exclusive with `result`; absent on success and while processing.",
+    ),
+  result: ChartResultSchema.optional().describe(
+    "Resolved chart plan. Absent while processing and when the run errored.",
+  ),
+});
+export type Chart = z.infer<typeof ChartSchema>;
+
+/* ------------------------------- statements ------------------------------- */
+
+/**
+ * Wire-format payload returned by
+ * `GET ${basePath}/statements/:statementId`.
+ *
+ * Mirrors the agent-side `get_statement` tool's output so the
+ * host UI and the LLM see the exact same shape for the same
+ * statement; the route is what resolves `[data:<statement_id>]`
+ * markers the agent embeds in prose.
+ *
+ * Fields:
+ *   - `columns`: column names in declaration order.
+ *   - `rows`: row records keyed by column name. Cell values are
+ *     either coerced numbers or the original strings (Genie /
+ *     Statement Execution returns every cell as `string | null`;
+ *     numeric-looking cells are coerced server-side so the UI
+ *     can format with `tabular-nums` without re-parsing).
+ *   - `rowCount`: total row count upstream (independent of the
+ *     `limit` cap). Compare against `rows.length` to detect
+ *     truncation - `truncated` is the precomputed flag.
+ *   - `truncated`: `true` when the server clipped rows to honor
+ *     the route's row cap; the UI should surface a "showing N of
+ *     M rows" affordance in that case.
+ */
+export const StatementDataSchema = z.object({
+  columns: z.array(z.string()),
+  rows: z.array(z.record(z.string(), z.unknown())),
+  rowCount: z.number(),
+  truncated: z.boolean(),
+});
+export type StatementData = z.infer<typeof StatementDataSchema>;

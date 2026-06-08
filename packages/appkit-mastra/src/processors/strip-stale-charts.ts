@@ -3,21 +3,24 @@
  * tool-invocation result in prior assistant messages before they
  * reach the model.
  *
- * Why: chartIds are only meaningful within the assistant turn that
- * minted them - the writer events backing them are gone after the
- * stream closes. When the model sees old chartIds in memory recall
- * (Mastra Memory persists tool results), it's tempted to type
- * those ids into the new turn's `[[chart:<id>]]` markers, leaving
- * the chat client's chart slots stuck with no matching event. This
- * processor removes the temptation by deleting `chartId` keys from
- * every assistant message's tool results before the prompt is
- * built. The current turn's tool results don't exist yet at
- * `processInput` time, so they pass through unmodified.
+ * Why: chartIds are turn-scoped from the model's point of view -
+ * each `prepare_chart` / `render_data` call mints a fresh id and
+ * the host UI binds it to that turn's reply. Mastra Memory
+ * replays prior tool results into the prompt; if old chartIds
+ * leak through, the model is tempted to copy them verbatim into
+ * the new turn's `[chart:<id>]` markers and the host UI ends up
+ * rendering an unrelated chart from the chart cache (or
+ * a 404 once the 1h TTL elapsed). This processor removes the
+ * temptation by deleting `chartId` keys from every assistant
+ * message's tool results before the prompt is built. The current
+ * turn's tool results don't exist yet at `processInput` time, so
+ * they pass through unmodified.
  *
  * The strip is recursive - any nested `chartId` field is removed,
- * regardless of which tool produced the result. This covers Genie's
- * `datasets[].chartId` and `render_data`'s top-level `chartId`
- * uniformly without coupling to specific tool ids.
+ * regardless of which tool produced the result. This covers
+ * `prepare_chart` / `render_data` top-level chartIds and any
+ * legacy `datasets[].chartId` payloads uniformly without coupling
+ * to specific tool ids.
  */
 
 import { logUtils } from "@dbx-tools/shared";

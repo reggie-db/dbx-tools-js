@@ -153,43 +153,42 @@ function stripImports(entryPath: string): string {
   const unknownType = (): ts.KeywordTypeNode =>
     ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
-  const transformer: ts.TransformerFactory<ts.SourceFile> =
-    (context) => (root) => {
-      const visitor: ts.Visitor = (node) => {
-        if (ts.isImportDeclaration(node)) return undefined;
+  const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => (root) => {
+    const visitor: ts.Visitor = (node) => {
+      if (ts.isImportDeclaration(node)) return undefined;
 
-        // `ns.X` / `X` in TYPE position -> `unknown`. We only
-        // stub when the root identifier came from an import; bare
-        // references to local declarations stay untouched.
-        if (ts.isTypeReferenceNode(node)) {
-          const tn = node.typeName;
-          if (
-            ts.isQualifiedName(tn) &&
-            ts.isIdentifier(tn.left) &&
-            namespaceAliases.has(tn.left.text)
-          ) {
-            return unknownType();
-          }
-          if (ts.isIdentifier(tn) && importedNames.has(tn.text)) {
-            return unknownType();
-          }
-        }
-
-        // `ns.X` in VALUE position (rare in `.d.ts`, but possible
-        // for `declare const x: typeof ns.foo` etc.). Drop the
-        // namespace prefix so ts-to-zod sees a bare identifier.
+      // `ns.X` / `X` in TYPE position -> `unknown`. We only
+      // stub when the root identifier came from an import; bare
+      // references to local declarations stay untouched.
+      if (ts.isTypeReferenceNode(node)) {
+        const tn = node.typeName;
         if (
-          ts.isPropertyAccessExpression(node) &&
-          ts.isIdentifier(node.expression) &&
-          namespaceAliases.has(node.expression.text)
+          ts.isQualifiedName(tn) &&
+          ts.isIdentifier(tn.left) &&
+          namespaceAliases.has(tn.left.text)
         ) {
-          return node.name;
+          return unknownType();
         }
+        if (ts.isIdentifier(tn) && importedNames.has(tn.text)) {
+          return unknownType();
+        }
+      }
 
-        return ts.visitEachChild(node, visitor, context);
-      };
-      return ts.visitEachChild(root, visitor, context);
+      // `ns.X` in VALUE position (rare in `.d.ts`, but possible
+      // for `declare const x: typeof ns.foo` etc.). Drop the
+      // namespace prefix so ts-to-zod sees a bare identifier.
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        namespaceAliases.has(node.expression.text)
+      ) {
+        return node.name;
+      }
+
+      return ts.visitEachChild(node, visitor, context);
     };
+    return ts.visitEachChild(root, visitor, context);
+  };
 
   const result = ts.transform(sf, [transformer]);
   const printer = ts.createPrinter({ removeComments: false });

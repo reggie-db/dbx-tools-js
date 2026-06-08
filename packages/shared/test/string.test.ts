@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { fnvHashWithOptions } from "../src/common.js";
 import {
   firstNonEmpty,
+  toDescription,
   toIdentifier,
   toIdentifierWithOptions,
   toSlug,
@@ -385,5 +386,203 @@ describe("toUniqueSlug", () => {
       b.split("_").slice(0, -1).join("_"),
     );
     expect(a).not.toBe(b);
+  });
+});
+
+describe("toDescription", () => {
+  it("emits a plain string verbatim", () => {
+    expect(toDescription("hello world")).toBe("hello world");
+  });
+
+  it("stacks a top-level sequence with no list markers", () => {
+    expect(toDescription(["alpha", "beta"])).toBe("alpha\n\nbeta");
+  });
+
+  it("flushes plain text into a following list (no blank line)", () => {
+    expect(toDescription(["lead-in line", { bullets: ["one", "two"] }])).toBe(
+      "lead-in line\n- one\n- two",
+    );
+  });
+
+  it("flushes plain text after a list (trailing summary, no blank line)", () => {
+    expect(toDescription([{ bullets: ["one", "two"] }, "trailing text"])).toBe(
+      "- one\n- two\ntrailing text",
+    );
+  });
+
+  it("still inserts a blank line before a map after any block", () => {
+    expect(toDescription([{ bullets: ["one", "two"] }, { Header: "value" }])).toBe(
+      "- one\n- two\n\nHeader:\n\nvalue",
+    );
+  });
+
+  it("still inserts a blank line between two adjacent lists", () => {
+    expect(toDescription([{ bullets: ["a", "b"] }, { numbered: ["x", "y"] }])).toBe(
+      "- a\n- b\n\n1. x\n2. y",
+    );
+  });
+
+  describe("bullets", () => {
+    it("numbers multiple items with `- `", () => {
+      expect(toDescription({ bullets: ["one", "two", "three"] })).toBe(
+        "- one\n- two\n- three",
+      );
+    });
+
+    it("drops the marker for a single bare-string item", () => {
+      expect(toDescription({ bullets: ["only one"] })).toBe("only one");
+    });
+
+    it("keeps the marker for a single item that has nested children", () => {
+      expect(
+        toDescription({
+          bullets: [["its important", { numbered: ["item", "item"] }]],
+        }),
+      ).toBe("- its important\n  1. item\n  2. item");
+    });
+
+    it("returns empty for an empty list", () => {
+      expect(toDescription({ bullets: [] })).toBe("");
+    });
+  });
+
+  describe("numbered", () => {
+    it("numbers multiple items starting at 1", () => {
+      expect(toDescription({ numbered: ["a", "b", "c"] })).toBe("1. a\n2. b\n3. c");
+    });
+
+    it("drops the number for a single bare-string item", () => {
+      expect(toDescription({ numbered: ["only"] })).toBe("only");
+    });
+
+    it("indents nested content under the numbered marker width", () => {
+      expect(
+        toDescription({
+          numbered: ["first", ["second", { bullets: ["a", "b"] }]],
+        }),
+      ).toBe("1. first\n2. second\n   - a\n   - b");
+    });
+  });
+
+  describe("maps", () => {
+    it("renders each key as a `Header:` block separated by blank lines", () => {
+      expect(
+        toDescription({
+          Instructions: "do the thing",
+          Output: "return the result",
+        }),
+      ).toBe("Instructions:\n\ndo the thing\n\nOutput:\n\nreturn the result");
+    });
+
+    it("supports structured values under a header", () => {
+      expect(
+        toDescription({
+          Steps: { numbered: ["first", "second"] },
+        }),
+      ).toBe("Steps:\n\n1. first\n2. second");
+    });
+
+    it("does not treat `bullets` / `numbered` as headers when they are sole keys + array values", () => {
+      // Sanity: the discriminator does its job and we don't end up with a
+      // "bullets:" header in the output.
+      expect(toDescription({ bullets: ["x", "y"] })).toBe("- x\n- y");
+    });
+
+    it("treats multi-key objects as a headers map even if one key is `bullets`", () => {
+      expect(toDescription({ bullets: "first", numbered: "second" })).toBe(
+        "bullets:\n\nfirst\n\nnumbered:\n\nsecond",
+      );
+    });
+  });
+
+  describe("dedent / rstrip", () => {
+    it("strips common leading indentation from multi-line strings", () => {
+      const out = toDescription(`
+        first line
+        second line
+      `);
+      expect(out).toBe("first line\nsecond line");
+    });
+
+    it("right-strips trailing whitespace on every line", () => {
+      const out = toDescription("alpha   \nbeta\t\n");
+      expect(out).toBe("alpha\nbeta");
+    });
+
+    it("preserves internal blank lines but trims leading / trailing ones", () => {
+      const out = toDescription(`
+        para 1
+
+        para 2
+      `);
+      expect(out).toBe("para 1\n\npara 2");
+    });
+
+    it("dedents inside list items and map values independently", () => {
+      const out = toDescription({
+        Instructions: `
+          do step A
+          then step B
+        `,
+        Notes: {
+          bullets: [
+            `
+              note one
+              note two
+            `,
+            `
+              note three
+              note four
+            `,
+          ],
+        },
+      });
+      expect(out).toBe(
+        [
+          "Instructions:",
+          "",
+          "do step A",
+          "then step B",
+          "",
+          "Notes:",
+          "",
+          "- note one",
+          "  note two",
+          "- note three",
+          "  note four",
+        ].join("\n"),
+      );
+    });
+
+    it("never has trailing whitespace on any line of the final output", () => {
+      const out = toDescription([
+        "intro line  ",
+        { bullets: ["item one  ", "item two"] },
+        { Header: "value  " },
+      ]);
+      for (const line of out.split("\n")) {
+        expect(line).toBe(line.replace(/[ \t]+$/, ""));
+      }
+    });
+  });
+
+  it("matches the docstring example end-to-end", () => {
+    const out = toDescription([
+      "this is a description",
+      { bullets: [["its important", { numbered: ["item", "item"] }]] },
+      { Instructions: "adfasdfasdf" },
+    ]);
+    expect(out).toBe(
+      [
+        "this is a description",
+        "- its important",
+        "  1. item",
+        "  2. item",
+        "",
+        "Instructions:",
+        "",
+        "adfasdfasdf",
+      ].join("\n"),
+    );
   });
 });

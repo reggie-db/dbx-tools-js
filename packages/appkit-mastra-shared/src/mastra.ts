@@ -51,3 +51,60 @@ export function historyUrl(
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
 }
+
+/**
+ * Build the chart fetch URL for a given `chartId`.
+ * Substitutes the `:chartId` placeholder in
+ * {@link MastraClientConfig.chartsPathTemplate} and appends
+ * `?timeoutMs=<n>` when an explicit long-poll budget is supplied.
+ *
+ * The host UI typically polls this URL when it encounters a
+ * `[chart:<chartId>]` marker in an assistant reply: the server
+ * blocks until the chart cache entry transitions to
+ * `ready` / `error` or the long-poll budget elapses, at which
+ * point it returns the last seen value (still `processing`) so
+ * the client can re-poll. A `404` means the chartId is unknown
+ * or its 1h TTL has elapsed; treat it as a missing slot.
+ */
+export function chartUrl(
+  config: Pick<MastraClientConfig, "chartsPathTemplate">,
+  chartId: string,
+  options: { timeoutMs?: number } = {},
+): string {
+  const base = config.chartsPathTemplate.replace(
+    ":chartId",
+    encodeURIComponent(chartId),
+  );
+  if (options.timeoutMs === undefined) return base;
+  const params = new URLSearchParams();
+  params.set("timeoutMs", String(options.timeoutMs));
+  return `${base}?${params.toString()}`;
+}
+
+/**
+ * Build the statement fetch URL for a given `statementId`.
+ * Substitutes the `:statementId` placeholder in
+ * {@link MastraClientConfig.statementsPathTemplate} and appends
+ * `?limit=<n>` when an explicit row cap is supplied.
+ *
+ * The host UI hits this URL when it encounters a
+ * `[data:<statement_id>]` marker in an assistant reply: a single
+ * OBO-scoped fetch returns the rows of the corresponding Genie /
+ * Statement Execution result so the client can render an inline
+ * table. A `404` means the statement id is unknown or no longer
+ * resolvable through the workspace; treat as a missing slot.
+ */
+export function statementUrl(
+  config: Pick<MastraClientConfig, "statementsPathTemplate">,
+  statementId: string,
+  options: { limit?: number } = {},
+): string {
+  const base = config.statementsPathTemplate.replace(
+    ":statementId",
+    encodeURIComponent(statementId),
+  );
+  if (options.limit === undefined) return base;
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit));
+  return `${base}?${params.toString()}`;
+}

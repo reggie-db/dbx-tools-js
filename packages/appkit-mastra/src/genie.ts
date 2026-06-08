@@ -1,42 +1,58 @@
 /**
- * Genie agent for Mastra.
+ * Genie tools for Mastra.
  *
- * Each configured Genie space exposes a single Mastra tool to the
- * calling agent (`genie` for the `"default"` alias, `genie_<alias>`
- * otherwise). When invoked, the tool runs end-to-end:
+ * Each configured Genie space is surfaced as a small set of flat
+ * Mastra tools the calling agent can drive directly - no inner
+ * orchestrator agent. The central agent decomposes user questions,
+ * picks which Genie space to ask, and composes the final reply.
  *
- *   1. Pulls the per-request {@link WorkspaceClient} off
- *      `ctx.requestContext` (stamped by `MastraServer`) and emits a
- *      `started` writer event so the host UI can show progress
- *      immediately, before any LLM round-trip.
- *   2. Spins up a per-call inner Mastra `Agent` with three tools:
- *        - `ask_genie`: drives one `genieEventChat` turn, fetches
- *          the matching statement's rows when the turn ran SQL,
- *          and forwards every wire event (status, thinking, sql,
- *          rows) through `ctx.writer` for streaming UI updates.
- *        - `get_space_description`: cheap title / description /
- *          warehouse id lookup for grounding.
- *        - `get_space_serialized`: full `GenieSpace` JSON for
- *          column-level grounding when the description isn't
- *          enough.
- *   3. Runs the inner agent with `structuredOutput` (Mastra's
- *      two-pass mode + `jsonPromptInjection`) to coerce the
- *      agent's final answer into a tagged
- *      `[{type:"text"|"data", ...}]` array. The two-pass design
- *      avoids Databricks Model Serving's `response_format` +
- *      `tools` collision; prompt injection sidesteps the
- *      separate `response_format` + streaming collision in the
- *      structuring agent.
- *   4. Charts every `data` item in parallel via
- *      {@link runChartPlanner}, maps `text` items to the shared
- *      {@link GenieSummaryItem} `string` variant, and returns the
- *      hydrated {@link GenieAgentResult}.
+ * Per-space tools (suffixed with `_<alias>` for non-default
+ * aliases):
  *
- * The inner agent talks to Genie directly via
- * `@dbx-tools/genie` (`genieEventChat`) and the workspace
+ *   - `ask_genie`: drives one `genieEventChat` turn and
+ *     forwards every wire event (status, thinking, sql, rows)
+ *     through `ctx.writer` for streaming UI updates. Returns
+ *     the terminal `GenieMessage` only - rows are NOT fetched
+ *     eagerly.
+ *   - `get_space_description`: cheap title / description /
+ *     warehouse id lookup for grounding.
+ *   - `get_space_serialized`: full `GenieSpace` JSON for
+ *     column-level grounding when the description isn't enough.
+ *
+ * Space-agnostic shared tools (registered once, regardless of
+ * how many spaces are wired):
+ *
+ *   - `get_statement`: opt-in lookup of a Genie statement's rows
+ *     by `statement_id` (with a row `limit`). The agent calls
+ *     this only when it needs to read values to reason about
+ *     them; if the data is just being displayed, it embeds a
+ *     `[data:<statement_id>]` marker in prose instead and lets
+ *     the host UI resolve it.
+ *   - `prepare_chart`: mints a short `chartId`, kicks off a
+ *     background task that fetches the statement's rows and
+ *     runs the chart-planner, and caches the resolved Echarts
+ *     spec under the id (1h TTL). Returns the `chartId`
+ *     synchronously so the agent embeds `[chart:<chartId>]`
+ *     markers in prose without blocking on chart generation;
+ *     the host UI fetches the cached chart by id once it's
+ *     ready (see {@link fetchChart}).
+ *
+ * Each tool's `execute` pulls the per-request
+ * {@link WorkspaceClient} off `ctx.requestContext` (stamped by
+ * `MastraServer` under {@link MASTRA_USER_KEY}) and the per-call
+ * `writer` / `abortSignal` off `ctx`, so the tools are stateless
+ * across requests and the central agent owns the loop.
+ *
+ * The tools talk to Genie directly via `@dbx-tools/genie`
+ * (`genieEventChat`) and the workspace
  * `statementExecution.getStatement` API. AppKit's stock `genie`
  * plugin is honored only for its `spaces` config so existing
  * AppKit-style wiring keeps working without change.
+ *
+ * Suggested orchestration prompt for the central agent lives in
+ * {@link GENIE_INSTRUCTIONS}; compose it into the agent's own
+ * `instructions` when you want the canonical "how to drive the
+ * Genie tools" guidance.
  */
 
 import { CacheManager, genie } from "@databricks/appkit";
@@ -44,15 +60,10 @@ import { ApiError, HttpError, WorkspaceClient } from "@databricks/sdk-experiment
 import { genieEventChat } from "@dbx-tools/genie";
 import { type GenieMessage } from "@dbx-tools/genie-shared";
 import {
-  type ChartEvent,
-  type GenieAgentResult,
-  type GenieDataset,
+  ChartSchema,
   type GenieDatasetData,
-  type GenieSummaryItem,
-  type MastraGenieErrorEvent,
   type MinimalWriter,
   type StartedEvent,
-  type SummaryEvent,
 } from "@dbx-tools/appkit-mastra-shared";
 import {
   apiUtils,
@@ -61,32 +72,21 @@ import {
   logUtils,
   stringUtils,
 } from "@dbx-tools/shared";
-import { Agent } from "@mastra/core/agent";
 import type { RequestContext } from "@mastra/core/request-context";
 import { MASTRA_THREAD_ID_KEY } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 import type { MastraTools } from "./agents.js";
-import { runChartPlanner } from "./chart.js";
+import { chartPlannerRequestSchema, prepareChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { MASTRA_USER_KEY, type User } from "./config.js";
-import { buildModel } from "./model.js";
 import { safeWrite } from "./writer.js";
 
 const log = logUtils.logger("mastra/genie");
 
 /** Default alias used when a single unnamed Genie space is wired up. */
 export const DEFAULT_GENIE_ALIAS = "default";
-
-/**
- * Cap on the inner agent's tool-loop steps. 5 (Mastra default) is
- * tight - one `get_space_description` + one `ask_genie` per
- * sub-question saturates fast. 16 leaves room for ~10 `ask_genie`
- * rounds plus grounding plus the structuring pass (which runs
- * after the loop and is its own single call).
- */
-const DEFAULT_MAX_STEPS = 16;
 
 /* --------------------------- config types --------------------------- */
 
@@ -95,17 +95,62 @@ export interface GenieSpaceConfig {
   /** Genie `space_id`. Required; resolves via `client.genie.getSpace`. */
   spaceId: string;
   /**
-   * Optional human-readable description appended to the Genie
-   * tool's description so the calling LLM has hints about
-   * *what data* this space covers (e.g. "orders, returns,
+   * Optional human-readable description appended to the per-space
+   * tool descriptions so the calling LLM has hints about *what
+   * data* this space covers (e.g. "orders, returns,
    * fulfillment"). When omitted, only the space's own
-   * `description` (fetched on first use) is shown.
+   * `description` (fetched on first use of `get_space_description`)
+   * is shown.
    */
   hint?: string;
 }
 
 /** Map of alias -> space config. Accepts either explicit objects or bare space ids. */
 export type GenieSpacesConfig = Record<string, GenieSpaceConfig | string>;
+
+/* ------------------------- ctx helpers ------------------------- */
+
+/**
+ * Narrow view of the second arg Mastra passes to a tool's
+ * `execute(input, ctx)`. Captures the fields the Genie tools
+ * actually read - `requestContext` (for user / conversation
+ * state), `writer` (for streaming events to the host UI), and
+ * `abortSignal` (for per-call cancellation).
+ */
+type ToolExecuteCtx =
+  | {
+      requestContext?: RequestContext;
+      writer?: MinimalWriter;
+      abortSignal?: AbortSignal;
+    }
+  | undefined;
+
+/**
+ * Pull the per-request {@link WorkspaceClient} off the active
+ * `RequestContext`. The Mastra plugin's server middleware stamps
+ * a {@link User} on the context under {@link MASTRA_USER_KEY}
+ * for every request; tools fail loudly when it's missing because
+ * that means the Mastra plugin isn't running (e.g. a tool was
+ * invoked outside the chat route).
+ */
+function requireClient(ctx: ToolExecuteCtx, toolId: string): {
+  client: WorkspaceClient;
+  requestContext: RequestContext;
+} {
+  const requestContext = ctx?.requestContext;
+  if (!requestContext) {
+    throw new Error(
+      `${toolId}: missing requestContext (MastraServer must stamp MASTRA_USER_KEY)`,
+    );
+  }
+  const user = requestContext.get(MASTRA_USER_KEY) as User | undefined;
+  if (!user) {
+    throw new Error(
+      `${toolId}: no user on requestContext (MASTRA_USER_KEY not set)`,
+    );
+  }
+  return { client: user.executionContext.client, requestContext };
+}
 
 /* ------------------------- helpers ------------------------- */
 
@@ -123,20 +168,35 @@ function coerceCell(cell: string | null): unknown {
  * Fetch a single Genie statement's rows via the Statement
  * Execution API and reshape into the shared
  * {@link GenieDatasetData} shape (column array + row records).
+ *
+ * Optional `limit` slices the returned `rows` client-side so the
+ * agent can scan a small sample without paging the full result
+ * set into context. `rowCount` always reflects the upstream total
+ * so callers know when it truncated.
+ *
+ * Exported so the plugin's `/statements/:statementId` route can
+ * reuse the exact same fetch + coercion pipeline the `ask_genie`
+ * / `get_statement` tools run, keeping LLM-side `get_statement`
+ * output and UI-side `[data:<id>]` rendering shape-identical for
+ * the same statement.
  */
-async function fetchStatementData(
+export async function fetchStatementData(
   client: WorkspaceClient,
   statementId: string,
-  signal?: AbortSignal,
+  options?: { limit?: number; signal?: AbortSignal },
 ): Promise<GenieDatasetData> {
-  const ctx = signal ? apiUtils.toContext(signal) : undefined;
+  const ctx = options?.signal ? apiUtils.toContext(options.signal) : undefined;
   const r = await client.statementExecution.getStatement(
     { statement_id: statementId },
     ctx,
   );
   const columns = (r.manifest?.schema?.columns ?? []).map((c) => c.name ?? "");
   const dataArray = (r.result?.data_array ?? []) as Array<Array<string | null>>;
-  const rows = dataArray.map((row) => {
+  const sliced =
+    options?.limit !== undefined && options.limit >= 0
+      ? dataArray.slice(0, options.limit)
+      : dataArray;
+  const rows = sliced.map((row) => {
     const obj: Record<string, unknown> = {};
     columns.forEach((col, i) => {
       obj[col] = coerceCell(row[i] ?? null);
@@ -146,27 +206,8 @@ async function fetchStatementData(
   return {
     columns,
     rows,
-    rowCount: r.manifest?.total_row_count ?? rows.length,
+    rowCount: r.manifest?.total_row_count ?? dataArray.length,
   };
-}
-
-/**
- * Resolve the message's representative `statement_id`. Genie
- * returns one statement per turn in practice; we read the
- * (deprecated-but-singular) `message.query_result.statement_id`
- * first and fall back to the first attachment's
- * `query.statement_id`. Returns `undefined` when the turn had no
- * SQL run (pure prose answer).
- */
-function extractStatementId(message: GenieMessage): string | undefined {
-  const top = (message.query_result as { statement_id?: string } | undefined)
-    ?.statement_id;
-  if (top) return top;
-  for (const att of message.attachments ?? []) {
-    const id = att.query?.statement_id;
-    if (id) return id;
-  }
-  return undefined;
 }
 
 /**
@@ -200,7 +241,7 @@ const PLACEHOLDER_QUESTIONS = new Set([
  * Treat this as an estimate that gets *extended on every use* by
  * re-setting the cache entry after each successful turn (sliding
  * TTL via re-`set`). When the estimate ends up wrong (conversation
- * deleted, expired upstream, cross-space referenced), the wrapper
+ * deleted, expired upstream, cross-space referenced), `ask_genie`
  * catches the SDK's `RESOURCE_DOES_NOT_EXIST`/404 and transparently
  * starts a fresh conversation.
  */
@@ -210,14 +251,23 @@ const CONVERSATION_TTL_SEC = 4 * 60 * 60;
 const CONVERSATION_CACHE_NAMESPACE = "mastra:genie:conversation";
 
 /**
+ * `userKey` for `CacheManager.getOrExecute` / `generateKey`. Genie
+ * conversations are scoped to a single user + space + thread, and
+ * `threadId` is already user-scoped (Mastra mints threads per
+ * `resourceId`), so a constant user key here is safe and keeps the
+ * cache key short.
+ */
+const CONVERSATION_USER_KEY = "mastra-genie";
+
+/**
  * Build the per-request {@link RequestContext} key the active
  * Genie `conversation_id` lives under for `spaceId`. Scoped by
  * space so an app calling two Genie spaces in one request keeps
  * each conversation distinct (Genie conversation ids are
  * space-scoped on the wire). The same `RequestContext` instance
- * flows from the outer `genie` tool through to the inner
- * `ask_genie` tool via Mastra, so writes on one side are visible
- * on the other without an explicit shared ref.
+ * flows from the central agent through to every `ask_genie`
+ * invocation, so writes on one call are visible on the next
+ * without an explicit shared ref.
  */
 const conversationContextKey = (spaceId: string): string =>
   `mastra__genie_conversation__${spaceId}`;
@@ -237,8 +287,7 @@ function readContextConversationId(
 /**
  * Write the active Genie `conversation_id` for `spaceId` onto the
  * per-request {@link RequestContext}. Subsequent `ask_genie` calls
- * in this request will reuse it; the wrapper's tail logic also
- * reads it back out for the {@link GenieAgentResult}.
+ * in this request will reuse it.
  */
 function writeContextConversationId(
   requestContext: RequestContext,
@@ -247,67 +296,6 @@ function writeContextConversationId(
 ): void {
   requestContext.set(conversationContextKey(spaceId), conversationId);
 }
-
-/* ------------------------- chart inventory ------------------------- */
-
-/**
- * Per-request {@link RequestContext} key the resolved chart
- * inventory lives under. Keyed by `chartId`, the inventory is a
- * `Map<string, ChartEvent>` carrying the full Echarts spec for
- * every chart minted on this request - the same payload that
- * goes out on the writer stream, kept in-process so output
- * processors and downstream tools can resolve `[[chart:<id>]]`
- * markers without re-running the planner or pulling from the
- * writer stream.
- *
- * Shared across all Genie spaces because chart ids are minted
- * via `commonUtils.shortId()` and are unique within a single
- * request regardless of which space produced them.
- */
-const CHART_INVENTORY_CONTEXT_KEY = "mastra__genie_chart_inventory__";
-
-/**
- * Get the chart inventory map for this request, creating it on
- * first access. Subsequent reads return the same map so callers
- * mutate in place. The map is request-scoped (collected with the
- * `RequestContext` at end of request), so there's no per-process
- * leak.
- */
-export function chartInventoryFromContext(
-  requestContext: RequestContext,
-): Map<string, ChartEvent> {
-  const existing = requestContext.get(CHART_INVENTORY_CONTEXT_KEY);
-  if (existing instanceof Map) {
-    return existing as Map<string, ChartEvent>;
-  }
-  const fresh = new Map<string, ChartEvent>();
-  requestContext.set(CHART_INVENTORY_CONTEXT_KEY, fresh);
-  return fresh;
-}
-
-/**
- * Stash a resolved chart on the request-scoped inventory so any
- * subsequent code in this request (output processors validating
- * `[[chart:<id>]]` markers, follow-up tools that want to chart
- * the same dataset differently, etc.) can look it up by id.
- * No-op when `requestContext` is missing.
- */
-function recordChartInContext(
-  requestContext: RequestContext | undefined,
-  chart: ChartEvent,
-): void {
-  if (!requestContext) return;
-  chartInventoryFromContext(requestContext).set(chart.chartId, chart);
-}
-
-/**
- * `userKey` for `CacheManager.getOrExecute` / `generateKey`. Genie
- * conversations are scoped to a single user + space + thread, and
- * `threadId` is already user-scoped (Mastra mints threads per
- * `resourceId`), so a constant user key here is safe and keeps the
- * cache key short.
- */
-const CONVERSATION_USER_KEY = "mastra-genie";
 
 /**
  * Build the canonical cache key for a `(spaceId, threadId)` pair.
@@ -382,6 +370,23 @@ async function evictCachedConversationId(cacheKey: string | undefined): Promise<
 }
 
 /**
+ * Lazy-seed the active Genie `conversation_id` for `spaceId` from
+ * the cross-request cache onto the per-request `RequestContext`.
+ * No-op when the slot is already populated (subsequent
+ * `ask_genie` calls in the same turn) so we hit the cache at most
+ * once per request per space.
+ */
+async function ensureConversationSeeded(
+  requestContext: RequestContext,
+  spaceId: string,
+  cacheKey: string | undefined,
+): Promise<void> {
+  if (readContextConversationId(requestContext, spaceId)) return;
+  const cached = await readCachedConversationId(cacheKey);
+  if (cached) writeContextConversationId(requestContext, spaceId, cached);
+}
+
+/**
  * True when `err` is the SDK error Genie returns for a
  * conversation id that no longer exists (deleted, expired upstream,
  * or referenced from the wrong space). Matches the typed
@@ -399,96 +404,124 @@ function isConversationGoneError(err: unknown): boolean {
   return false;
 }
 
-/* --------------------------- inner tools --------------------------- */
+/* ------------------------ prepare_chart input ------------------------ */
 
 /**
- * One entry in {@link InnerToolDeps.resultSets}: the rows for a
- * Genie statement plus the Genie `message_id` of the `ask_genie`
- * turn that produced it. Tracking `messageId` here lets the
- * outer chart loop stamp the chart event (and any chart-error
- * writer event) with the same `messageId` the rest of that
- * ask's wire events carry, so the host UI groups the chart into
- * the same `message_id` pill bucket without a separate lookup.
+ * Agent-facing `prepare_chart` input schema. Reuses
+ * {@link chartPlannerRequestSchema} (the dataset-driven planner
+ * contract) but swaps the inline `data` field for a Genie
+ * `statement_id` the tool resolves into rows server-side.
+ * `title` is loosened to optional - the planner falls back to a
+ * generic placeholder when the agent doesn't supply one.
+ *
+ * Shaped to match Genie's wire form - `statement_id` (snake)
+ * mirrors `query_result.statement_id` and the `get_statement`
+ * tool's input field name, so the LLM only ever sees one
+ * spelling for the same identifier.
  */
-interface StatementEntry {
-  data: GenieDatasetData;
-  messageId: string;
-}
+const prepareChartRequestSchema = chartPlannerRequestSchema
+  .omit({ data: true, title: true })
+  .extend({
+    statement_id: z
+      .string()
+      .min(1, "statement_id is required")
+      .describe(
+        stringUtils.toDescription(`
+          Genie \`statement_id\` to chart. Read from
+          \`message.query_result.statement_id\` or
+          \`message.attachments[*].query.statement_id\` returned by
+          \`ask_genie\`.
+        `),
+      ),
+    title: chartPlannerRequestSchema.shape.title.optional(),
+  });
+
+/* ----------------------------- tool ids ----------------------------- */
 
 /**
- * Per-call mutable state shared by the inner agent's three tools.
- * `resultSets` lets the wrapper pull rows by `statementId` after
- * the agent finishes, so the chart-planner doesn't re-fetch. The
- * active Genie `conversation_id` lives on `RequestContext` (read
- * via {@link readContextConversationId} on the inner tool's `ctx`)
- * rather than a shared ref - the same `RequestContext` instance
- * threads from `agent.generate({requestContext})` through to every
- * tool invocation, so writes propagate to subsequent `ask_genie`
- * calls without an extra object. `cacheKey` is the
- * {@link CacheManager} key for cross-request persistence (`undefined`
- * when `threadId` isn't available and caching is disabled).
+ * Suffix appended to per-space tool ids when the alias isn't the
+ * well-known `default`. Single-space deployments get the bare
+ * names (`ask_genie`, `get_space_description`, ...); multi-space
+ * deployments get `ask_genie_<alias>` etc. so each space's tools
+ * stay disambiguated in the central agent's tool registry.
  */
-interface InnerToolDeps {
-  spaceId: string;
-  client: WorkspaceClient;
-  writer?: MinimalWriter;
-  signal?: AbortSignal;
-  resultSets: Map<string, StatementEntry>;
-  cacheKey?: string;
+function aliasSuffix(alias: string): string {
+  if (alias === DEFAULT_GENIE_ALIAS) return "";
+  const slug = stringUtils.toIdentifier(alias);
+  return slug ? `_${slug}` : "";
 }
 
-function buildAskGenieTool(deps: InnerToolDeps) {
-  const { spaceId, client, writer, signal, resultSets, cacheKey } = deps;
+/* --------------------------- per-space tools --------------------------- */
+
+function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string }) {
+  const { spaceId, alias, hint } = opts;
+  const toolId = `ask_genie${aliasSuffix(alias)}`;
+  const hintLine = hint ? ` (${hint})` : "";
   return createTool({
-    id: "ask_genie",
-    description: stringUtils.toDescription`
-      Send ONE focused natural-language question to the Genie
-      space and wait for the turn to complete. Returns the final
-      \`GenieMessage\` plus, when the turn ran SQL, the rows of
-      the resulting query as \`query_result_data\`. The
-      \`statement_id\` you reference in your final \`data\`
-      blocks lives at \`message.query_result.statement_id\` (or
-      the first attachment's \`query.statement_id\`). Wire
-      events (status, thinking, sql) stream to the user
+    id: toolId,
+    description: stringUtils.toDescription(`
+      Send ONE focused natural-language question to the Genie space
+      "${alias}"${hintLine} and wait for the turn to complete.
+      Returns the final \`GenieMessage\`. Rows are NOT included -
+      the Genie wire response carries the \`statement_id\` for any
+      SQL that ran (at \`message.query_result.statement_id\` or the
+      first attachment's \`query.statement_id\`); call
+      \`get_statement\` with that id only when you need to read the
+      underlying values. If you just need to display results to the
+      user, embed a \`[data:<statement_id>]\` marker in your prose
+      instead - the host UI fetches and renders the rows on its
+      own. Wire events (status, thinking, sql) stream to the user
       automatically. Call multiple times to gather different
       angles before composing the final response.
-    `,
+    `),
     inputSchema: z.object({
       question: z.string().min(1, "question is required"),
     }),
     outputSchema: z.object({
       message: z.custom<GenieMessage>(),
-      query_result_data: z.custom<GenieDatasetData>().optional(),
     }),
     execute: async ({ question }, ctxRaw) => {
-      const ctx = ctxRaw as { requestContext?: RequestContext } | undefined;
-      const requestContext = ctx?.requestContext;
-      if (!requestContext) {
-        // Mastra always passes a `RequestContext` to tools when the
-        // parent agent received one. The outer Genie tool insists on
-        // it (it sources the user from there), so this only fires
-        // if a misconfigured caller invokes `ask_genie` directly.
-        throw new Error(
-          "ask_genie: missing requestContext (parent agent must propagate it)",
-        );
-      }
+      const ctx = ctxRaw as ToolExecuteCtx;
+      const { client, requestContext } = requireClient(ctx, toolId);
+      const writer = ctx?.writer;
+      const signal = ctx?.abortSignal;
+      const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as string | undefined;
 
       // Bounce placeholder / no-op questions BEFORE spending a Genie
-      // round-trip on them. The structuring pass occasionally pads
-      // out the tool loop with a fake `ask_genie("noop")` call,
-      // which Genie answers with "Your request 'noop' does not
-      // relate to..." - useless noise that shows up in the UI and
-      // eats one of the workspace's 5 questions/minute. Returning
-      // a clear error here surfaces the issue to the agent loop so
-      // the model corrects course instead of wasting a turn.
+      // round-trip on them. Genie answers any of these with "Your
+      // request 'noop' does not relate to..." - useless noise that
+      // shows up in the UI and eats one of the workspace's 5
+      // questions/minute. Returning a clear error here surfaces the
+      // issue to the agent loop so the model corrects course instead
+      // of wasting a turn.
       const trimmed = question.trim();
       if (trimmed.length === 0 || PLACEHOLDER_QUESTIONS.has(trimmed.toLowerCase())) {
         throw new Error(
-          `ask_genie: refusing placeholder question "${question}" - ` +
-            `call ask_genie only with a real natural-language question, ` +
+          `${toolId}: refusing placeholder question "${question}" - ` +
+            `call ${toolId} only with a real natural-language question, ` +
             `or skip the call entirely`,
         );
       }
+
+      // Seed the active Genie `conversation_id` onto `RequestContext`
+      // from the cross-request cache when a Mastra `threadId` is
+      // present so multi-turn chats reuse the same Genie conversation
+      // (and Genie's accumulated context) across separate user turns.
+      // The same `RequestContext` is reused across every `ask_genie`
+      // call within one user turn, so `ensureConversationSeeded`
+      // hits the cache at most once per request per space.
+      const cacheKey = await conversationCacheKey(spaceId, threadId);
+      await ensureConversationSeeded(requestContext, spaceId, cacheKey);
+
+      // Fire the lifecycle `started` event before any LLM /
+      // network round-trip so the host UI can pop a "Thinking..."
+      // pill the instant the model decides to delegate.
+      const startedEvent: StartedEvent = {
+        type: "started",
+        spaceId,
+        content: question,
+      };
+      await safeWrite(log, writer, startedEvent);
 
       // Single turn of `genieEventChat`. Hoisted into a closure so
       // we can re-run it after evicting a stale `conversation_id`
@@ -560,43 +593,21 @@ function buildAskGenieTool(deps: InnerToolDeps) {
         readContextConversationId(requestContext, spaceId),
       );
 
-      const statementId = extractStatementId(finalMessage);
-      let queryResultData: GenieDatasetData | undefined;
-      if (statementId) {
-        const data = await fetchStatementData(client, statementId, signal);
-        if (data.rowCount > 0) {
-          queryResultData = data;
-          // Stash with this ask's `message_id` so the outer chart
-          // loop can stamp downstream `chart` events with the
-          // same id the wire events carry - keeps the chart in
-          // the same `message_id` pill bucket on the host UI.
-          resultSets.set(statementId, {
-            data,
-            messageId: finalMessage.message_id,
-          });
-        }
-      }
-      return {
-        message: finalMessage,
-        ...(queryResultData ? { query_result_data: queryResultData } : {}),
-      };
+      return { message: finalMessage };
     },
   });
 }
 
-function buildSpaceDescriptionTool(deps: {
-  spaceId: string;
-  client: WorkspaceClient;
-  signal?: AbortSignal;
-}) {
-  const { spaceId, client, signal } = deps;
+function buildSpaceDescriptionTool(opts: { spaceId: string; alias: string }) {
+  const { spaceId, alias } = opts;
+  const toolId = `get_space_description${aliasSuffix(alias)}`;
   return createTool({
-    id: "get_space_description",
-    description: stringUtils.toDescription`
-      Return the Genie space's title, description, and warehouse id.
-      Cheap. Call once at the start of a turn to ground yourself
-      in what data the space covers.
-    `,
+    id: toolId,
+    description: stringUtils.toDescription(`
+      Return the Genie space "${alias}"'s title, description, and
+      warehouse id. Cheap. Call once at the start of a turn to
+      ground yourself in what data the space covers.
+    `),
     inputSchema: z.object({}),
     outputSchema: z.object({
       spaceId: z.string(),
@@ -604,9 +615,12 @@ function buildSpaceDescriptionTool(deps: {
       description: z.string().optional(),
       warehouseId: z.string().optional(),
     }),
-    execute: async () => {
-      const ctx = signal ? apiUtils.toContext(signal) : undefined;
-      const space = await client.genie.getSpace({ space_id: spaceId }, ctx);
+    execute: async (_input, ctxRaw) => {
+      const ctx = ctxRaw as ToolExecuteCtx;
+      const { client } = requireClient(ctx, toolId);
+      const signal = ctx?.abortSignal;
+      const apiCtx = signal ? apiUtils.toContext(signal) : undefined;
+      const space = await client.genie.getSpace({ space_id: spaceId }, apiCtx);
       return {
         spaceId,
         ...(space.title ? { title: space.title } : {}),
@@ -617,494 +631,269 @@ function buildSpaceDescriptionTool(deps: {
   });
 }
 
-function buildSpaceSerializedTool(deps: {
-  spaceId: string;
-  client: WorkspaceClient;
-  signal?: AbortSignal;
-}) {
-  const { spaceId, client, signal } = deps;
+function buildSpaceSerializedTool(opts: { spaceId: string; alias: string }) {
+  const { spaceId, alias } = opts;
+  const toolId = `get_space_serialized${aliasSuffix(alias)}`;
   return createTool({
-    id: "get_space_serialized",
-    description: stringUtils.toDescription`
-      Return the full \`GenieSpace\` JSON for this space. Use only
-      when you need exact column / table identifiers
+    id: toolId,
+    description: stringUtils.toDescription(`
+      Return the full \`GenieSpace\` JSON for the "${alias}" space.
+      Use only when you need exact column / table identifiers
       \`get_space_description\` doesn't expose. Larger payload, so
       prefer the description tool when it's enough.
-    `,
+    `),
     inputSchema: z.object({}),
     outputSchema: z.object({ space: z.unknown() }),
-    execute: async () => {
-      const ctx = signal ? apiUtils.toContext(signal) : undefined;
-      const space = await client.genie.getSpace({ space_id: spaceId }, ctx);
+    execute: async (_input, ctxRaw) => {
+      const ctx = ctxRaw as ToolExecuteCtx;
+      const { client } = requireClient(ctx, toolId);
+      const signal = ctx?.abortSignal;
+      const apiCtx = signal ? apiUtils.toContext(signal) : undefined;
+      const space = await client.genie.getSpace({ space_id: spaceId }, apiCtx);
       return { space };
     },
   });
 }
 
-/* --------------------------- inner agent --------------------------- */
-
-const AGENT_INSTRUCTIONS = stringUtils.toDescription`
-  You orchestrate a Databricks Genie space. For every user
-  question:
-
-    1. Optionally call \`get_space_description\` to ground; reach
-       for \`get_space_serialized\` only when you need exact
-       column / table names the description doesn't expose.
-    2. Decompose the question into focused sub-questions (one per
-       distinct metric / dimension / time window) and call
-       \`ask_genie\` once per sub-question. Two to six calls is
-       typical for a non-trivial question; one call is fine when
-       the question is genuinely atomic.
-    3. Each \`ask_genie\` call returns the terminal
-       \`GenieMessage\`. When the turn ran SQL it also returns
-       \`query_result_data\` - the actual rows. The matching
-       \`statement_id\` is on
-       \`message.query_result.statement_id\` (or the first
-       attachment's \`query.statement_id\`). You will reference
-       that exact id in your final \`data\` blocks.
-    4. Produce a final structured summary as an ordered array
-       interleaving \`text\` paragraphs with \`data\` blocks.
-       INTERLEAVE: prose first, then the \`data\` block it
-       interprets, then the next prose / data pair. Never dump
-       all data at the end.
-    5. For every \`data\` block, supply the exact
-       \`statement_id\` you saw on the \`ask_genie\` response. A
-       short \`description\` ("compare quarterly revenue across
-       regions", "highlight the steep drop after position 5")
-       biases the chart-planner's choice of visual. Do NOT pick
-       chart types or axis labels - the host wraps each \`data\`
-       block in a chart automatically.
-    6. Each \`data\` block should be followed by a short
-       \`text\` interpretation (deltas, anomalies, takeaways).
-       Don't paraphrase numbers the visualization will already
-       show. Skip openers / closers. Plain prose, hyphens (not em
-       / en dashes), no emojis.
-`;
+/* --------------------------- shared tools --------------------------- */
 
 /**
- * Boundary schema for the inner agent's structured output. Two
- * tagged shapes only - text or data. The wrapper maps these onto
- * the shared {@link GenieSummaryItem} (`string` / `visualize`)
- * after charting; we don't redefine GenieSummaryItem here.
+ * Default row cap for {@link buildGetStatementTool} when the agent
+ * doesn't supply a `limit`. Sized to keep result sets out of the
+ * model context unless the agent explicitly opts into more rows -
+ * the cheap shape (column names + a handful of representative
+ * rows) is usually enough to reason about a query.
  */
-const agentSummarySchema = z.object({
-  summary: z.array(
-    z.discriminatedUnion("type", [
-      z.object({
-        type: z.literal("text"),
-        text: z.string(),
-      }),
-      z.object({
-        type: z.literal("data"),
-        statementId: z.string(),
-        title: z.string().optional(),
-        description: z.string().optional(),
-      }),
-    ]),
-  ),
-});
+const DEFAULT_STATEMENT_LIMIT = 50;
 
-type AgentSummaryItem = z.infer<typeof agentSummarySchema>["summary"][number];
-
-/* ----------------------------- factory ----------------------------- */
-
-/**
- * Options for {@link createGenieTool}. Only carries config that
- * doesn't vary per request - the per-request {@link WorkspaceClient},
- * `RequestContext`, writer, and abort signal flow through the
- * tool's `execute(_, ctx)` and are not captured here.
- */
-export interface CreateGenieToolOptions {
-  /** Genie space id this tool targets. */
-  spaceId: string;
-  /** Plugin config; resolves the LLM and chart planner agent. */
-  config: MastraPluginConfig;
-  /** Override the registered tool id. Defaults to `"genie"`. */
-  toolId?: string;
-  /** Override the tool description shown to the calling LLM. */
-  toolDescription?: string;
-  /**
-   * Override the inner agent's max tool-loop steps. Defaults to
-   * {@link DEFAULT_MAX_STEPS}.
-   */
-  maxSteps?: number;
-}
-
-/**
- * Build the calling agent's Genie tool. The returned Mastra tool
- * runs end-to-end on each invocation:
- *
- *   1. Pull the per-request `WorkspaceClient` off
- *      `ctx.requestContext` (stamped by `MastraServer` under
- *      {@link MASTRA_USER_KEY}) and emit a `started` writer
- *      event so the host UI shows progress immediately.
- *   2. Spin up the inner Mastra agent + three tools, fresh per
- *      call so the row cache stays invocation-scoped.
- *   3. Run the agent with `structuredOutput` against
- *      {@link agentSummarySchema}. Mastra's two-pass design keeps
- *      the inner loop tools-only (no `response_format`), so the
- *      Databricks Model Serving `response_format`+`tools`
- *      collision never fires.
- *   4. Walk the returned `[text|data][]`, map `text` items to
- *      shared `GenieSummaryItem.string`, and chart every `data`
- *      item in parallel via {@link runChartPlanner} to a
- *      `GenieSummaryItem.visualize`. Items referencing a missing
- *      `statementId` are dropped with a warn log; chart-planner
- *      failures leave `dataset.chart` unset so the host UI falls
- *      back to a table.
- */
-export function createGenieTool(opts: CreateGenieToolOptions) {
-  const {
-    spaceId,
-    config,
-    toolId = "genie",
-    toolDescription = stringUtils.toDescription`
-      Ask a question about the Databricks Genie space.
-
-      Returns \`{ summary: SummaryItem[] }\` where each item is
-      one of:
-
-      - \`{ type: "string", text }\` - prose to weave into your
-        reply verbatim or paraphrase.
-      - \`{ type: "visualize", statementId, title?, description?,
-        dataset: { data: { columns, rows, rowCount },
-        chart?: { chartId, chartType } } }\` - a chartable result
-        set. When \`dataset.chart\` is present the chart is ALREADY
-        rendered and queued for inline display; embed the marker
-        \`[[chart:<chartId>]]\` on its own line at the position
-        you want it to appear and the host UI drops the rendered
-        chart in. Re-use the chartId verbatim - do NOT call
-        \`render_data\` for the same dataset (it would render the
-        same chart a second time and stall your stream). Only
-        fall back to \`render_data\` when \`dataset.chart\` is
-        missing (chart-planner failed) AND you genuinely need a
-        picture; otherwise present the data inline as prose or a
-        short table.
-    `,
-    maxSteps = DEFAULT_MAX_STEPS,
-  } = opts;
-
+function buildGetStatementTool() {
+  const toolId = "get_statement";
   return createTool({
     id: toolId,
-    description: toolDescription,
+    description: stringUtils.toDescription(`
+      Fetch the rows of a Genie statement by its \`statement_id\` (the
+      value at \`message.query_result.statement_id\` or
+      \`message.attachments[*].query.statement_id\` returned from
+      \`ask_genie\`). Use this ONLY when you need to read the underlying
+      values to reason about them in your reply - e.g. naming the
+      largest row, computing a delta the visualization wouldn't already
+      convey, or filtering down to a specific record. If you'd just be
+      reciting numbers the user will see anyway, skip the call and
+      embed a \`[data:<statement_id>]\` marker in your prose instead;
+      the host UI fetches and renders the rows on its own. \`limit\`
+      caps the number of rows returned (defaults to
+      ${DEFAULT_STATEMENT_LIMIT}). \`rowCount\` reflects the full
+      upstream total - compare to \`rows.length\` to detect truncation.
+    `),
     inputSchema: z.object({
-      question: z.string().describe(stringUtils.toDescription`
-        Natural-language question about the data in this Genie
-        space. Phrase it from the user's perspective; the agent
-        decomposes it internally.
-      `),
-    }),
-    outputSchema: z.custom<GenieAgentResult>(),
-    execute: async (input, ctxRaw) => {
-      const ctx = ctxRaw as
-        | {
-            requestContext?: RequestContext;
-            writer?: MinimalWriter;
-            abortSignal?: AbortSignal;
-          }
-        | undefined;
-      const requestContext = ctx?.requestContext;
-      if (!requestContext) {
-        throw new Error(
-          "genie: missing requestContext (MastraServer must stamp MASTRA_USER_KEY)",
-        );
-      }
-      const user = requestContext.get(MASTRA_USER_KEY) as User | undefined;
-      if (!user) {
-        throw new Error("genie: no user on requestContext (MASTRA_USER_KEY not set)");
-      }
-      const client = user.executionContext.client;
-      const writer = ctx?.writer;
-      const signal = ctx?.abortSignal;
-      const threadId = requestContext.get(MASTRA_THREAD_ID_KEY) as string | undefined;
-
-      // Fire the lifecycle `started` event before any LLM /
-      // network round-trip so the host UI can pop a "Thinking..."
-      // pill the instant the model decides to delegate. The wire
-      // `conversation_id` / `message_id` aren't known yet (no
-      // Genie call has been made) and ride as `undefined` -
-      // subscribers that need them watch the later
-      // `message` / `result` wire events for the real ids.
-      const startedEvent: StartedEvent = {
-        type: "started",
-        spaceId,
-        content: input.question,
-      };
-      await safeWrite(log, writer, startedEvent);
-
-      const resultSets = new Map<string, StatementEntry>();
-
-      // Seed the active Genie `conversation_id` onto
-      // `RequestContext` from AppKit's `CacheManager` when a Mastra
-      // `threadId` is present so multi-turn chats reuse the same
-      // Genie conversation (and Genie's accumulated context) across
-      // separate tool invocations. The same `RequestContext` flows
-      // to the inner `ask_genie` tool via Mastra, which reads and
-      // updates the same slot as Genie hands out / rotates ids.
-      // Cache misses, threads without memory, and unhealthy cache
-      // storage all leave the slot unset, which makes `ask_genie`
-      // call `startConversation` and mint a fresh id (then cache
-      // it).
-      const cacheKey = await conversationCacheKey(spaceId, threadId);
-      const cachedConversationId = await readCachedConversationId(cacheKey);
-      if (cachedConversationId) {
-        writeContextConversationId(requestContext, spaceId, cachedConversationId);
-      }
-
-      const innerDeps: InnerToolDeps = {
-        spaceId,
-        client,
-        ...(writer ? { writer } : {}),
-        ...(signal ? { signal } : {}),
-        resultSets,
-        ...(cacheKey ? { cacheKey } : {}),
-      };
-      const tools = {
-        ask_genie: buildAskGenieTool(innerDeps),
-        get_space_description: buildSpaceDescriptionTool({
-          spaceId,
-          client,
-          ...(signal ? { signal } : {}),
-        }),
-        get_space_serialized: buildSpaceSerializedTool({
-          spaceId,
-          client,
-          ...(signal ? { signal } : {}),
-        }),
-      };
-
-      // Resolve the model config once for this request so we can
-      // share it with the structuring pass below. The agent's
-      // `model` field accepts a function form for per-request
-      // resolution, but `structuredOutput.model` requires a
-      // static `MastraModelConfig`, and we need both to be on
-      // the same Databricks endpoint with the same OBO-scoped
-      // headers. Calling `buildModel` here (inside `execute`)
-      // keeps user scoping correct because `requestContext`
-      // already reflects the active request's user.
-      const resolvedModel = await buildModel(config, requestContext);
-
-      const agent = new Agent({
-        id: `genie__${spaceId}`,
-        name: `Genie (${spaceId})`,
-        description: stringUtils.toDescription`
-          Inner orchestrator for the "${spaceId}" Genie space.
-          Asks Genie one focused sub-question at a time and
-          returns an interleaved [text|data] summary.
-        `,
-        instructions: AGENT_INSTRUCTIONS,
-        model: resolvedModel,
-        tools,
-      });
-
-      // Mastra's `structuredOutput` operates in one of two modes
-      // based on whether `model` is set:
-      //   - "direct"    (no model)     -> the schema is enforced
-      //                                   in the SAME LLM call as
-      //                                   the agent loop, by
-      //                                   adding `response_format`
-      //                                   alongside `tools`.
-      //                                   Databricks Model Serving
-      //                                   rejects that combination
-      //                                   with `INVALID_PARAMETER_VALUE:
-      //                                   Cannot specify both
-      //                                   response_format and tools
-      //                                   in the same request.`
-      //   - "processor" (model passed) -> the main loop carries
-      //                                   tools and NO
-      //                                   `response_format`; a
-      //                                   separate, tool-free
-      //                                   structuring agent
-      //                                   re-prompts the model
-      //                                   with `response_format`
-      //                                   to coerce the agent's
-      //                                   final text into the
-      //                                   schema.
-      // We use "processor" mode but ALSO set
-      // `jsonPromptInjection: true`. Mastra's structuring agent
-      // calls `.stream(...)` under the hood, and Databricks Model
-      // Serving rejects `response_format` together with streaming
-      // (`INVALID_PARAMETER_VALUE: Structured output is not
-      // currently supported with streaming.`). Prompt injection
-      // sidesteps that by embedding the JSON Schema in the
-      // structuring agent's system prompt instead of sending
-      // `response_format`. `errorStrategy: "warn"` keeps a
-      // structuring failure from escaping as an unhandled
-      // promise rejection: it logs and leaves `result.object`
-      // undefined, which we surface as a clean error in
-      // {@link GenieAgentResult}.
-      const agentResult = await agent.generate(input.question, {
-        requestContext,
-        maxSteps,
-        structuredOutput: {
-          schema: agentSummarySchema,
-          model: resolvedModel,
-          jsonPromptInjection: true,
-          errorStrategy: "warn",
-        },
-        ...(signal ? { abortSignal: signal } : {}),
-      });
-      const submission = agentResult.object;
-      if (!submission) {
-        const message = "Genie agent returned no structured summary";
-        log.warn("agent:no-summary", { spaceId });
-        const finalConversationId = readContextConversationId(requestContext, spaceId);
-        return {
-          spaceId,
-          summary: [],
-          ...(finalConversationId ? { conversationId: finalConversationId } : {}),
-          error: message,
-        } satisfies GenieAgentResult;
-      }
-
-      // Lifecycle hook: the agent + structuring pass are done.
-      // Emit one `summary` event with the structured-item counts
-      // so the host UI can transition from "thinking" to
-      // "charting" and seed N chart skeletons before the
-      // per-chart `chart` events arrive. We can't fire this
-      // EARLIER (i.e. when the structuring pass starts) because
-      // Mastra runs the inner loop + structuring pass together
-      // inside `agent.generate(...)` with no observable boundary
-      // between them.
-      const textItemCount = submission.summary.filter(
-        (i: AgentSummaryItem) => i.type === "text",
-      ).length;
-      const dataItemCount = submission.summary.length - textItemCount;
-      const summaryEvent: SummaryEvent = {
-        type: "summary",
-        spaceId,
-        items: submission.summary.length,
-        textItems: textItemCount,
-        dataItems: dataItemCount,
-      };
-      await safeWrite(log, writer, summaryEvent);
-
-      // Chart every `data` item in parallel; map `text` items to
-      // the shared `string` summary variant verbatim. Missing
-      // statement ids are dropped (the agent referenced something
-      // that never came back from `ask_genie`), planner failures
-      // leave `dataset.chart` unset so the host UI falls back to
-      // a table render. Each successfully planned chart pushes a
-      // `chart` writer event so the UI can fade in the rendered
-      // chart slot the moment its planner returns rather than
-      // waiting for the entire batch to finish.
-      const hydrated = await Promise.all(
-        submission.summary.map(
-          async (item: AgentSummaryItem): Promise<GenieSummaryItem | undefined> => {
-            if (item.type === "text") {
-              return { type: "string", text: item.text };
-            }
-            const entry = resultSets.get(item.statementId);
-            if (!entry) {
-              log.warn("data:missing-statement", {
-                statementId: item.statementId,
-              });
-              return undefined;
-            }
-            const { data, messageId } = entry;
-            let dataset: GenieDataset = { data };
-            try {
-              const planned = await runChartPlanner({
-                config,
-                requestContext,
-                title: item.title ?? "Genie result",
-                ...(item.description ? { description: item.description } : {}),
-                data: data.rows,
-                ...(signal ? { signal } : {}),
-              });
-              const chartId = commonUtils.shortId();
-              // Slim chart reference for the LLM-bound result: just
-              // `chartId` + `chartType`. The full Echarts spec goes
-              // to the UI via the writer event AND into the
-              // request-scoped chart inventory below; the model
-              // only needs the id to place `[[chart:<id>]]`.
-              dataset = {
-                data,
-                chart: {
-                  chartId,
-                  chartType: planned.chartType,
-                },
-              };
-              const chartEvent: ChartEvent = {
-                type: "chart",
-                chartId,
-                statementId: item.statementId,
-                messageId,
-                ...(item.title ? { title: item.title } : {}),
-                ...(item.description ? { description: item.description } : {}),
-                data: data.rows,
-                option: planned.option,
-              };
-              await safeWrite(log, writer, chartEvent);
-              // Stash the resolved chart on the per-request
-              // `RequestContext` so downstream code in the same
-              // request (output processors, follow-up tool calls,
-              // any post-run hook) can look up the full spec by
-              // `chartId` without re-fetching or re-planning.
-              recordChartInContext(requestContext, chartEvent);
-            } catch (err) {
-              const errorMessage = commonUtils.errorMessage(err);
-              log.warn("chart:error", {
-                statementId: item.statementId,
-                messageId,
-                error: errorMessage,
-              });
-              // Surface the chart-planner failure as a writer event
-              // stamped with the same `messageId` the rest of this
-              // ask's wire events carry, so the host UI groups the
-              // failure into the same pill bucket and can surface
-              // a "couldn't render chart" note next to the table
-              // fallback instead of silently dropping the chart.
-              const errorEvent: MastraGenieErrorEvent = {
-                type: "error",
-                spaceId,
-                messageId,
-                error: `chart-planner: ${errorMessage}`,
-              };
-              await safeWrite(log, writer, errorEvent);
-            }
-            return {
-              type: "visualize",
-              statementId: item.statementId,
-              ...(item.title ? { title: item.title } : {}),
-              ...(item.description ? { description: item.description } : {}),
-              dataset,
-            };
-          },
+      statement_id: z.string().min(1, "statement_id is required"),
+      limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          "Max rows to return. Defaults to a small sample; raise only when more rows are genuinely needed.",
         ),
-      );
-      const summary = hydrated.filter((x): x is GenieSummaryItem => x !== undefined);
-
-      log.info("genie:done", {
-        spaceId,
-        items: summary.length,
-        statementsCharted: summary.filter(
-          (s) => s.type === "visualize" && s.dataset.chart,
-        ).length,
+    }),
+    outputSchema: z.object({
+      columns: z.array(z.string()),
+      rows: z.array(z.record(z.string(), z.unknown())),
+      rowCount: z.number(),
+      truncated: z.boolean(),
+    }),
+    execute: async ({ statement_id, limit }, ctxRaw) => {
+      const ctx = ctxRaw as ToolExecuteCtx;
+      const { client } = requireClient(ctx, toolId);
+      const signal = ctx?.abortSignal;
+      const effectiveLimit = limit ?? DEFAULT_STATEMENT_LIMIT;
+      const data = await fetchStatementData(client, statement_id, {
+        limit: effectiveLimit,
+        ...(signal ? { signal } : {}),
       });
-
-      const finalConversationId = readContextConversationId(requestContext, spaceId);
       return {
-        spaceId,
-        summary,
-        ...(finalConversationId ? { conversationId: finalConversationId } : {}),
-      } satisfies GenieAgentResult;
+        columns: data.columns,
+        rows: data.rows,
+        rowCount: data.rowCount,
+        truncated: data.rows.length < data.rowCount,
+      };
     },
   });
 }
 
-/* --------------------- multi-alias surface --------------------- */
+/**
+ * `prepare_chart` Mastra tool. Thin wrapper over
+ * {@link prepareChart} that resolves the dataset by fetching the
+ * Genie statement's rows on demand. The tool mints a `chartId`
+ * synchronously, caches an empty placeholder, and kicks off the
+ * planner in the background so the agent loop never blocks. The
+ * host UI resolves `[chart:<chartId>]` markers by reading the
+ * cached {@link Chart} entry (1h TTL).
+ *
+ * Space-agnostic: a Genie `statement_id` is workspace-scoped, so
+ * one shared `prepare_chart` tool covers every wired Genie space.
+ *
+ * Cancellation: deliberately does NOT forward the per-call
+ * `abortSignal` to {@link prepareChart}. The planner task is
+ * fire-and-forget background work; the tool's own `execute`
+ * resolves the moment the `chartId` is minted, so the per-call
+ * signal aborts the second the tool returns. The 1h cache TTL
+ * caps abandoned entries.
+ */
+function buildPrepareChartTool(opts: { config: MastraPluginConfig }) {
+  const { config } = opts;
+  const toolId = "prepare_chart";
+  return createTool({
+    id: toolId,
+    description: stringUtils.toDescription([
+      `
+        Queue a chart for the rows of a Genie statement. Mints a
+        short \`chartId\` synchronously and kicks off a BACKGROUND
+        task that fetches the statement's rows, runs the
+        chart-planner to pick a chart type and Echarts spec, and
+        caches the result under the \`chartId\` for one hour. The
+        host UI fetches the cached chart on its own once it lands.
+      `,
+      `
+        To display the chart in your reply, embed
+        \`[chart:<chartId>]\` on its own line at the position you
+        want it to appear. The tool returns immediately - do NOT
+        wait or call it again to "check progress"; the chart
+        resolves asynchronously on the host UI's side.
+      `,
+      `
+        Use this only when the data has a story a chart conveys
+        better than a table (trends, rankings, distributions,
+        parts-of-a-whole). For raw rows, embed
+        \`[data:<statement_id>]\` instead and skip this tool.
+      `,
+    ]),
+    inputSchema: prepareChartRequestSchema,
+    outputSchema: ChartSchema.pick({ chartId: true }),
+    execute: async (request, ctxRaw) => {
+      const ctx = ctxRaw as ToolExecuteCtx;
+      const { client } = requireClient(ctx, toolId);
+      return prepareChart({
+        config,
+        ...(request.title ? { title: request.title } : {}),
+        ...(request.description ? { description: request.description } : {}),
+        resolveData: (taskSignal) =>
+          fetchStatementData(client, request.statement_id, {
+            ...(taskSignal ? { signal: taskSignal } : {}),
+          }),
+        ...(ctx?.requestContext ? { requestContext: ctx.requestContext } : {}),
+      });
+    },
+  });
+}
+
+/* --------------------------- orchestration prompt --------------------------- */
 
 /**
- * Default tool id for a wired Genie alias. The well-known
- * `default` alias collapses to `genie`; every other alias gets a
- * `genie_` prefix so multi-space registrations stay
- * disambiguated.
+ * Suggested orchestration prompt for the central agent that owns
+ * the Genie tools. Compose into your agent's `instructions` to
+ * get the canonical "decompose questions, ask Genie focused
+ * sub-questions, place data / chart markers in prose" behavior:
+ *
+ * ```ts
+ * createAgent({
+ *   instructions: `${myAgentInstructions}\n\n${GENIE_INSTRUCTIONS}`,
+ *   tools(plugins) {
+ *     return { ...plugins.genie?.toolkit() };
+ *   },
+ * });
+ * ```
+ *
+ * The prompt references the bare tool names (`ask_genie`,
+ * `get_space_description`, `get_space_serialized`,
+ * `get_statement`, `prepare_chart`) used for the single-space
+ * default alias. Multi-space deployments should write their own
+ * variant that names the suffixed per-space tools
+ * (e.g. `ask_genie_sales`).
  */
-export function defaultGenieToolName(alias: string): string {
-  if (alias === DEFAULT_GENIE_ALIAS) return "genie";
-  return stringUtils.toIdentifierWithOptions({ distinct: true }, "genie", alias);
-}
+export const GENIE_INSTRUCTIONS = stringUtils.toDescription([
+  "Genie orchestration. For every user question that needs SQL-backed data:",
+  {
+    numbered: [
+      `
+        Optionally call \`get_space_description\` to ground; reach for
+        \`get_space_serialized\` only when you need exact column / table
+        names the description doesn't expose.
+      `,
+      `
+        Decompose the question into focused sub-questions (one per
+        distinct metric / dimension / time window) and call
+        \`ask_genie\` once per sub-question. Two to six calls is
+        typical for a non-trivial question; one call is fine when the
+        question is genuinely atomic.
+      `,
+      `
+        Each \`ask_genie\` call returns the terminal \`GenieMessage\`.
+        When the turn ran SQL the result has a \`statement_id\` - read
+        it from \`message.query_result.statement_id\` (or the first
+        attachment's \`query.statement_id\`).
+      `,
+      [
+        `
+          To DISPLAY a result set in your reply, embed a marker on its
+          own line where the visualization should appear. Two marker
+          shapes:
+        `,
+        {
+          bullets: [
+            `
+              \`[data:<statement_id>]\` - render the rows as a table.
+              Use this when there's no clear visual story (long lists,
+              reference data, single-row results, or the user just
+              wants to see the data). Embed the marker directly; no
+              tool call needed.
+            `,
+            `
+              \`[chart:<chartId>]\` - render the rows as a chart. To
+              get a \`<chartId>\`, call \`prepare_chart\` with the
+              statement's id (and an optional \`title\` / one-line
+              \`description\` of the insight to surface). The tool
+              returns the \`chartId\` synchronously and prepares the
+              chart spec in the background; embed the returned id as
+              \`[chart:<chartId>]\` on its own line wherever the
+              chart should appear. Use a chart when the data has a
+              story a visual conveys better than a table (trends,
+              rankings, distributions, parts-of-a-whole).
+            `,
+          ],
+        },
+        `
+          The host UI resolves both markers on its own once it sees
+          them - you do NOT need to call \`get_statement\` just to
+          display data, and you do NOT need to wait on
+          \`prepare_chart\` (it returns the id immediately and the
+          host UI fetches the cached chart later). Pick at most one
+          marker per statement; don't chart AND table the same result
+          side by side.
+        `,
+      ],
+      `
+        Call \`get_statement(statement_id, limit?)\` ONLY when you need
+        to read the actual values to reason about them (e.g. naming a
+        specific row, computing a delta the table or chart wouldn't
+        show, or sanity-checking a result before interpreting it). If
+        you'd just be reciting numbers the visualization already shows,
+        skip the call and use a marker instead. \`limit\` defaults to a
+        small sample; raise it only when you genuinely need more rows.
+      `,
+      `
+        Compose your final reply as plain prose. Interleave paragraphs
+        with \`[data:...]\` / \`[chart:...]\` markers wherever a result
+        should render. Don't dump all markers at the end - place each
+        one next to the prose that interprets it. Don't restate every
+        number the visualization already shows; call out deltas,
+        anomalies, takeaways.
+      `,
+    ],
+  },
+]);
+
+/* --------------------- multi-alias surface --------------------- */
 
 /**
  * Normalize the {@link GenieSpacesConfig} record. Bare-string
@@ -1202,14 +991,19 @@ export function resolveGenieSpaces(
 }
 
 /**
- * Build one Mastra tool per configured Genie space. Each tool is
- * a thin {@link createGenieTool} wrapper with the alias-derived
- * id and a hint-flavored description so the calling LLM knows
- * which space covers what data.
+ * Build the flat Mastra tools record for every configured Genie
+ * space. Two shared, space-agnostic tools (`get_statement`,
+ * `prepare_chart`) are registered once regardless of how many
+ * spaces are wired; the per-space tools (`ask_genie`,
+ * `get_space_description`, `get_space_serialized`) are suffixed
+ * with `_<alias>` for non-default aliases so multi-space
+ * deployments stay disambiguated.
  *
- * Returns a record keyed by tool id, ready to spread into an
- * `Agent`'s `tools` map (or surfaced via
- * `plugins.genie?.toolkit()`).
+ * Returns a record keyed by tool id, ready to spread into the
+ * central `Agent`'s `tools` map (or surfaced via the
+ * `plugins.genie?.toolkit()` callback). Returns an empty record
+ * when `spaces` resolves to zero entries so the caller can spread
+ * safely.
  */
 export function buildGenieTools(opts: {
   spaces: GenieSpacesConfig | Record<string, GenieSpaceConfig>;
@@ -1217,23 +1011,23 @@ export function buildGenieTools(opts: {
 }): MastraTools {
   const normalized = normalizeGenieSpaces(opts.spaces);
   const tools: Record<string, ReturnType<typeof createTool>> = {};
+  if (Object.keys(normalized).length === 0) return tools;
+
+  // Shared, space-agnostic tools.
+  tools.get_statement = buildGetStatementTool();
+  tools.prepare_chart = buildPrepareChartTool({ config: opts.config });
+
   for (const [alias, space] of Object.entries(normalized)) {
-    const id = defaultGenieToolName(alias);
-    const toolDescription = stringUtils.toDescription`
-      Delegate a natural-language data question to the
-      Databricks Genie space "${alias}"${space.hint ? ` (${space.hint})` : ""}.
-      Returns an ordered (text | dataset)[] summary the host UI
-      renders inline; datasets carry the rows and a
-      pre-rendered Echarts spec when the chart-planner
-      succeeded. Progress events (status, SQL, row counts,
-      charts) stream to the UI automatically.
-    `;
-    tools[id] = createGenieTool({
+    const askTool = buildAskGenieTool({
       spaceId: space.spaceId,
-      config: opts.config,
-      toolId: id,
-      toolDescription,
+      alias,
+      ...(space.hint ? { hint: space.hint } : {}),
     });
+    const descTool = buildSpaceDescriptionTool({ spaceId: space.spaceId, alias });
+    const serTool = buildSpaceSerializedTool({ spaceId: space.spaceId, alias });
+    tools[askTool.id] = askTool;
+    tools[descTool.id] = descTool;
+    tools[serTool.id] = serTool;
   }
   return tools;
 }
@@ -1241,7 +1035,7 @@ export function buildGenieTools(opts: {
 /**
  * Plugin-toolkit adapter so the `plugins.genie?.toolkit()` lookup
  * inside an agent's `tools(plugins)` callback returns the
- * Genie agent-backed tools instead of throwing on missing plugin.
+ * flat Genie tools record instead of throwing on missing plugin.
  * Mirrors AppKit's `PluginToolkitProvider` shape.
  */
 export function buildGenieToolkitProvider(opts: {

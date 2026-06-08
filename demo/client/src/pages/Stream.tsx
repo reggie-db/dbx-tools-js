@@ -17,11 +17,6 @@ import {
   useMastraConfig,
   useMastraModels,
 } from "@/lib/mastra-client";
-import {
-  genieResultToWriterEvents,
-  isGenieAgentResult,
-} from "@dbx-tools/appkit-mastra-shared";
-import { synthesizeToolEventsFromHistory } from "@/lib/genie-history";
 
 const log = logUtils.logger("client/stream");
 
@@ -56,7 +51,7 @@ const makeUserMessage = (text: string): UIMessage => ({
 });
 
 // `tool-output` chunks carry arbitrary tool-defined payloads; only the
-// `{type: ...}` shape we know how to render in `ToolStatusList` is
+// `{type: ...}` shape we know how to render in `ToolSessionPill` is
 // surfaced. Anything else (other tools, raw data, etc.) is ignored.
 const isToolProgress = (value: unknown): value is ToolProgress =>
   typeof value === "object" &&
@@ -280,38 +275,15 @@ const Stream = () => {
             case "tool-result": {
               const toolCallId = chunk.payload?.toolCallId;
               if (typeof toolCallId !== "string") break;
-              // Charts arrive as live writer events from the
-              // Genie agent (no longer embedded in the structured
-              // return value), so the tool-result hook only needs
-              // to surface the terminal `error` event when Genie
-              // reports `FAILED` / `CANCELLED`. Live chart events
-              // already populated `e.progress` via the
-              // `tool-output` path; merge any extras (just the
-              // error frame today) on top of them.
-              //
-              // Mastra's live `tool-result` chunk carries the
-              // tool's return value under `payload.result` (the
-              // persisted AI SDK V5 `tool-${name}` part uses
-              // `output` instead - that path lives in
-              // `synthesizeToolEventsFromHistory`). Fall back to
-              // `output` so a future Mastra rename doesn't
-              // silently break extraction.
-              const raw =
-                chunk.payload?.result ?? chunk.payload?.output;
-              const extra = isGenieAgentResult(raw)
-                ? genieResultToWriterEvents(raw)
-                : [];
+              // Genie tools (`ask_genie`, `get_statement`,
+              // `prepare_chart`) stream their entire progress
+              // surface through `ctx.writer` and arrive on this
+              // page via the `tool-output` path. The settled
+              // tool-result return value is opaque to the UI -
+              // we only need it to flip the pill to `done`.
               patchToolEvents((list) =>
                 list.map((e) =>
-                  e.id === toolCallId
-                    ? {
-                        ...e,
-                        status: "done",
-                        ...(extra.length > 0
-                          ? { progress: [...(e.progress ?? []), ...extra] }
-                          : {}),
-                      }
-                    : e,
+                  e.id === toolCallId ? { ...e, status: "done" } : e,
                 ),
               );
               break;
@@ -546,15 +518,12 @@ const Stream = () => {
       .then((response) => {
         if (cancelled) return;
         writeMessages(response.uiMessages);
-        // Replay Genie tool events (SQL pills, charts, suggested
-        // questions) by synthesising them from the persisted
-        // tool-result outputs. Live stream state is gone after a
-        // reload, but the DrainResult sat in the assistant
-        // message's `tool-${name}` part the whole time.
-        const replay = synthesizeToolEventsFromHistory(response.uiMessages);
-        if (Object.keys(replay).length > 0) {
-          setToolEventsByMessage((prev) => ({ ...prev, ...replay }));
-        }
+        // Tool events are live-stream only - the progress that
+        // built the SQL/thinking pills isn't persisted, so a
+        // reload renders the settled assistant text + any
+        // `[chart:<id>]` markers it carries. Charts re-resolve
+        // out-of-band: `<ChartSlot>` long-polls the chart cache
+        // by id; unknown / TTL-expired ids silently drop.
         historyPageRef.current = 1;
         setHasMoreHistory(response.hasMore);
       })
@@ -600,13 +569,6 @@ const Stream = () => {
       .then((response) => {
         if (response.uiMessages.length > 0) {
           writeMessages([...response.uiMessages, ...messagesRef.current]);
-          // Same synthesis as the initial load, but only for the
-          // newly-prepended page so existing live tool events for
-          // recent turns aren't clobbered.
-          const replay = synthesizeToolEventsFromHistory(response.uiMessages);
-          if (Object.keys(replay).length > 0) {
-            setToolEventsByMessage((prev) => ({ ...prev, ...replay }));
-          }
         }
         setHasMoreHistory(response.hasMore);
       })

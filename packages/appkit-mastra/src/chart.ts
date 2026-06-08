@@ -1,33 +1,46 @@
 /**
- * Chart-rendering primitives.
+ * Chart planner + chart cache.
  *
- * Two surfaces, one shared brain:
+ * Self-contained chart subsystem with two layers:
  *
- * - {@link runChartPlanner}: the chart-planner Agent + ECOption
- *   expansion as a plain async function. Takes a dataset and
- *   returns a promise that resolves to a full `EChartsOption`
- *   JSON plus the chosen `chartType`. No background work, no
- *   writer side-effects, no id allocation - callers stitch the
- *   result into whatever shape their producer needs.
+ *   1. Inner planner agent (private). Pure dataset-in /
+ *      `EChartsOption`-out brain. Driven by {@link prepareChart};
+ *      callers never instantiate it directly.
+ *   2. {@link prepareChart}: orchestration on top of the planner.
+ *      Mints a `chartId`, caches an empty `{ chartId }` record
+ *      synchronously, then resolves the dataset and runs the
+ *      planner in the background. The terminal entry settles with
+ *      either `result` (success) or `error` (failure). Both
+ *      undefined means the entry is still processing.
  *
- * - {@link buildRenderDataTool}: a Mastra tool the model calls
- *   ("here is a dataset, render it as a chart"). Mints a short
- *   `chartId`, `await`s {@link runChartPlanner} so the planner
- *   latency is attributed to this tool's trace span, emits one
- *   `type: "chart"` writer event carrying the dataset + resolved
- *   `option`, and returns `{ chartId }` to the model. The
- *   LLM-bound output stays flat regardless of dataset size.
+ * The cache surface ({@link fetchChart}) is the only state the
+ * HTTP route and the chart-producing tools share. `prepareChart`
+ * is dataset-agnostic - callers supply a `resolveData` callback
+ * that fetches the rows however they like (Genie statement, inline
+ * dataset, custom API). The module has no knowledge of Genie or
+ * statement ids; those concerns live in the tools that wrap it.
  *
- * The model wires the chart into its reply by emitting the marker
- * `[[chart:<chartId>]]` on its own line in markdown. The chat
- * client splits the assistant text on these markers and drops a
- * `<ChartSlot>` in at the position the model placed it. The slot
- * resolves directly to the rendered Echarts visualisation - no
- * skeleton state, because the option is in the same event as the
- * dataset.
+ * Wire-format schemas (`ChartSchema`, `ChartResultSchema`,
+ * {@link ChartTypeSchema}) live in
+ * `@dbx-tools/appkit-mastra-shared` so the demo client and any
+ * other UI consumer share the exact same shape this module reads
+ * and writes.
+ *
+ * Public surface (everything else is module-private):
+ *   - {@link chartPlannerRequestSchema} / {@link ChartPlannerRequest}
+ *   - {@link prepareChart} / {@link PrepareChartOptions}
+ *   - {@link fetchChart} / {@link FetchChartOptions}
+ *   - {@link buildRenderDataTool} (the `render_data` Mastra tool
+ *     auto-wired on every agent in `agents.ts`)
  */
 
-import type { MinimalWriter } from "@dbx-tools/appkit-mastra-shared";
+import { CacheManager } from "@databricks/appkit";
+import {
+  ChartSchema,
+  ChartTypeSchema,
+  type Chart,
+  type ChartResult,
+} from "@dbx-tools/appkit-mastra-shared";
 import { commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import { Agent } from "@mastra/core/agent";
 import type { RequestContext } from "@mastra/core/request-context";
@@ -35,17 +48,39 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 import type { MastraPluginConfig } from "./config.js";
-import { ModelTier, modelForTier, buildModel } from "./model.js";
-import { safeWrite } from "./writer.js";
+import { buildModel, ModelTier, modelForTier } from "./model.js";
+
+const log = logUtils.logger("mastra/chart");
+
+/* ------------------------------ constants ------------------------------ */
 
 /**
- * Module-level logger tagged `[mastra/chart]`. Uses the shared
- * {@link logUtils.logger} so calls below `LOG_LEVEL` are
- * discarded for free. Default `LOG_LEVEL` is `info`; flip to
- * `debug` to see the per-chart timeline (`emit:start` →
- * `write:ok(data)` → `planner:done` → `write:ok(option)`).
+ * TTL for cached chart entries. One hour balances "long enough for
+ * the host UI to fetch the chart well after the model finished
+ * talking" against "short enough that abandoned chart ids don't
+ * pin storage". Matches the typical Databricks OBO token lifetime
+ * so any data re-resolution stays inside the original auth window.
  */
-const log = logUtils.logger("mastra/chart");
+const CHART_CACHE_TTL_SEC = 60 * 60;
+
+/** Cache namespace; keeps the chart keyspace tidy. */
+const CHART_CACHE_NAMESPACE = "mastra:chart";
+
+/**
+ * `userKey` for `CacheManager.generateKey`. Chart ids are minted
+ * via `commonUtils.id()` (v4 UUID) and are unguessable, so a
+ * constant user key is fine. The HTTP route can re-scope to the
+ * requesting user when policy demands it.
+ */
+const CHART_CACHE_USER_KEY = "mastra-chart";
+
+/** Default server-side long-poll budget for {@link fetchChart}. */
+const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
+
+/** Default inter-poll sleep for {@link fetchChart}. */
+const DEFAULT_FETCH_INTERVAL_MS = 250;
+
+/* ------------------------------- schemas ------------------------------- */
 
 /**
  * One series data point. Wide variant set so the planner agent can
@@ -72,10 +107,6 @@ const log = logUtils.logger("mastra/chart");
  *      match any variant, the bad item becomes `null` instead of
  *      taking down the entire chart with a
  *      `Structured output validation failed` error.
- *
- * Net effect: a 200-row dataset with a few sparse/null/string
- * values still produces a chart; only a totally-malformed planner
- * response (no items at all) falls through to the table fallback.
  */
 const chartDataPointSchema = z
   .preprocess(
@@ -118,8 +149,6 @@ const chartDataPointSchema = z
   )
   .catch(null);
 
-type ChartDataPoint = z.infer<typeof chartDataPointSchema>;
-
 /**
  * Compact, model-friendly representation of an Echarts spec. The
  * planner agent emits this; {@link planToEchartsOption} expands it
@@ -131,337 +160,425 @@ type ChartDataPoint = z.infer<typeof chartDataPointSchema>;
  * across charts.
  */
 const chartPlanSchema = z.object({
-  chartType: z.enum(["bar", "line", "area", "scatter", "pie"])
-    .describe(stringUtils.toDescription`
-      The chart shape that best matches the data and intent. Use
-      \`bar\` for category-vs-value comparisons, \`line\` for
-      trends over an ordered axis, \`area\` for stacked-trend
-      emphasis, \`scatter\` for two-numeric-axis correlations,
-      \`pie\` for parts-of-a-whole when categories are few.
-    `),
-  title: z.string().optional().describe(stringUtils.toDescription`
-    Short title shown above the chart. Optional; defaults to the
-    \`title\` argument the caller passed in.
-  `),
-  xAxisLabel: z.string().optional().describe(stringUtils.toDescription`
-    Axis label below the chart. Used for bar / line / area /
-    scatter; ignored for pie.
-  `),
-  yAxisLabel: z.string().optional().describe(stringUtils.toDescription`
-    Axis label to the left of the chart. Used for bar / line /
-    area / scatter; ignored for pie.
-  `),
-  categories: z.array(z.string()).optional().describe(stringUtils.toDescription`
-      X-axis category labels for \`bar\` / \`line\` / \`area\`
-      charts (one per data point in each series). Omit for
-      \`scatter\` (uses [x, y] tuples) and \`pie\` (each slice
-      carries its own \`name\`).
-    `),
+  chartType: ChartTypeSchema,
+  title: z
+    .string()
+    .optional()
+    .describe(
+      stringUtils.toDescription(`
+        Short title shown above the chart. Optional; defaults to the
+        \`title\` argument the caller passed in.
+      `),
+    ),
+  xAxisLabel: z
+    .string()
+    .optional()
+    .describe(
+      stringUtils.toDescription(`
+        Axis label below the chart. Used for bar / line / area / scatter;
+        ignored for pie.
+      `),
+    ),
+  yAxisLabel: z
+    .string()
+    .optional()
+    .describe(
+      stringUtils.toDescription(`
+        Axis label to the left of the chart. Used for bar / line / area /
+        scatter; ignored for pie.
+      `),
+    ),
+  categories: z
+    .array(z.string())
+    .optional()
+    .describe(
+      stringUtils.toDescription(`
+        X-axis category labels for \`bar\` / \`line\` / \`area\` charts
+        (one per data point in each series). Omit for \`scatter\` (uses
+        [x, y] tuples) and \`pie\` (each slice carries its own \`name\`).
+      `),
+    ),
   series: z
     .array(
       z.object({
-        name: z.string().describe(stringUtils.toDescription`
-          Legend name for this series.
-        `),
-        data: z.array(chartDataPointSchema).describe(stringUtils.toDescription`
-            Data points. For \`bar\` / \`line\` / \`area\`, an
-            array of numbers aligned to \`categories\`. For
-            \`scatter\`, an array of \`[x, y]\` numeric tuples.
-            For \`pie\`, an array of \`{name, value}\` objects.
+        name: z.string().describe(
+          stringUtils.toDescription(`
+            Legend name for this series.
           `),
+        ),
+        data: z.array(chartDataPointSchema).describe(
+          stringUtils.toDescription(`
+            Data points. For \`bar\` / \`line\` / \`area\`, an array of
+            numbers aligned to \`categories\`. For \`scatter\`, an array
+            of \`[x, y]\` numeric tuples. For \`pie\`, an array of
+            \`{name, value}\` objects.
+          `),
+        ),
       }),
     )
-    .min(1).describe(stringUtils.toDescription`
-      One or more series to plot. Pie charts use exactly one
-      series; bar/line/area can stack multiple series sharing
-      the same \`categories\` axis.
-    `),
+    .min(1)
+    .describe(
+      stringUtils.toDescription(`
+        One or more series to plot. Pie charts use exactly one series;
+        bar/line/area can stack multiple series sharing the same
+        \`categories\` axis.
+      `),
+    ),
 });
 
 type ChartPlan = z.infer<typeof chartPlanSchema>;
 
 /**
+ * Canonical planner input shape. Tools that source rows from an
+ * inline dataset (`render_data`) use it as their `inputSchema`
+ * verbatim; tools that resolve rows from a remote (`prepare_chart`
+ * over a Genie statement) `omit({ data })` and `extend` with their
+ * own identifier field, so the field-level `.describe()` text
+ * stays a single source of truth. Server-only - the UI never
+ * sees a planner request, only the resolved {@link Chart}.
+ */
+export const chartPlannerRequestSchema = z.object({
+  title: z
+    .string()
+    .describe(
+      stringUtils.toDescription(`
+        Concise title shown above the chart (e.g. "Top 10 SKUs by Revenue").
+      `),
+    ),
+  description: z
+    .string()
+    .optional()
+    .describe(
+      stringUtils.toDescription(`
+        One-line intent the chart-planner uses when picking a chart type
+        and axis encodings (e.g. "compare quarterly revenue across
+        regions", "highlight the steep drop after position 5"). Not shown
+        to the user.
+      `),
+    ),
+  data: z
+    .array(z.record(z.string(), z.unknown()))
+    .nonempty("Data must contain at least one row")
+    .readonly()
+    .describe(
+      stringUtils.toDescription(`
+        Tabular dataset to chart. One object per row, keyed by column
+        name. Values may be strings, numbers, booleans, or null. The
+        chart-planner decides which columns are categories vs. numeric
+        series. Cap at a few hundred rows for legibility; sample /
+        aggregate larger datasets first.
+      `),
+    ),
+});
+
+export type ChartPlannerRequest = z.infer<typeof chartPlannerRequestSchema>;
+
+/* --------------------------- planner instructions --------------------------- */
+
+/**
+ * Format {@link ChartTypeSchema}'s variants as a single
+ * human-friendly string of `` `<value>` for <description> ``
+ * clauses joined by semicolons, drawn from each variant's own
+ * `.describe()` so the planner prompt stays in lock-step with
+ * the schema by construction.
+ */
+function formatChartTypePicker(): string {
+  return ChartTypeSchema.options
+    .map((opt) => `\`${opt.value}\` for ${opt.description ?? ""}`)
+    .join("; ");
+}
+
+/**
  * System prompt for the inner chart-planning agent. Tuned for a
  * fast-tier model (Haiku, GPT-5-mini, Gemini Flash Lite).
  */
-const CHART_PLANNER_INSTRUCTIONS = stringUtils.toDescription`
+const CHART_PLANNER_INSTRUCTIONS = stringUtils.toDescription(`
   You design Apache Echarts visualizations. The user gives you a
   tabular dataset (rows of objects) plus a title and an optional
-  description of the intent. You produce a small chart plan
-  (chart type, axis labels, categories, series) that best
-  conveys the data.
+  description of the intent. You produce a small chart plan (chart
+  type, axis labels, categories, series) that best conveys the data.
 
-  Decision guide:
-
-  - bar: comparing a numeric value across a small/medium set of
-    discrete categories (top-N, ranking, group-by).
-  - line: ordered-axis trend (time series, sequence).
-  - area: same as line but emphasises magnitude or stacked
-    composition.
-  - scatter: two numeric axes, correlation between fields.
-  - pie: parts of a whole when 2-7 categories sum to a
-    meaningful total.
+  Decision guide. Pick the chart type whose data shape matches the
+  dataset and the user's intent: ${formatChartTypePicker()}.
 
   When in doubt between bar and line, prefer bar for unordered
-  categories and line for ordered ones (dates, time buckets,
-  ranks). Never pick pie for more than 7 slices.
+  categories and line for ordered ones (dates, time buckets, ranks).
+  Never pick pie for more than 7 slices.
 
-  For bar / line / area: pick one column as the category axis
-  (usually the only string-valued column) and one or more
-  numeric columns as series. Sort categories by the primary
-  series value descending unless the data is naturally ordered
-  (dates, ranks).
+  For bar / line / area: pick one column as the category axis (usually
+  the only string-valued column) and one or more numeric columns as
+  series. Sort categories by the primary series value descending unless
+  the data is naturally ordered (dates, ranks).
 
-  For pie: pick the category column for slice names and one
-  numeric column for slice values. Emit a single series.
+  For pie: pick the category column for slice names and one numeric
+  column for slice values. Emit a single series.
 
-  For scatter: pick two numeric columns and emit \`[x, y]\`
-  tuples in a single series.
+  For scatter: pick two numeric columns and emit \`[x, y]\` tuples in a
+  single series.
 
-  Keep series names human-readable (use the column name; title
-  case it lightly if needed). Keep titles concise; do not
-  repeat the user's title in xAxisLabel / yAxisLabel.
-`;
+  Keep series names human-readable (use the column name; title case it
+  lightly if needed). Keep titles concise; do not repeat the user's
+  title in xAxisLabel / yAxisLabel.
+`);
 
-/**
- * Lazily-constructed inner agent shared across all calls in this
- * process. The agent is stateless (no memory, no tools) so a
- * single instance per plugin config is safe; model resolution
- * still happens per-call against the live `requestContext`, so
- * OBO auth stays user-scoped.
- */
-function createChartPlannerAgent(config: MastraPluginConfig): Agent {
-  return new Agent({
-    id: "render_chart_planner",
-    name: "Chart Planner",
-    description: "Picks chart type and axis encodings for a dataset.",
-    instructions: CHART_PLANNER_INSTRUCTIONS,
-    model: ({ requestContext }) =>
-      buildModel(config, requestContext, {
-        modelId: modelForTier(ModelTier.Fast),
-      }),
-  });
-}
-
-/** Inputs to {@link runChartPlanner}. */
-export interface RunChartPlannerOptions {
-  config: MastraPluginConfig;
-  requestContext?: RequestContext;
-  title: string;
-  description?: string;
-  data: ReadonlyArray<Record<string, unknown>>;
-  /**
-   * Cooperative cancellation. Forwarded to the planner agent's
-   * `generate({ abortSignal })` call so concurrent renders can be
-   * aborted as a group when the parent Genie agent's signal fires.
-   */
-  signal?: AbortSignal;
-}
-
-/** Output of {@link runChartPlanner}: a fully-formed Echarts spec. */
-export interface RunChartPlannerResult {
-  option: Record<string, unknown>;
-  chartType: ChartPlan["chartType"];
-}
+/* ----------------------------- planner agent ----------------------------- */
 
 /**
- * Module-level cache: one chart-planner agent per plugin config
- * instance. Keyed on the config object identity since each plugin
- * mount provides its own resolver / fallbacks. Re-used across
- * tool invocations and the render-chart HTTP route.
+ * One planner `Agent` per plugin config. Cached on config object
+ * identity so callers can `prepareChart({ config, ... })` from a
+ * hot path without paying the Agent-constructor cost every call.
+ * `WeakMap` lets retired configs (e.g. test reconfigurations)
+ * release their agent without manual eviction.
  */
-const _plannerByConfig = new WeakMap<MastraPluginConfig, Agent>();
+const plannerAgents = new WeakMap<MastraPluginConfig, Agent>();
+
 function getPlannerAgent(config: MastraPluginConfig): Agent {
-  let agent = _plannerByConfig.get(config);
+  let agent = plannerAgents.get(config);
   if (!agent) {
-    agent = createChartPlannerAgent(config);
-    _plannerByConfig.set(config, agent);
+    agent = new Agent({
+      id: "chart_planner",
+      name: "Chart Planner",
+      description: "Picks chart type and axis encodings for a dataset.",
+      instructions: CHART_PLANNER_INSTRUCTIONS,
+      model: ({ requestContext }) =>
+        buildModel(config, requestContext, {
+          modelId: modelForTier(ModelTier.Fast),
+        }),
+    });
+    plannerAgents.set(config, agent);
   }
   return agent;
 }
 
 /**
- * Run the chart planner against the given dataset and return a
- * full Echarts `EChartsOption` JSON. Pure async function: no
- * writer side-effects, no id minting, no background work.
- * Producers (the `render_data` tool, the Genie agent,
- * anything else that needs a chart) await this and stitch the
- * result into whatever shape their wire contract needs.
+ * Run the planner against `request` and return the resolved
+ * Echarts spec. Throws on planner failure - {@link prepareChart}
+ * catches and stashes the error in the cache entry.
  */
-export async function runChartPlanner(
-  opts: RunChartPlannerOptions,
-): Promise<RunChartPlannerResult> {
-  const { config, requestContext, title, description, data, signal } = opts;
-  const planner = getPlannerAgent(config);
-
-  const prompt = [
-    `Title: ${title}`,
-    description ? `Intent: ${description}` : null,
-    "",
-    "Dataset (JSON, one row per object):",
-    "```json",
-    JSON.stringify(data, null, 2),
-    "```",
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
-
-  const result = await planner.generate(prompt, {
+async function runChartPlanner(
+  config: MastraPluginConfig,
+  request: ChartPlannerRequest,
+  options: { requestContext?: RequestContext; abortSignal?: AbortSignal } = {},
+): Promise<ChartResult> {
+  const { title, description, data } = request;
+  const { requestContext, abortSignal } = options;
+  const prompt = stringUtils.toDescription({
+    Title: title,
+    ...(description ? { Description: description } : {}),
+    "Dataset (JSON, one row per object)": JSON.stringify(data, null, 2),
+  });
+  const result = await getPlannerAgent(config).generate(prompt, {
     structuredOutput: { schema: chartPlanSchema },
     ...(requestContext ? { requestContext } : {}),
-    ...(signal ? { abortSignal: signal } : {}),
+    ...(abortSignal ? { abortSignal } : {}),
   });
   const plan = result.object as ChartPlan;
   const option = planToEchartsOption(plan, title);
-  return { option, chartType: plan.chartType };
+  return { chartType: plan.chartType, option };
 }
 
-const renderDataInputSchema = z.object({
-  title: z.string().describe(stringUtils.toDescription`
-    Title shown above the rendered chart. Use a concise
-    sentence-case label (e.g. "Top 10 SKUs by On-Hand Units").
-  `),
-  description: z.string().optional().describe(stringUtils.toDescription`
-    Optional one-line intent describing what insight the chart
-    should convey (e.g. "highlight the steep drop-off after
-    position 5", "compare quarterly revenue across regions").
-    The chart-planner reads this when picking the chart type and
-    axis encodings; the user does not see it directly.
-  `),
-  data: z.array(z.record(z.string(), z.unknown())).min(1)
-    .describe(stringUtils.toDescription`
-      Tabular dataset to chart. One object per row, keyed by
-      column name. Values may be strings, numbers, booleans, or
-      null. The chart-planner decides which columns are
-      categories vs. numeric series. Cap at a few hundred rows
-      for legibility; sample / aggregate larger datasets first.
-    `),
-});
+/* ------------------------------ cache helpers ------------------------------ */
 
-const renderDataOutputSchema = z.object({
-  chartId: z.string().describe(stringUtils.toDescription`
-    Identifier of the queued chart. To position the chart in
-    your reply, embed the marker \`[[chart:<chartId>]]\` on its
-    own line where the chart should appear; the client renders
-    it inline.
-  `),
-});
+/** Build the canonical cache key for a `chartId`. */
+async function chartCacheKey(chartId: string): Promise<string> {
+  return (await CacheManager.getInstance()).generateKey(
+    [CHART_CACHE_NAMESPACE, chartId],
+    CHART_CACHE_USER_KEY,
+  );
+}
 
 /**
- * Build the `render_data` tool bound to the given plugin config.
- *
- * The tool awaits {@link runChartPlanner} so the planner's
- * latency is attributed to this tool's trace span, then emits
- * one `type: "chart"` writer event carrying the dataset and the
- * resolved `EChartsOption`. The LLM-bound output is just
- * `{ chartId }` so the model's context stays flat regardless of
- * dataset size. Planner failures are caught and surfaced as a
- * `type: "error"` writer event so the slot can fall back to
- * "couldn't render chart" without taking the parent agent down.
+ * Persist a {@link Chart} entry under its `chartId`. Refreshes
+ * the TTL on every write. Cache-layer failures are logged and
+ * swallowed so background runners never throw into the
+ * unhandled-rejection stream.
  */
-export function buildRenderDataTool(config: MastraPluginConfig) {
-  return createTool({
-    id: "render_data",
-    description: stringUtils.toDescription`
-      Submit a tabular dataset for inline rendering as a chart in
-      the user's view. Pass a title, the raw rows (array of
-      objects keyed by column name), and an optional one-line
-      description of the insight to highlight. Returns a short
-      \`chartId\`; the chart renders inline at the position you
-      embed the matching \`[[chart:<chartId>]]\` marker.
-
-      Placement contract: embed \`[[chart:<chartId>]]\` on its own
-      line (blank lines above and below) wherever you want the
-      chart to appear in your reply. The chart is fully resolved
-      by the time the tool returns, so it renders immediately at
-      that spot. You can call \`render_data\` multiple times in
-      the same turn (the tool is parallel-safe) and interleave
-      the markers with prose so each chart sits next to its
-      commentary. A chart whose marker is omitted falls through
-      to the end of your reply as a fallback - safe but less
-      polished.
-
-      Use whenever a SQL row set, API response, or hand-built
-      dataset would land better as a picture than as a list or
-      table. Cap input at a few hundred rows; sample or
-      aggregate larger datasets first.
-    `,
-    inputSchema: renderDataInputSchema,
-    outputSchema: renderDataOutputSchema,
-    execute: async (input, ctx) => {
-      const { title, description, data } = input as z.infer<
-        typeof renderDataInputSchema
-      >;
-      const writer = (ctx as { writer?: MinimalWriter } | undefined)?.writer;
-      const requestContext = (ctx as { requestContext?: RequestContext } | undefined)
-        ?.requestContext;
-
-      // Marker-friendly short id. The LLM types this verbatim
-      // into `[[chart:<id>]]`; 8 hex chars is unique within a
-      // single assistant turn and easy for the model to copy.
-      const chartId = commonUtils.shortId();
-      const startedAt = Date.now();
-      log.debug("render:start", {
-        chartId,
-        title,
-        rows: data.length,
-        columns: data[0] ? Object.keys(data[0]) : [],
-        hasWriter: writer !== undefined,
-      });
-
-      try {
-        const { option, chartType } = await runChartPlanner({
-          config,
-          ...(requestContext ? { requestContext } : {}),
-          title,
-          ...(description ? { description } : {}),
-          data,
-        });
-        log.debug("render:done", {
-          chartId,
-          chartType,
-          elapsedMs: Date.now() - startedAt,
-        });
-        // Single chart event with everything resolved: dataset
-        // for the table-like fallback / hover, option for the
-        // actual render. Best-effort write so a closed
-        // downstream stream can't take the tool down.
-        await safeWrite(
-          log,
-          writer,
-          {
-            type: "chart",
-            chartId,
-            title,
-            ...(description ? { description } : {}),
-            data,
-            option,
-          },
-          { chartId },
-        );
-      } catch (err) {
-        log.warn("render:error", {
-          chartId,
-          elapsedMs: Date.now() - startedAt,
-          error: commonUtils.errorMessage(err),
-        });
-        // Surface as a writer-level error so the slot can
-        // transition to "couldn't render chart" without the
-        // parent agent surfacing a stack trace.
-        await safeWrite(
-          log,
-          writer,
-          {
-            type: "error",
-            error: commonUtils.errorMessage(err),
-          },
-          { chartId },
-        );
-      }
-      return { chartId };
-    },
-  });
+async function writeChart(entry: Chart): Promise<void> {
+  try {
+    const key = await chartCacheKey(entry.chartId);
+    await CacheManager.getInstanceSync().set(key, entry, {
+      ttl: CHART_CACHE_TTL_SEC,
+    });
+  } catch (err) {
+    log.warn("write-error", {
+      chartId: entry.chartId,
+      error: commonUtils.errorMessage(err),
+    });
+  }
 }
+
+/**
+ * Look up a chart by id. Returns `undefined` on miss, on
+ * expiry, or when the cache layer is unhealthy - never throws.
+ */
+async function readChart(chartId: string): Promise<Chart | undefined> {
+  try {
+    const key = await chartCacheKey(chartId);
+    const v = await CacheManager.getInstanceSync().get<Chart>(key);
+    return v ?? undefined;
+  } catch (err) {
+    log.warn("read-error", {
+      chartId,
+      error: commonUtils.errorMessage(err),
+    });
+    return undefined;
+  }
+}
+
+/* --------------------------- prepareChart orchestrator --------------------------- */
+
+/** Inputs to {@link prepareChart}. */
+export interface PrepareChartOptions {
+  /** Plugin config; resolves the planner agent's model. */
+  config: MastraPluginConfig;
+  /** Display title forwarded to the planner agent. */
+  title?: string;
+  /** Optional intent hint forwarded to the planner agent. */
+  description?: string;
+  /**
+   * Resolves the rows to chart. Called once, in the background.
+   * Any thrown error lands in the cache as the entry's `error`
+   * field (never propagated to the caller of {@link prepareChart}).
+   * An empty `rows` array is rejected as `"dataset has no rows;
+   * nothing to chart"`.
+   */
+  resolveData: (
+    signal?: AbortSignal,
+  ) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
+  /**
+   * Per-request `RequestContext`. Forwarded to the planner agent so
+   * user-scoped model resolution (OBO) stays in effect.
+   */
+  requestContext?: RequestContext;
+  /**
+   * Cooperative cancellation. Forwarded to `resolveData` and the
+   * planner agent. Note: the chart task continues running in the
+   * background after the parent request ends, so external abort
+   * signals are best-effort; typical use is to leave this unset
+   * and let the 1h TTL cap stale entries.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Mint a `chartId`, cache an empty `{ chartId }` placeholder
+ * synchronously, and kick off a background task that resolves the
+ * dataset and runs the planner. Returns the `chartId` once the
+ * placeholder lands so the first {@link fetchChart} call always
+ * sees an entry (no spurious 404 race).
+ *
+ * The background task swallows its own failures and writes them
+ * as `error` entries, so callers never see a rejected promise.
+ * Cache state machine:
+ *
+ *   - just after this call returns: `{ chartId }` (processing)
+ *   - on planner success:           `{ chartId, result }`
+ *   - on data / planner failure:    `{ chartId, error }`
+ */
+export async function prepareChart(
+  opts: PrepareChartOptions,
+): Promise<{ chartId: string }> {
+  const chartId = commonUtils.id();
+  await writeChart({ chartId });
+  log.debug("queued", { chartId });
+  // Fire-and-forget. Failures land in the cache as `error` entries;
+  // never escape into an unhandled rejection.
+  void runPrepareChart(chartId, opts);
+  return { chartId };
+}
+
+async function runPrepareChart(
+  chartId: string,
+  opts: PrepareChartOptions,
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const data = await opts.resolveData(opts.signal);
+    if (data.rows.length === 0) {
+      throw new Error("dataset has no rows; nothing to chart");
+    }
+    const result = await runChartPlanner(
+      opts.config,
+      {
+        title: opts.title ?? "Chart",
+        ...(opts.description ? { description: opts.description } : {}),
+        data: data.rows as ChartPlannerRequest["data"],
+      },
+      {
+        ...(opts.requestContext ? { requestContext: opts.requestContext } : {}),
+        ...(opts.signal ? { abortSignal: opts.signal } : {}),
+      },
+    );
+    await writeChart({ chartId, result });
+    log.info("done", {
+      chartId,
+      chartType: result.chartType,
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (err) {
+    const error = commonUtils.errorMessage(err);
+    log.warn("error", { chartId, error });
+    await writeChart({ chartId, error });
+  }
+}
+
+/* ------------------------------- long-poll fetch ------------------------------- */
+
+/** Inputs to {@link fetchChart}. */
+export interface FetchChartOptions {
+  /**
+   * Server-side polling budget in ms. When the entry stays in
+   * the processing state past this window, the helper returns the
+   * last seen value (still processing) so the client can re-poll.
+   * Defaults to {@link DEFAULT_FETCH_TIMEOUT_MS} (60s).
+   */
+  timeoutMs?: number;
+  /**
+   * Poll interval in ms. Defaults to
+   * {@link DEFAULT_FETCH_INTERVAL_MS} (250ms).
+   */
+  intervalMs?: number;
+  /** External cancellation handle (e.g. request `req.signal`). */
+  signal?: AbortSignal;
+}
+
+/**
+ * Long-poll the chart cache until the entry settles (`result` or
+ * `error` set), the entry is missing, or the server-side timeout
+ * elapses.
+ *
+ * Returns:
+ *   - the resolved {@link Chart} when it settled, errored, or
+ *     stayed in processing past `timeoutMs` (so the client can
+ *     re-poll);
+ *   - `undefined` when the entry is missing or expired (the
+ *     consumer should treat as 404).
+ *
+ * `signal` lets the caller cancel ahead of timeout (e.g. the HTTP
+ * request closed). Cancellation propagates to the inter-poll sleep
+ * so the helper returns immediately.
+ */
+export async function fetchChart(
+  chartId: string,
+  options: FetchChartOptions = {},
+): Promise<Chart | undefined> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const intervalMs = options.intervalMs ?? DEFAULT_FETCH_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  let last: Chart | undefined;
+  while (true) {
+    options.signal?.throwIfAborted();
+    last = await readChart(chartId);
+    if (!last) return undefined;
+    if (last.result !== undefined || last.error !== undefined) return last;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return last;
+    await commonUtils.sleep(Math.min(intervalMs, remaining), options.signal);
+  }
+}
+
+/* ----------------------------- echarts expansion ----------------------------- */
 
 /**
  * Expand a {@link ChartPlan} into a full Echarts `EChartsOption`
@@ -544,4 +661,69 @@ function planToEchartsOption(
       ...(isArea ? { areaStyle: {} } : {}),
     })),
   };
+}
+
+/* ----------------------------- render_data tool ----------------------------- */
+
+/**
+ * Build the `render_data` Mastra tool bound to the given plugin
+ * config. Auto-wired as a system tool on every agent (see
+ * `agents.ts`); per-agent tools can shadow it by registering a
+ * same-named entry.
+ *
+ * Thin wrapper over {@link prepareChart} for callers that already
+ * have a dataset in hand. Mints a `chartId` synchronously, caches
+ * an empty placeholder, and kicks off the chart-planner in the
+ * background. Returns just the `chartId`; the host UI resolves
+ * `[chart:<chartId>]` markers by hitting the plugin's
+ * `/charts/:chartId` route.
+ *
+ * For Genie statement results, prefer the Genie agent's
+ * `prepare_chart` tool, which accepts a `statement_id` and
+ * resolves the rows lazily.
+ */
+export function buildRenderDataTool(config: MastraPluginConfig) {
+  return createTool({
+    id: "render_data",
+    description: stringUtils.toDescription([
+      `
+        Submit a tabular dataset for inline rendering as a chart in
+        the user's view. Pass a title, the raw rows (array of objects
+        keyed by column name), and an optional one-line description
+        of the insight to highlight. Returns a short \`chartId\`;
+        the chart renders inline at the position you embed the
+        matching \`[chart:<chartId>]\` marker.
+      `,
+      `
+        Placement contract: embed \`[chart:<chartId>]\` on its own
+        line (blank lines above and below) wherever you want the
+        chart to appear in your reply. The chart resolves
+        asynchronously - the tool returns the id immediately and the
+        host UI fetches the chart from the cache once the planner
+        lands. You can call \`render_data\` multiple times in the
+        same turn (the tool is parallel-safe) and interleave the
+        markers with prose so each chart sits next to its
+        commentary.
+      `,
+      `
+        Use whenever a SQL row set, API response, or hand-built
+        dataset would land better as a picture than as a list or
+        table. Cap input at a few hundred rows; sample or aggregate
+        larger datasets first.
+      `,
+    ]),
+    inputSchema: chartPlannerRequestSchema,
+    outputSchema: ChartSchema.pick({ chartId: true }),
+    execute: async (input, ctxRaw) => {
+      const { title, description, data } = input as ChartPlannerRequest;
+      const ctx = ctxRaw as { requestContext?: RequestContext } | undefined;
+      return prepareChart({
+        config,
+        title,
+        ...(description ? { description } : {}),
+        resolveData: () => Promise.resolve({ rows: data }),
+        ...(ctx?.requestContext ? { requestContext: ctx.requestContext } : {}),
+      });
+    },
+  });
 }

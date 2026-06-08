@@ -1,13 +1,14 @@
 /**
- * Smoke test for {@link createGenieTool}. Builds the Genie
- * tool, calls its `execute(input, ctx)` directly with a stdout
- * writer, and prints both the live wire events and the final
- * hydrated `(string | visualize)[]` summary.
+ * Smoke test for the Genie tools. Builds the flat per-space tool
+ * record via {@link buildGenieTools}, calls the `ask_genie` tool's
+ * `execute(input, ctx)` directly with a stdout writer, and prints
+ * both the live wire events (as they arrive on the writer) and
+ * the terminal `GenieMessage` the tool returns.
  *
- * The Genie tool forwards raw {@link GenieWriterEvent}s on the
+ * The Genie tools forward raw {@link GenieWriterEvent}s on the
  * writer (wire `GenieChatEvent`s plus Mastra-only lifecycle
- * events like `started` / `chart`), so this CLI subscribes to
- * the unified flat `{type, ...}` shape directly.
+ * events like `started`), so this CLI subscribes to the unified
+ * flat `{type, ...}` shape directly.
  *
  * Run:
  *
@@ -19,31 +20,27 @@
  *
  *   DATABRICKS_GENIE_SPACE_ID
  *   DATABRICKS_CONFIG_PROFILE       (or any other SDK auth env)
- *   DATABRICKS_SERVING_ENDPOINT_NAME  (optional; falls back to Mastra's default ladder)
  */
 
 import readline from "node:readline/promises";
 import { WorkspaceClient } from "@databricks/sdk-experimental";
 import type {
-  GenieAgentResult,
-  GenieSummaryItem,
   GenieWriterEvent,
   MinimalWriter,
 } from "@dbx-tools/appkit-mastra-shared";
-import { humanizeStatus } from "@dbx-tools/genie-shared";
+import { type GenieMessage, humanizeStatus } from "@dbx-tools/genie-shared";
 import { appkitUtils } from "@dbx-tools/shared";
 import { RequestContext } from "@mastra/core/request-context";
+import type { Tool } from "@mastra/core/tools";
 
 import { MASTRA_USER_KEY, type MastraPluginConfig, type User } from "../src/config.js";
-import { createGenieTool } from "../src/genie.js";
+import { buildGenieTools, DEFAULT_GENIE_ALIAS } from "../src/genie.js";
 
 /**
- * Pretty-print one writer event off the Genie tool. Renders the
- * events with meaningful CLI signal (started, status, thinking,
- * query, statement, text, suggested_questions, chart, result,
- * error, ask_genie_done); the high-frequency `message` / `rows` /
- * `attachment` events are dropped because they aren't useful in
- * CLI form.
+ * Pretty-print one writer event off the Genie tools. Renders the
+ * events with meaningful CLI signal; the high-frequency `message`
+ * / `rows` / `attachment` events are dropped because they aren't
+ * useful in CLI form.
  */
 function renderWireEvent(event: GenieWriterEvent): void {
   switch (event.type) {
@@ -79,21 +76,6 @@ function renderWireEvent(event: GenieWriterEvent): void {
         process.stdout.write(`                  - ${q}\n`);
       }
       break;
-    case "summary":
-      process.stdout.write(
-        `[summary      ] items=${event.items} text=${event.textItems} data=${event.dataItems}\n`,
-      );
-      break;
-    case "chart":
-      process.stdout.write(
-        `[chart        ] ${event.chartId} ${event.title ?? "<untitled>"}\n`,
-      );
-      break;
-    case "ask_genie_done":
-      process.stdout.write(
-        `[ask_done     ] status=${event.status} statements=${event.statementIds.length}\n`,
-      );
-      break;
     case "error":
       process.stdout.write(`[error        ] ${event.error}\n`);
       break;
@@ -106,6 +88,14 @@ function renderWireEvent(event: GenieWriterEvent): void {
       // Intentional drop - too noisy for a CLI tail and the
       // higher-level events above already cover the useful
       // transitions.
+      break;
+    default:
+      // Unknown variant (newer wire events, etc.) - log the
+      // discriminator so the CLI tells us when the vocabulary
+      // grew under us, without crashing the loop.
+      process.stdout.write(
+        `[${(event as { type?: string }).type ?? "unknown"}]\n`,
+      );
       break;
   }
 }
@@ -126,46 +116,40 @@ function makeStdoutWriter(): MinimalWriter {
 }
 
 /**
- * Render one entry from the v2 tool's final
- * `(string | visualize)[]` summary. Truncated to the first 10
- * rows since this is for smoke testing, not full inspection.
+ * Render the terminal `GenieMessage` the `ask_genie` tool
+ * returns. Prints the prose answer (when present), the statement
+ * id(s) embedded on the message and its attachments so the CLI
+ * makes it obvious which `get_statement` / `prepare_chart`
+ * call would naturally follow.
  */
-function renderSummaryItem(item: GenieSummaryItem, index: number): void {
-  switch (item.type) {
-    case "string":
-      process.stdout.write(`\n[${index + 1}] string\n${item.text}\n`);
-      break;
-    case "visualize": {
-      const { data, chart } = item.dataset;
-      const head = data.rows.slice(0, 10);
-      const chartLabel = chart ? `${chart.chartType} chart` : "no chart (table only)";
-      process.stdout.write(
-        `\n[${index + 1}] visualize: ${item.title ?? "<untitled>"} (${chartLabel}, ${data.rowCount} row${data.rowCount === 1 ? "" : "s"}, ${data.columns.length} col${data.columns.length === 1 ? "" : "s"})\n`,
-      );
-      if (item.description) {
-        process.stdout.write(`    ${item.description}\n`);
-      }
-      process.stdout.write(`    statementId=${item.statementId}\n`);
-      if (chart) {
-        process.stdout.write(`    chartId=${chart.chartId}\n`);
-      }
-      process.stdout.write(`    columns: ${data.columns.join(", ")}\n`);
-      for (const row of head) {
-        process.stdout.write(`    ${JSON.stringify(row)}\n`);
-      }
-      if (data.rows.length > head.length) {
-        process.stdout.write(
-          `    ... (${data.rows.length - head.length} more row${data.rows.length - head.length === 1 ? "" : "s"})\n`,
-        );
-      }
-      break;
-    }
+function renderFinalMessage(message: GenieMessage): void {
+  process.stdout.write(`\n=== final GenieMessage ===\n`);
+  process.stdout.write(`status=${message.status ?? "?"}\n`);
+  if (message.content) process.stdout.write(`prompt: ${message.content}\n`);
+
+  const queryStatementId =
+    (message.query_result as { statement_id?: string } | undefined)?.statement_id ??
+    undefined;
+  if (queryStatementId) {
+    process.stdout.write(`query_result.statement_id=${queryStatementId}\n`);
   }
+  const attachments = message.attachments ?? [];
+  attachments.forEach((att, i) => {
+    const text = (att as { text?: { content?: string } }).text?.content;
+    const sql = (att as { query?: { query?: string } }).query?.query;
+    const sid = (att as { query?: { statement_id?: string } }).query?.statement_id;
+    process.stdout.write(`attachment[${i}]:\n`);
+    if (text) process.stdout.write(`  text: ${text}\n`);
+    if (sid) process.stdout.write(`  statement_id: ${sid}\n`);
+    if (sql) {
+      process.stdout.write(`  sql (${sql.length} chars): ${sql.slice(0, 120)}\n`);
+    }
+  });
 }
 
 /**
  * Build a minimal `User` shape for the per-request `RequestContext`.
- * The Genie tool only reads `user.executionContext.client`, so we
+ * The Genie tools only read `user.executionContext.client`, so we
  * inline-construct a `WorkspaceClient` from the ambient
  * `DATABRICKS_*` env / config-profile and skip the full
  * `ServiceContext.initialize()` bootstrap that an Express-hosted
@@ -183,7 +167,7 @@ function makeServiceUser(client: WorkspaceClient): User {
   };
 }
 
-/** Build the minimal `MastraPluginConfig` the Genie tool + chart-planner read off. */
+/** Build the minimal `MastraPluginConfig` the Genie tools + chart-planner read off. */
 function makePluginConfig(): MastraPluginConfig {
   return { name: "mastra" } as MastraPluginConfig;
 }
@@ -211,39 +195,26 @@ async function readPipedStdin(): Promise<string> {
 
 async function runOne(opts: {
   question: string;
-  spaceId: string;
-  config: MastraPluginConfig;
+  askGenie: Tool;
   requestContext: RequestContext;
   writer: MinimalWriter;
-}): Promise<GenieAgentResult> {
+}): Promise<void> {
   process.stdout.write(`\n=== question: ${opts.question} ===\n`);
-  const tool = createGenieTool({
-    spaceId: opts.spaceId,
-    config: opts.config,
-  });
-  if (!tool.execute) {
-    throw new Error("Genie tool has no execute (factory misconfigured)");
+  if (!opts.askGenie.execute) {
+    throw new Error("ask_genie tool has no execute (factory misconfigured)");
   }
-  // The Genie tool's execute pulls only `requestContext`,
+  // The Genie tools' execute pulls only `requestContext`,
   // `writer`, and `abortSignal` off ctx; we cast through
   // `unknown` to avoid dragging in Mastra's full
   // `MastraToolInvocationOptions` type for a smoke test.
-  const ctx = { requestContext: opts.requestContext, writer: opts.writer } as unknown as Parameters<
-    NonNullable<typeof tool.execute>
-  >[1];
-  const result = (await tool.execute({ question: opts.question }, ctx)) as GenieAgentResult;
-
-  process.stdout.write(
-    `\n=== summary (${result.summary.length} item${result.summary.length === 1 ? "" : "s"}) ===\n`,
-  );
-  result.summary.forEach(renderSummaryItem);
-  if (result.error) {
-    process.stdout.write(`\n[error] ${result.error}\n`);
-  }
-  if (result.conversationId) {
-    process.stdout.write(`\nconversationId=${result.conversationId}\n`);
-  }
-  return result;
+  const ctx = {
+    requestContext: opts.requestContext,
+    writer: opts.writer,
+  } as unknown as Parameters<NonNullable<typeof opts.askGenie.execute>>[1];
+  const result = (await opts.askGenie.execute({ question: opts.question }, ctx)) as {
+    message: GenieMessage;
+  };
+  renderFinalMessage(result.message);
 }
 
 async function main(): Promise<void> {
@@ -275,22 +246,27 @@ async function main(): Promise<void> {
 
   const client = new WorkspaceClient({});
   const config = makePluginConfig();
-  // One RequestContext per CLI invocation: the v2 tool re-reads
-  // `MASTRA_USER_KEY` on every execute, so a single context is
-  // enough for the REPL loop. No conversation threading across
-  // REPL turns - v2 is invocation-scoped by design.
+  const tools = buildGenieTools({
+    spaces: { [DEFAULT_GENIE_ALIAS]: { spaceId } },
+    config,
+  });
+  const askGenie = tools.ask_genie as Tool | undefined;
+  if (!askGenie) {
+    throw new Error("buildGenieTools did not register ask_genie (expected for default alias)");
+  }
+  // One RequestContext per CLI invocation: the Genie tools
+  // re-read `MASTRA_USER_KEY` on every execute, so a single
+  // context is enough for the REPL loop. The conversation id
+  // seeded on the context persists across REPL turns so we
+  // exercise the same multi-turn caching path the live agent
+  // uses.
   const requestContext = new RequestContext();
   requestContext.set(MASTRA_USER_KEY, makeServiceUser(client));
-  // One RequestContext per CLI invocation: the Genie tool
-  // re-reads `MASTRA_USER_KEY` on every execute, so a single
-  // context is enough for the REPL loop. No conversation
-  // threading across REPL turns - the Genie tool is
-  // invocation-scoped by design.
   const writer = makeStdoutWriter();
 
   try {
     for await (const question of contents) {
-      await runOne({ question, spaceId, config, requestContext, writer });
+      await runOne({ question, askGenie, requestContext, writer });
     }
   } finally {
     rl?.close();

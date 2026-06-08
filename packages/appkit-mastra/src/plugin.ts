@@ -44,8 +44,13 @@ import { Mastra } from "@mastra/core/mastra";
 import express from "express";
 
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
-import type { MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
+import type {
+  MastraClientConfig,
+  StatementData,
+} from "@dbx-tools/appkit-mastra-shared";
+import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
+import { fetchStatementData } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { buildObservability } from "./observability.js";
@@ -56,6 +61,15 @@ import {
   resolveServingConfig,
   type ServingEndpointSummary,
 } from "./serving.js";
+
+/**
+ * Hard server-side cap on rows returned by
+ * `GET /statements/:statementId`. Sized to keep responses small
+ * enough for the inline table to render snappily; the host UI
+ * surfaces a `truncated` flag whenever the upstream `rowCount`
+ * exceeds this so end users know they're seeing a sample.
+ */
+const STATEMENT_ROW_CAP = 500;
 
 const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;
@@ -199,6 +213,8 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       modelsPath: `${basePath}/models`,
       historyPath: `${basePath}/route/history`,
       historyPathTemplate: `${basePath}/route/history/:agentId`,
+      chartsPathTemplate: `${basePath}/charts/:chartId`,
+      statementsPathTemplate: `${basePath}/statements/:statementId`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
     };
@@ -218,10 +234,145 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         .catch(next);
     });
 
+    // `GET /charts/:chartId` long-polls the chart cache.
+    //
+    // Charts kicked off by the Genie agent's `prepare_chart` tool
+    // (or the system `render_data` tool) resolve asynchronously
+    // and land in the AppKit cache under a chartId. The host UI
+    // resolves `[chart:<chartId>]` markers by hitting this route,
+    // which blocks until the entry settles (`result` or `error`
+    // set) or the server-side budget elapses (then returns the
+    // last seen still-processing entry so the client can poll
+    // again).
+    //
+    // Status codes:
+    //   - 200 with JSON body when the entry is found (any state).
+    //   - 404 when the chartId doesn't exist or its 1h TTL elapsed.
+    //
+    // Query params:
+    //   - `timeoutMs` (optional, default 60000): how long to long-poll
+    //     before returning a still-processing entry.
+    //
+    // Wired with `req.signal` so a closed connection unblocks the
+    // poll immediately and the request thread frees up. Cache
+    // failures bubble through `next(err)` to Express's default
+    // error handler.
+    router.get("/charts/:chartId", (req, res, next) => {
+      const chartId = req.params["chartId"];
+      if (!chartId) {
+        res.status(400).json({ error: "chartId is required" });
+        return;
+      }
+      const timeoutMs = parseTimeoutMs(req.query["timeoutMs"]);
+      // Express's `req` predates `AbortSignal`. Bridge the
+      // `close` event onto an `AbortController` so a closed
+      // connection unblocks the long-poll immediately and frees
+      // the request thread. The `close` listener also fires on
+      // a normal completion, but at that point we no longer
+      // care about the abort and the listener is GC'd with the
+      // request.
+      const controller = new AbortController();
+      req.on("close", () => controller.abort());
+      fetchChart(chartId, {
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        signal: controller.signal,
+      })
+        .then((entry) => {
+          if (!entry) {
+            res.status(404).json({ error: "chart not found" });
+            return;
+          }
+          res.json(entry);
+        })
+        .catch(next);
+    });
+
+    // `GET /statements/:statementId` resolves a Genie / Statement
+    // Execution result for inline rendering as a table.
+    //
+    // The agent embeds `[data:<statement_id>]` markers in prose
+    // (see `GENIE_INSTRUCTIONS`) whenever it wants the host UI to
+    // display a result set without the model re-spelling every
+    // row in markdown. This route is what those markers resolve
+    // against - one OBO-scoped fetch returns the columns + rows
+    // so the client renders an AppKit Table inline.
+    //
+    // Status codes:
+    //   - 200 with `StatementData` body when the statement is found.
+    //   - 404 when the workspace can't find / read the statement.
+    //
+    // Query params:
+    //   - `limit` (optional): row cap. Clamped to
+    //     {@link STATEMENT_ROW_CAP} so a runaway result set
+    //     can't hose the response.
+    //
+    // OBO-scoped via {@link userScopedSelf} so the caller's
+    // workspace permissions apply; SDK errors propagate through
+    // `next(err)` to Express's default error handler.
+    router.get("/statements/:statementId", (req, res, next) => {
+      const statementId = req.params["statementId"];
+      if (!statementId) {
+        res.status(400).json({ error: "statementId is required" });
+        return;
+      }
+      const limit = parseStatementLimit(req.query["limit"]);
+      const controller = new AbortController();
+      req.on("close", () => controller.abort());
+      this.userScopedSelf(req)
+        .fetchStatement(statementId, {
+          ...(limit !== undefined ? { limit } : {}),
+          signal: controller.signal,
+        })
+        .then((data) => {
+          if (!data) {
+            res.status(404).json({ error: "statement not found" });
+            return;
+          }
+          res.json(data);
+        })
+        .catch(next);
+    });
+
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       return this.userScopedSelf(req).mastraApp!(req, res, next);
     });
+  }
+
+  /**
+   * Implementation backing the `/statements/:statementId` route.
+   * Runs inside the AppKit user-context proxy so
+   * `getExecutionContext()` returns the OBO-scoped workspace
+   * client, then reuses the same `fetchStatementData` pipeline
+   * the `get_statement` tool runs so the LLM and the UI see the
+   * exact same shape for the same statement.
+   *
+   * Returns `undefined` for upstream 404s so the route can map
+   * them to a clean HTTP 404; any other failure bubbles up.
+   */
+  private async fetchStatement(
+    statementId: string,
+    options: { limit?: number; signal?: AbortSignal } = {},
+  ): Promise<StatementData | undefined> {
+    const client = getExecutionContext().client;
+    const limit = Math.min(options.limit ?? STATEMENT_ROW_CAP, STATEMENT_ROW_CAP);
+    try {
+      const data = await fetchStatementData(client, statementId, {
+        limit,
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      return {
+        columns: data.columns,
+        rows: data.rows,
+        rowCount: data.rowCount,
+        truncated: data.rows.length < data.rowCount,
+      };
+    } catch (err) {
+      // The Databricks SDK throws on 404; surface as `undefined`
+      // so the route maps to a clean HTTP 404 instead of a 500.
+      if (isNotFoundError(err)) return undefined;
+      throw err;
+    }
   }
 
   /**
@@ -324,6 +475,60 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       observability: observability !== undefined ? "mlflow" : "off",
     });
   }
+}
+
+/**
+ * Parse the optional `?timeoutMs=<n>` query parameter from a
+ * `GET /charts/:chartId` request. Accepts a positive integer up
+ * to 5 minutes (clamped) and rejects everything else as
+ * `undefined` so {@link fetchChart} falls back to its default.
+ * Express produces `string | string[] | undefined`; we normalize
+ * to the first scalar before parsing.
+ */
+function parseTimeoutMs(raw: unknown): number | undefined {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== "string") return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.floor(n), 5 * 60_000);
+}
+
+/**
+ * Parse the optional `?limit=<n>` query parameter from a
+ * `GET /statements/:statementId` request. Accepts a non-negative
+ * integer and lets the route clamp to `STATEMENT_ROW_CAP`;
+ * rejects anything else as `undefined` so the route falls back
+ * to the server-side cap.
+ */
+function parseStatementLimit(raw: unknown): number | undefined {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof v !== "string") return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.floor(n);
+}
+
+/**
+ * Structural 404 detector for the Databricks SDK. The SDK throws
+ * either an `ApiError` (typed) or an `HttpError` (lower-level)
+ * with `statusCode` / `code` 404 when the workspace can't find
+ * a statement id; a loose `does not exist` message sniff
+ * backstops shapes we haven't catalogued.
+ *
+ * Pulled into its own helper (vs reaching into `@databricks/sdk`
+ * here) so the route stays decoupled from SDK error-class
+ * identity and the conversion logic is testable in isolation.
+ */
+function isNotFoundError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { statusCode?: unknown; code?: unknown; message?: unknown };
+  if (e.statusCode === 404) return true;
+  if (e.code === 404) return true;
+  if (e.code === "RESOURCE_DOES_NOT_EXIST") return true;
+  if (typeof e.message === "string" && /does not exist|not found/i.test(e.message)) {
+    return true;
+  }
+  return false;
 }
 
 export const mastra = toPlugin(MastraPlugin);

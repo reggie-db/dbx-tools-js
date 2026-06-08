@@ -38,18 +38,21 @@
  */
 
 import {
-  genieAttachmentSchema as sdkGenieAttachmentSchema,
-  genieMessageSchema as sdkGenieMessageSchema,
-  genieQueryAttachmentSchema as sdkGenieQueryAttachmentSchema,
-  messageStatusSchema,
+  genieAttachmentSchema as SDKGenieAttachmentSchema,
+  genieMessageSchema as SDKGenieMessageSchema,
+  genieQueryAttachmentSchema as SDKGenieQueryAttachmentSchema,
+  genieSpaceSchema as SDKGenieSpaceSchema,
+  messageStatusSchema as MessageStatusSchema,
+  type MessageStatus,
 } from "@dbx-tools/sdk-shared";
 import { stringUtils } from "@dbx-tools/shared";
 import { z } from "zod";
 
-/* ----------------------------- statuses ---------------------------- */
-
-/** SDK `MessageStatus` enum value (e.g. `SUBMITTED`, `ASKING_AI`, `COMPLETED`). */
-export type MessageStatus = z.infer<typeof messageStatusSchema>;
+// Re-export the SDK's `MessageStatus` schema + type so consumers
+// of `@dbx-tools/genie-shared` get the full Genie wire vocabulary
+// from a single import path - mirrors the re-exports of the
+// other SDK-derived schemas below.
+export { MessageStatusSchema, type MessageStatus };
 
 /* ----------------------------- thoughts ---------------------------- */
 
@@ -127,7 +130,7 @@ export type AttachmentType = KnownAttachmentType | (string & {});
  * `last_updated_timestamp`, `id`) flows through verbatim from
  * the SDK schema.
  */
-export const GenieQueryAttachmentSchema = sdkGenieQueryAttachmentSchema.extend({
+export const GenieQueryAttachmentSchema = SDKGenieQueryAttachmentSchema.extend({
   thoughts: z.array(GenieThoughtSchema).optional(),
 });
 export type GenieQueryAttachment = z.infer<typeof GenieQueryAttachmentSchema>;
@@ -151,7 +154,7 @@ export type GenieQueryAttachment = z.infer<typeof GenieQueryAttachmentSchema>;
  * answer text") arrives with no id, only the follow-up text
  * attachment gets one.
  */
-export const GenieAttachmentSchema = sdkGenieAttachmentSchema.extend({
+export const GenieAttachmentSchema = SDKGenieAttachmentSchema.extend({
   query: GenieQueryAttachmentSchema.optional(),
   attachment_type: z.custom<AttachmentType>((v) => typeof v === "string").optional(),
 });
@@ -173,11 +176,49 @@ export type GenieAttachment = z.infer<typeof GenieAttachmentSchema>;
  * `status`, `content`, `message_id`, `query_result`, `error`,
  * `feedback`) passes through from the SDK schema.
  */
-export const GenieMessageSchema = sdkGenieMessageSchema.extend({
+export const GenieMessageSchema = SDKGenieMessageSchema.extend({
   attachments: z.array(GenieAttachmentSchema).optional(),
   auto_regenerate_count: z.number().optional(),
 });
 export type GenieMessage = z.infer<typeof GenieMessageSchema>;
+
+/**
+ * Domain projection of {@link GenieMessageSchema} that drops every
+ * turn-level field (`id`, `status`, `created_timestamp`,
+ * `query_result`, ...) and yields just the response payload as a
+ * flat `GenieAttachment[]`. Parses the same wire shape as
+ * {@link GenieMessageSchema}; missing `attachments` defaults to
+ * `[]` so the output is always an array.
+ *
+ * Use when consumers only care about the model's response
+ * attachments and not the surrounding message envelope.
+ */
+export const GenieResponseSchema = GenieMessageSchema.transform(
+  (m) => m.attachments ?? [],
+);
+export type GenieResponse = z.infer<typeof GenieResponseSchema>;
+
+/**
+ * `GenieSpace` widened with an optional `serialized_space` field
+ * carrying a JSON-string representation of the space's full
+ * definition (catalogs, schemas, tables, sample questions, prompts,
+ * etc.) as exported by the workspace export endpoint.
+ *
+ * The base SDK shape (`description`, `space_id`, `title`,
+ * `warehouse_id`) covers the directory-listing surface - enough to
+ * route a chat. `serialized_space` is opt-in so callers that need
+ * the full space schema (e.g. to seed a system prompt or to ship
+ * the definition to an agent) can attach it without a second type.
+ */
+export const GenieSpaceSchema = SDKGenieSpaceSchema.extend({
+  serialized_space: z
+    .string()
+    .optional()
+    .describe(
+      "The contents of the Genie Space in serialized string form. This field is excluded in List Genie spaces responses. This field provides the structure of the JSON string that represents the space's layout and components.",
+    ),
+});
+export type GenieSpace = z.infer<typeof GenieSpaceSchema>;
 
 /* ------------------------ terminal helpers ------------------------- */
 
@@ -342,8 +383,8 @@ export const StatusEventSchema = GenieChatLocationSchema.omit({
   attachment_id: true,
 }).extend({
   type: z.literal("status"),
-  status: messageStatusSchema,
-  previous_status: messageStatusSchema.optional(),
+  status: MessageStatusSchema,
+  previous_status: MessageStatusSchema.optional(),
 });
 export type StatusEvent = z.infer<typeof StatusEventSchema>;
 

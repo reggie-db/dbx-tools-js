@@ -291,22 +291,25 @@ export interface MastraPluginConfig extends BasePluginConfig {
    */
   genieSpaceCacheTtlMs?: number;
   /**
-   * Maximum LLM steps the Genie agent gets per turn.
-   * Each step is one round-trip to the underlying model
-   * (`get_space_description`, each `ask_genie` call, and the
-   * mandatory `submit_summary` closer all consume one step).
+   * Maximum LLM steps each agent gets per turn. One step = one
+   * round-trip to the underlying model (a tool call consumes a
+   * step, the final-text reply consumes one too). Applies to
+   * every agent registered through {@link MastraPluginConfig.agents}
+   * - per-agent overrides aren't surfaced yet because the same
+   * ceiling has been sufficient across every workload we've run.
    *
-   * Defaults to 16, which fits ~10 `ask_genie` calls plus
-   * grounding plus the summary closer - matches the
-   * decomposition pattern the Genie agent instructions prescribe
-   * ("2-6 ask_genie calls for any non-trivial question").
-   * Mastra's own `agent.generate` default of 5 would cut the
-   * Genie agent off after 2-3 Genie calls, so explicitly raising
-   * the ceiling here is what lets the agent-mode loop play out.
+   * Defaults to {@link DEFAULT_AGENT_MAX_STEPS} (25), sized to fit
+   * a decomposed Genie turn (grounding + several `ask_genie` calls
+   * + `prepare_chart` per dataset + the final-text reply) with
+   * headroom for the model to chain a couple of follow-ups before
+   * answering. Mastra's own `agent.generate` default of 5 would
+   * cut multi-step orchestration off after 2-3 tool calls, so
+   * explicitly raising the ceiling here is what lets the
+   * agent-mode loop play out.
    *
-   * Lower this when an unusually slow or expensive model makes
-   * long turns unaffordable; raise it for exploratory workloads
-   * that need to drill into a dataset.
+   * Lower when an unusually slow or expensive model makes long
+   * turns unaffordable; raise for exploratory workloads that need
+   * to drill deep into a dataset within a single turn.
    */
-  genieAgentMaxSteps?: number;
+  agentMaxSteps?: number;
 }

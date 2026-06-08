@@ -163,6 +163,18 @@ export interface PollOptions<T, A = Record<string, unknown>> {
    */
   signal?: AbortSignal;
   /**
+   * Hard upper bound on the total lifetime of the poll loop, in
+   * milliseconds. When the budget elapses, `poll` aborts its
+   * internal signal so the in-flight producer and inter-poll
+   * sleep both tear down promptly, and the loop throws with the
+   * `TimeoutError` `DOMException` produced by
+   * `AbortSignal.timeout(timeoutMs)`. The budget starts ticking
+   * the moment the generator is created, not on first iteration.
+   * Omit to poll until `predicate` returns `false` or the
+   * external `signal` aborts.
+   */
+  timeoutMs?: number;
+  /**
    * Initial value for `ctx.attributes`. Defaults to `{}`. The same
    * object is reused across iterations, so callers can pre-populate
    * fields (timers, retry counters, etc.) and the producer /
@@ -232,9 +244,12 @@ export async function* poll<T, A = Record<string, unknown>>(
   producer: PollProducer<T, A>,
   options: PollOptions<T, A>,
 ): AsyncGenerator<T, void, void> {
-  const { intervalMs, predicate, signal, attributes } = options;
+  const { intervalMs, predicate, signal, attributes, timeoutMs } = options;
   const controller = new AbortController();
   if (signal) tieAbortSignal(controller, signal);
+  if (timeoutMs !== undefined) {
+    tieAbortSignal(controller, AbortSignal.timeout(timeoutMs));
+  }
   // Single shared attributes object so writes from one iteration are
   // visible on the next. `{} as A` is safe because either the caller
   // supplied `attributes` (typed) or `A` defaulted to the unknown
@@ -298,10 +313,21 @@ export function tieAbortSignal(child: AbortController, parent?: AbortSignal): vo
 
 /**
  * Promisified `setTimeout` that wakes up early (and rejects with
- * `signal.reason`) when `signal` aborts mid-wait. Short-circuits to a
- * rejected promise when the signal is already aborted on entry.
+ * `signal.reason`) when `signal` aborts mid-wait. Short-circuits
+ * to a rejected promise when the signal is already aborted on
+ * entry, so the abort path is consistent regardless of whether
+ * the wait actually started.
+ *
+ * Use as the building block for any "wait, but cancel cleanly"
+ * pattern - inter-poll backoff, pacing loops, retry timers,
+ * long-poll budgets - so cancellation always rejects with the
+ * caller's `signal.reason` rather than silently resolving after
+ * the timer expires.
+ *
+ * @example
+ * await commonUtils.sleep(250, req.signal);
  */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const onAbort = (): void => {
@@ -317,19 +343,38 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Mint a short, collision-resistant id by sampling the first `length`
- * hex chars of a v4 UUID. `length` defaults to 8 (collision odds
- * ~1 in 4 billion - safe within a single conversation turn / job /
- * batch). Uses `globalThis.crypto.randomUUID()` so it works in
- * both Node (>= 19) and modern browsers.
+ * Mint a v4 UUID, or a short hex slice of one when `length` is set.
  *
- * Use for ids that the caller cares about being typeable / short
- * (e.g. chart ids the LLM types into `[[chart:<id>]]` markers).
- * For ids that need to survive across long-running batches or be
- * globally unique, use a full UUID instead.
+ * - `id()` returns a full RFC 4122 v4 UUID (e.g.
+ *   `"123e4567-e89b-12d3-a456-426614174000"`). Pick this when
+ *   global uniqueness matters: long-running batches, ids that
+ *   cross a storage / process boundary, anything that may
+ *   collide across machines. Default for new ids.
+ * - `id(length)` returns the first `length` hex chars of a fresh
+ *   UUID with dashes stripped (e.g. `id(8) -> "a3f1c92b"`). Pick
+ *   this when the id has to be short / typeable and the scope
+ *   is bounded - cache keys local to a request, slug suffixes,
+ *   anything that's only meaningful within a single conversation
+ *   turn or batch. `length <= 0` throws.
+ *
+ * Implementation note: built on `globalThis.crypto.randomUUID()`
+ * so the same function works in Node (>= 19) and modern browsers
+ * without a polyfill or `node:crypto` import.
+ *
+ * @example
+ * id();   // "123e4567-e89b-12d3-a456-426614174000"
+ * id(8);  // "a3f1c92b"  (~1-in-4-billion collisions)
+ * id(12); // "a3f1c92b4d7e"  (~1-in-280-trillion)
  */
-export function shortId(length: number = 8): string {
-  return globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, length);
+export function id(length?: number): string {
+  if (length !== undefined && length <= 0) {
+    throw new Error("Length must be greater than 0");
+  }
+  const id = globalThis.crypto.randomUUID();
+  if (length !== undefined) {
+    return id.replace(/-/g, "").slice(0, length);
+  }
+  return id;
 }
 
 /**
@@ -350,19 +395,74 @@ export function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }
 
-export function fnvHash(...values: string[]): string {
+/**
+ * Short, deterministic FNV-1a hash over one or more values.
+ * Wraps {@link fnvHashWithOptions} with all defaults: 6-char
+ * Crockford-style base-32 output (digits + lowercase, minus
+ * `i`/`l`/`o`/`u`). Browser-safe (no `node:crypto`).
+ *
+ * Accepts any mix of primitives, arrays, plain objects, `Map`s,
+ * and `Set`s; nested structures are walked deterministically so
+ * the hash is order-stable for objects / maps / sets and
+ * order-sensitive for arrays. Cycles are detected and folded
+ * into a `circular:` marker so you can safely hand it
+ * self-referential graphs.
+ *
+ * Use for cache keys, slug suffixes, log correlation ids, and
+ * other "give me something short and stable" needs - **never**
+ * for tokens, signatures, or anything an attacker shouldn't be
+ * able to forge. FNV-1a is a non-cryptographic hash.
+ *
+ * @example
+ * commonUtils.fnvHash("databricks-claude-sonnet-4-6"); // "k3p9q7"
+ * commonUtils.fnvHash({ user: "alice", project: "demo" }); // stable
+ * commonUtils.fnvHash([1, 2, 3]) !== commonUtils.fnvHash([3, 2, 1]);
+ */
+export function fnvHash(...values: unknown[]): string {
   return fnvHashWithOptions({}, ...values);
 }
 
+/**
+ * Configurable counterpart to {@link fnvHash}.
+ *
+ * Options:
+ *   - `length` (default `6`): number of base-32 chars to return.
+ *     Capped at 7 - the underlying digest is 32 bits, which
+ *     base-32-encodes to at most 7 chars; values past 7 are
+ *     silently clamped. Output is left-padded with the alphabet's
+ *     zero character so short digests still hit the requested
+ *     width.
+ *   - `alphabet` (default Crockford-style `"0123456789abcdefghjkmnpqrstvwxyz"`):
+ *     32 distinct characters used to encode the digest. Pass a
+ *     custom alphabet to fit a downstream charset constraint
+ *     (e.g. uppercase only). Throws when the string is not exactly
+ *     32 unique chars.
+ *   - `digest` (default `0x811c9dc5`, the FNV-1a offset basis):
+ *     the seed the running digest starts from. Useful for
+ *     namespacing (`{ digest: namespaceHash }`) so otherwise-
+ *     identical inputs hashed under different namespaces never
+ *     collide, and for chaining hashes across pipeline stages.
+ *
+ * Walks all `values` through {@link hashAttributes} so structured
+ * inputs (objects / maps / sets / arrays / cycles) hash in a
+ * canonical order. The hash is **not** stable across changes to
+ * the alphabet or `length` - those tune the output, not the
+ * digest input.
+ *
+ * @example
+ * fnvHashWithOptions({ length: 4 }, "user@example.com");          // 4 chars
+ * fnvHashWithOptions({ digest: nsHash }, key) !== fnvHash(key);   // namespaced
+ * fnvHashWithOptions({ alphabet: UPPER_ALPHA }, value);           // custom charset
+ */
 export function fnvHashWithOptions(
-  options: { length?: number; alphabet?: string } = {},
-  ...values: string[]
+  options: { length?: number; alphabet?: string; digest?: number } = {},
+  ...values: unknown[]
 ): string {
   const { length = 6 } = options;
 
-  let digest = 0x811c9dc5;
+  let digest = options.digest ?? 0x811c9dc5;
 
-  for (const value of values) {
+  for (const value of hashAttributes(values)) {
     for (let i = 0; i < value.length; i++) {
       digest ^= value.charCodeAt(i);
       digest = Math.imul(digest, 0x01000193);
@@ -374,8 +474,137 @@ export function fnvHashWithOptions(
     .slice(0, Math.min(length, 7));
 }
 
+/**
+ * Walk an arbitrary value as a stream of canonicalized string
+ * tokens suitable for feeding into a streaming hash like FNV-1a.
+ * Used by {@link fnvHashWithOptions} so structured inputs hash
+ * deterministically without a stringification round-trip
+ * through `JSON.stringify` (which silently drops `undefined`,
+ * has no canonical key order, and can't represent cycles).
+ *
+ * Canonicalization rules:
+ *
+ *   - `null` / `undefined` collapse to `null:` so the two are
+ *     indistinguishable in the digest.
+ *   - Primitives (`string` / `number` / `boolean`) are tagged with
+ *     their `typeof` so `"1"` and `1` produce different digests.
+ *   - Arrays preserve order: `[1,2]` and `[2,1]` hash differently.
+ *   - Plain objects emit keys in lexical order of each key's own
+ *     hash-token stream, so `{a:1,b:2}` and `{b:2,a:1}` collapse
+ *     to the same digest.
+ *   - `Map` keys go through the same key-sort path as objects, so
+ *     non-string keys (numbers, objects) sort canonically.
+ *   - `Set`s are sorted by each element's hash-token stream and
+ *     emit only the elements (no values), so insertion order
+ *     doesn't leak into the digest.
+ *   - Cycles are detected via a `WeakSet` tracker - the second
+ *     time a node is visited it emits `circular:` and stops
+ *     descending, so self-referential graphs hash without
+ *     blowing the stack.
+ *   - Anything else (functions, symbols, class instances with no
+ *     enumerable keys past `Set`/`Map`/`Array` checks) falls
+ *     through to a `${typeof}:${JSON.stringify(input)}` token.
+ *
+ * Yielding strings (rather than returning one) lets the caller
+ * fold each chunk into a streaming digest without materialising
+ * the full canonical form, which keeps memory bounded for large
+ * objects.
+ *
+ * Internal helper - {@link fnvHashWithOptions} is the public
+ * surface.
+ */
+function* hashAttributes(input: any, seen?: WeakSet<object>): Generator<string> {
+  if (input === null || input === undefined) {
+    yield "null:";
+    return;
+  }
+
+  const inputType = typeof input;
+  if (inputType === "string" || inputType === "number" || inputType === "boolean") {
+    yield `${inputType}:`;
+    yield input.toString();
+    return;
+  }
+  seen ??= new WeakSet<object>();
+
+  if (inputType === "object") {
+    if (seen.has(input)) {
+      yield "circular:";
+      return;
+    }
+    seen.add(input);
+    try {
+      if (Array.isArray(input)) {
+        yield "[";
+        for (const item of input) {
+          yield* hashAttributes(item, seen);
+          yield ",";
+        }
+        yield "]";
+        return;
+      } else {
+        const hashAttributeKeys = (keys: Array<unknown>) => {
+          return keys
+            .map((key) => {
+              const keyHashAttributes = [...hashAttributes(key, seen)];
+              return {
+                key,
+                keyHashAttributes,
+                sortKey: keyHashAttributes.join("\0"),
+              };
+            })
+            .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+        };
+        if (input instanceof Set) {
+          yield "[";
+          for (const hashAttributeKey of hashAttributeKeys(Array.from(input))) {
+            yield* hashAttributeKey.keyHashAttributes;
+            yield ",";
+          }
+          yield "]";
+          return;
+        } else {
+          yield "{";
+          const keys =
+            input instanceof Map ? Array.from(input.keys()) : Object.keys(input);
+          for (const hashAttributeKey of hashAttributeKeys(keys)) {
+            const value =
+              input instanceof Map
+                ? input.get(hashAttributeKey.key)
+                : input[hashAttributeKey.key as keyof typeof input];
+            yield* hashAttributeKey.keyHashAttributes;
+            yield ":";
+            yield* hashAttributes(value, seen);
+            yield ",";
+          }
+          yield "}";
+          return;
+        }
+      }
+    } finally {
+      seen.delete(input);
+    }
+  }
+  yield `${inputType}:${JSON.stringify(input)}`;
+}
+
+/**
+ * Default Crockford-style base-32 alphabet: digits `0-9` then
+ * lowercase letters with `i`, `l`, `o`, `u` removed (the four
+ * Crockford treats as ambiguous with digits). Same alphabet
+ * everything in this module produces by default, so output is
+ * safe to drop into URLs, filenames, and `[A-Za-z0-9_-]`-bound
+ * marker captures.
+ */
 const BASE32_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 
+/**
+ * Resolve a caller-supplied alphabet against the default. Returns
+ * the default Crockford-style alphabet when the caller passed
+ * nothing; otherwise validates the override is exactly 32 unique
+ * chars and returns it. Throws on bad alphabets so callers fail
+ * fast instead of producing silently-degraded encodings.
+ */
 function base32Alphabet(alphabet?: string): string {
   if (alphabet === undefined) return BASE32_ALPHABET;
   else if (new Set(alphabet).size !== 32) {
@@ -384,6 +613,27 @@ function base32Alphabet(alphabet?: string): string {
   return alphabet;
 }
 
+/**
+ * Encode a 32-bit unsigned integer as base-32 using the default
+ * Crockford-style alphabet (or `alphabet` when provided). The
+ * encoding has **no** zero-padding by default - `toBase32(0)`
+ * returns the alphabet's zero character, otherwise the result is
+ * the minimal number of digits that fits the value. Pad / truncate
+ * at the call site when you need a fixed width.
+ *
+ * `disableAlphabetValidation` skips the unique-32-char check on
+ * `alphabet` for hot paths that have already validated the
+ * alphabet. The function still requires `alphabet.length === 32`
+ * either way - a wrong-length alphabet always throws.
+ *
+ * Used internally by {@link fnvHashWithOptions} but exported for
+ * other "encode a small integer compactly" needs.
+ *
+ * @example
+ * toBase32(0);        // "0"
+ * toBase32(31);       // "z"
+ * toBase32(0xdeadbe); // "6vmtw" (5 chars)
+ */
 export function toBase32(
   value: number,
   alphabet?: string,

@@ -33,41 +33,41 @@ import { z } from "zod";
 const log = logUtils.logger("mastra/tool/send-email");
 
 const emailInputSchema = z.object({
-  to: z.string().describe(stringUtils.toDescription`
+  to: z.string().describe(stringUtils.toDescription(`
     Single recipient email address (e.g. "alice@example.com"). For
     multiple recipients, comma-separate them yourself.
-  `),
-  subject: z.string().describe(stringUtils.toDescription`
+  `)),
+  subject: z.string().describe(stringUtils.toDescription(`
     Subject line.
-  `),
-  body: z.string().describe(stringUtils.toDescription`
-    Email body. Plain text or markdown; the renderer downstream
-    decides which to honour. Be specific - the recipient may not
-    have any context the model has from prior chat turns.
-  `),
+  `)),
+  body: z.string().describe(stringUtils.toDescription(`
+    Email body. Plain text or markdown; the renderer downstream decides
+    which to honour. Be specific - the recipient may not have any
+    context the model has from prior chat turns.
+  `)),
   cc: z
     .array(z.string())
     .optional()
-    .describe(stringUtils.toDescription`
+    .describe(stringUtils.toDescription(`
       Optional CC recipients.
-    `),
+    `)),
   bcc: z
     .array(z.string())
     .optional()
-    .describe(stringUtils.toDescription`
+    .describe(stringUtils.toDescription(`
       Optional BCC recipients.
-    `),
+    `)),
 });
 
 const emailOutputSchema = z.object({
-  sent: z.boolean().describe(stringUtils.toDescription`
+  sent: z.boolean().describe(stringUtils.toDescription(`
     True when the email was dispatched. The current implementation
-    always returns true after console-logging the would-be email;
-    swap in a real provider to make this meaningful.
-  `),
-  recipient: z.string().describe(stringUtils.toDescription`
+    always returns true after console-logging the would-be email; swap
+    in a real provider to make this meaningful.
+  `)),
+  recipient: z.string().describe(stringUtils.toDescription(`
     Echo of the \`to\` field for confirmation.
-  `),
+  `)),
 });
 
 /** Options accepted by {@link buildEmailTool}. */
@@ -111,15 +111,14 @@ export interface BuildEmailToolOptions {
 export function buildEmailTool(opts: BuildEmailToolOptions = {}) {
   return createTool({
     id: opts.id ?? "send_email",
-    description: stringUtils.toDescription`
-      Send an email on the user's behalf. Pass a recipient
-      address, subject, and body; the user will be prompted to
-      approve the send before it goes out (the tool is
-      approval-gated). Use this when the user explicitly asks
-      to send / forward / share something via email - never
-      autonomously. Keep subjects short and bodies focused; the
-      recipient may not have any of the chat context.
-    `,
+    description: stringUtils.toDescription(`
+      Send an email on the user's behalf. Pass a recipient address,
+      subject, and body; the user will be prompted to approve the send
+      before it goes out (the tool is approval-gated). Use this when
+      the user explicitly asks to send / forward / share something via
+      email - never autonomously. Keep subjects short and bodies
+      focused; the recipient may not have any of the chat context.
+    `),
     inputSchema: emailInputSchema,
     outputSchema: emailOutputSchema,
     requireApproval: true,

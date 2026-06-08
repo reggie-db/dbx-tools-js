@@ -9,7 +9,7 @@
  *     extending the generated `@dbx-tools/sdk-shared` Genie shapes
  *     (`GenieMessageSchema`, `GenieAttachmentSchema`,
  *     `GenieQueryAttachmentSchema`, `GenieThoughtSchema`,
- *     `messageStatusSchema`, ...) plus the high-level event
+ *     `MessageStatusSchema`, ...) plus the high-level event
  *     vocabulary the `genieEventChat` driver emits
  *     (`GenieChatEvent`, `GenieChatLocation`, per-variant payload
  *     interfaces) and terminal-status / attachment-discriminator

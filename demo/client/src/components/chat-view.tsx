@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
 import { humanizeStatus } from "@dbx-tools/genie-shared";
 import { Streamdown } from "streamdown";
+import { useChartFetch, useStatementFetch } from "../lib/mastra-client.js";
 import {
   ArrowDownIcon,
   CheckIcon,
@@ -193,17 +194,18 @@ export type ApprovalDecision =
     };
 
 /**
- * Strip noisy provider prefixes (e.g. `genie_default_`) and turn
- * snake/camel into a Title Cased label the user can read.
+ * Turn a snake/camel tool id into a Title Cased label the user can
+ * read. Genie tools land on this surface as flat ids
+ * (`ask_genie`, `get_statement`, `prepare_chart`) plus per-space
+ * suffixes for non-default aliases (`ask_genie_sales`).
  *
  * Examples:
- *   `genie_default_query`   -> `Query`
- *   `genie`                 -> `Genie`
- *   `myCoolTool`            -> `My Cool Tool`
+ *   `ask_genie`     -> `Ask Genie`
+ *   `ask_genie_sales` -> `Ask Genie Sales`
+ *   `myCoolTool`    -> `My Cool Tool`
  */
 const humanizeToolName = (toolName: string): string =>
   toolName
-    .replace(/^[a-z0-9]+_(?:default|primary)_/i, "")
     .replace(/[._]/g, " ")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .split(/\s+/)
@@ -308,9 +310,10 @@ type MessageGroup = {
  * Shape of the detail rows we extract from a single tool's progress
  * stream. Pulled out so the pill header can show a one-line summary
  * (e.g. `2 queries`) without expanding the collapsible. Charts and
- * suggested follow-up questions are intentionally excluded - both
- * live at message scope (charts via {@link collectCharts}, suggestions
- * via {@link collectSuggestions}).
+ * suggested follow-up questions are intentionally excluded: charts
+ * are resolved out-of-band via the chart cache (see
+ * {@link ChartSlot}); suggestions live at message scope (see
+ * {@link collectSuggestions}).
  *
  * `thinking` entries are de-duplicated server-side already
  * (`packages/genie-shared/src/event.ts` keys on
@@ -413,38 +416,23 @@ const summarizeProgress = (progress: ToolProgress[]): ToolDetailSummary => {
 };
 
 /**
- * Build the one-line collapsed summary shown next to the pill header.
- * Examples:
- *   `1 query`
- *   `2 questions · 3 queries`
- *   `2 queries · thinking · error`
- * Returns null when there's nothing worth surfacing inline.
- *
- * `thinking` collapses to a single label regardless of count - the
- * raw count (often 6+ per turn) is too noisy for the pill header,
- * but the presence of any reasoning is worth advertising so users
- * know the row has reasoning to expand into. The question count is
- * only surfaced when there's more than one (the single-question case
- * is implicit in "Called Genie"); a multi-question call always means
- * the LLM decomposed the user prompt, which is worth signposting.
+ * Read the question text for an `ask_genie` tool event. Prefers
+ * the `started` event (emitted by `ask_genie` the instant it
+ * runs, before any Genie round-trip) so the question appears in
+ * the UI immediately; falls back to the wire `question` event
+ * for transports that don't carry `started`. Returns `undefined`
+ * for non-`ask_genie` tools so callers can skip rendering the
+ * inline question line.
  */
-const headlineFor = (s: ToolDetailSummary): string | null => {
-  const parts: string[] = [];
-  const questionCount = s.groups.reduce((n, g) => n + (g.question ? 1 : 0), 0);
-  const queryCount = s.groups.reduce(
-    (n, g) => n + g.attachments.reduce((m, b) => m + (b.query ? 1 : 0), 0),
-    0,
-  );
-  const hasThinking = s.groups.some((g) =>
-    g.attachments.some((b) => b.thinking.length > 0),
-  );
-  const errorCount = s.groups.reduce((n, g) => n + g.errors.length, 0);
-  if (questionCount > 1) parts.push(`${questionCount} questions`);
-  if (queryCount === 1) parts.push("1 query");
-  else if (queryCount > 1) parts.push(`${queryCount} queries`);
-  if (hasThinking) parts.push("thinking");
-  if (errorCount > 0) parts.push(errorCount === 1 ? "error" : `${errorCount} errors`);
-  return parts.length === 0 ? null : parts.join(" · ");
+const askGenieQuestion = (event: ToolEvent): string | undefined => {
+  if (!event.toolName.startsWith("ask_genie")) return undefined;
+  for (const p of event.progress ?? []) {
+    if (p.type === "started" && p.content) return p.content;
+  }
+  for (const p of event.progress ?? []) {
+    if (p.type === "question" && p.content) return p.content;
+  }
+  return undefined;
 };
 
 /**
@@ -642,67 +630,44 @@ const MessageGroupBody = ({
 };
 
 /**
- * Expanded detail view for a tool call. Rendered inside the
- * Collapsible owned by `ToolEventPill`.
+ * Expanded detail view for one tool call. Walks the message
+ * groups Genie produced (question + attachments + errors) and
+ * renders each as a Collapsible card via {@link MessageGroupBody}.
  *
- *   - Single Genie sub-call: render its `MessageGroupBody` flat,
- *     no extra nesting.
- *   - Multiple Genie sub-calls: wrap each in a `Collapsible`
- *     sub-pill labeled "Question N" with the question text in the
- *     trigger so the user can fold individual sub-calls without
- *     losing sight of which one is which. Default open so the
- *     "expand outer pill -> see everything" UX is preserved.
+ * `omitQuestion` strips the inline question blockquote when the
+ * caller already surfaces the question in the row header (the
+ * typical case under {@link ToolCallRow}, since the question
+ * is the most useful thing to keep always-visible).
  *
  * When `isRunning` is true and there's at least some content, a
  * compact spinner row pinned at the bottom signals "more events
  * still arriving" so users don't think the partial state is the
  * final answer.
  *
- * Charts produced by `render_data` render at message scope
- * (alongside suggested questions), not inside the pill.
+ * Charts produced by `prepare_chart` / `render_data` render at
+ * message scope (alongside suggested questions), not inside the
+ * pill.
  */
 const ToolProgressDetails = ({
   summary,
   isRunning,
+  omitQuestion,
 }: {
   summary: ToolDetailSummary;
   isRunning: boolean;
+  omitQuestion?: boolean;
 }) => {
   const renderableGroups = summary.groups.filter(isGroupRenderable);
   if (renderableGroups.length === 0 && !isRunning) return null;
-  const multi = renderableGroups.length > 1;
   return (
     <div className="mt-2 flex flex-col gap-2">
-      {renderableGroups.map((group, gi) =>
-        multi ? (
-          <Collapsible
-            key={group.messageId ?? `anon-${gi}`}
-            defaultOpen
-            className="rounded border border-border/40 bg-background/20"
-          >
-            <CollapsibleTrigger className="group flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground">
-              <ChevronDownIcon className="mt-0.5 size-3 shrink-0 transition-transform group-data-[state=closed]:-rotate-90" />
-              <span className="flex min-w-0 flex-col">
-                <span className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                  Question {gi + 1}
-                </span>
-                {group.question && (
-                  <span className="break-words text-foreground/80">
-                    {group.question}
-                  </span>
-                )}
-              </span>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="px-2 pb-2 pt-1">
-                <MessageGroupBody group={group} omitQuestion />
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        ) : (
-          <MessageGroupBody key={group.messageId ?? `anon-${gi}`} group={group} />
-        ),
-      )}
+      {renderableGroups.map((group, gi) => (
+        <MessageGroupBody
+          key={group.messageId ?? `anon-${gi}`}
+          group={group}
+          omitQuestion={omitQuestion}
+        />
+      ))}
       {isRunning && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Spinner className="size-3" />
@@ -713,98 +678,198 @@ const ToolProgressDetails = ({
   );
 };
 
-const ToolEventPill = ({ event }: { event: ToolEvent }) => {
+/**
+ * Status icon for one tool event, shared between the inner
+ * {@link ToolCallRow} and the outer {@link ToolSessionPill} so
+ * the affordances stay in lock-step.
+ */
+const ToolStatusIcon = ({
+  status,
+}: {
+  status: "running" | "done" | "error";
+}) => {
+  if (status === "running") return <Spinner className="size-3 text-primary" />;
+  if (status === "error") return <XIcon className="size-3 text-destructive" />;
+  return <CheckIcon className="size-3 text-muted-foreground" />;
+};
+
+/**
+ * True when a tool event has anything worth expanding for. The
+ * question text already rides on the row header (see
+ * {@link askGenieQuestion}) so we deliberately don't count it -
+ * a row whose only content is the question stays non-expandable.
+ */
+const hasExpandableDetails = (event: ToolEvent): boolean => {
+  if (event.status === "running") return true;
+  const summary = summarizeProgress(event.progress ?? []);
+  return summary.groups.some(
+    (g) => g.attachments.some(isAttachmentRenderable) || g.errors.length > 0,
+  );
+};
+
+/**
+ * One row inside {@link ToolSessionPill}. Always-visible header
+ * shows the status icon, the tool's verb (`Called Ask Genie`,
+ * `Calling Prepare Chart`, etc.), and - for `ask_genie` rows -
+ * the question text the central agent passed to Genie so users
+ * can see each sub-question at a glance without expanding.
+ *
+ * Rows with extra wire detail (Genie SQL, thinking, prose
+ * answers, errors) expand to reveal the per-attachment cards
+ * built by {@link ToolProgressDetails}. Tools with no extra
+ * detail (`get_statement`, `prepare_chart`) render as a flat
+ * non-expandable line so the chevron doesn't lie about
+ * interactivity.
+ */
+const ToolCallRow = ({ event }: { event: ToolEvent }) => {
   const isRunning = event.status === "running";
   const isError = event.status === "error";
+  const question = askGenieQuestion(event);
   const summary = summarizeProgress(event.progress ?? []);
-  const headline = headlineFor(summary);
-  // Running tools always get an expandable details section (even
-  // with no events yet) so users can pop it open to see the
-  // "Streaming..." spinner and confirm the turn hasn't stalled.
-  const hasDetails = isRunning || summary.groups.some(isGroupRenderable);
+  const expandable = hasExpandableDetails(event);
+  // Inner rows defer to the live wire status when running (e.g.
+  // "Executing query") so users tracking the open pill see the
+  // backend's freshest state - not just the static
+  // "Calling Ask Genie" label.
+  const verb = isError
+    ? `Failed ${humanizeToolName(event.toolName)}`
+    : isRunning
+      ? runningLabelFor(event)
+      : `Called ${humanizeToolName(event.toolName)}`;
 
-  // Header label: "Calling Genie" / "Called Genie" / "Failed Genie".
-  // Running tools defer to the latest backend status label.
-  const verb = isRunning
-    ? runningLabelFor(event)
-    : `${isError ? "Failed" : "Called"} ${humanizeToolName(event.toolName)}`;
+  const header = (
+    <span className="min-w-0 flex-1">
+      <span
+        className={cn(
+          "block truncate",
+          isRunning && "animate-pulse text-foreground/90",
+        )}
+      >
+        {verb}
+      </span>
+      {question && (
+        <span className="mt-0.5 block break-words italic text-foreground/80">
+          {question}
+        </span>
+      )}
+    </span>
+  );
+
+  if (!expandable) {
+    return (
+      <div className="flex items-start gap-2 px-2 py-1 text-xs text-muted-foreground">
+        {/* Fixed-width spacer keeps the icon column aligned with
+         * sibling expandable rows that lead with a chevron. */}
+        <span className="mt-0.5 size-3 shrink-0" aria-hidden />
+        <span className="mt-0.5 shrink-0">
+          <ToolStatusIcon status={event.status} />
+        </span>
+        {header}
+      </div>
+    );
+  }
+
+  return (
+    <Collapsible className="rounded border border-border/40 bg-background/30">
+      <CollapsibleTrigger className="group flex w-full items-start gap-2 px-2 py-1 text-left text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+        <ChevronDownIcon className="mt-0.5 size-3 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+        <span className="mt-0.5 shrink-0">
+          <ToolStatusIcon status={event.status} />
+        </span>
+        {header}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="px-2 pb-2">
+          <ToolProgressDetails summary={summary} isRunning={isRunning} omitQuestion />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
+/**
+ * Consolidated pill for every tool call on one assistant
+ * message. The collapsed header tracks the MOST RECENT tool call
+ * (its verb and tool name) so the bubble always advertises
+ * "what the agent is doing now"; expanding reveals one
+ * {@link ToolCallRow} per call in dispatch order so users can
+ * see every step the agent took and read the question text the
+ * central agent passed to each `ask_genie` call.
+ *
+ * Overall tone (border / ring / icon) follows the worst-case
+ * state across all rows: any running event dominates (primary
+ * border + ping pip), then any error (destructive border), then
+ * done. The header verb itself follows the LATEST row's status
+ * so users see fresh progress as new tool calls land mid-turn
+ * (rather than the pill stalling on whichever row was busiest).
+ */
+const ToolSessionPill = ({ events }: { events: ToolEvent[] }) => {
+  if (events.length === 0) return null;
+  const latest = events[events.length - 1]!;
+  const anyRunning = events.some((e) => e.status === "running");
+  const anyError = events.some((e) => e.status === "error");
+  const tone: "running" | "error" | "done" = anyRunning
+    ? "running"
+    : anyError
+      ? "error"
+      : "done";
+
+  // Outer header uses the tool name verb (not the live wire
+  // status) per the "show the most recent tool call" contract.
+  // Inner rows still expose the wire status when expanded.
+  const isLatestRunning = latest.status === "running";
+  const isLatestError = latest.status === "error";
+  const latestName = humanizeToolName(latest.toolName);
+  const verb = isLatestError
+    ? `Failed ${latestName}`
+    : isLatestRunning
+      ? `Calling ${latestName}`
+      : `Called ${latestName}`;
+  const countSuffix = events.length > 1 ? ` · ${events.length} calls` : "";
 
   return (
     <div
       className={cn(
         "rounded-md border bg-background/30 px-2 py-1.5 transition-colors",
-        // Loud-but-not-jarring "this is in flight" treatment when
-        // the tool is running: switch the border to the primary
-        // accent and slap a soft ring on it so a row mid-stream is
-        // unambiguously distinct from a settled one at a glance.
-        // Failed rows pick up a destructive border for the same
-        // reason; settled-success rows stay on the neutral border.
-        isRunning
+        // Loud-but-not-jarring "in flight" treatment when any row
+        // is running: primary border + soft ring. Failed sessions
+        // (no longer running) pick up the destructive border;
+        // settled sessions stay neutral.
+        tone === "running"
           ? "border-primary/50 ring-1 ring-primary/15"
-          : isError
+          : tone === "error"
             ? "border-destructive/40"
             : "border-border/40",
       )}
     >
       <Collapsible>
-        <CollapsibleTrigger
-          // Disable the toggle entirely when there's nothing to expand
-          // so the pill doesn't pretend to be interactive.
-          disabled={!hasDetails}
-          className={cn(
-            "group flex w-full items-center gap-2 text-left text-xs text-muted-foreground",
-            hasDetails && "cursor-pointer hover:text-foreground",
-          )}
-        >
+        <CollapsibleTrigger className="group flex w-full items-center gap-2 text-left text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+          <ChevronDownIcon className="size-3 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+          <ToolStatusIcon status={tone} />
           {/*
-           * Lead with the rotating chevron when the row is expandable
-           * so the affordance is unambiguous; without this users read
-           * the check/X as a completed-status badge and miss that the
-           * row has more detail. Falls back to a fixed-width spacer so
-           * non-expandable rows still align with their neighbors.
-           */}
-          {hasDetails ? (
-            <ChevronDownIcon className="size-3 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
-          ) : (
-            <span className="size-3 shrink-0" aria-hidden />
-          )}
-          {isRunning ? (
-            <Spinner className="size-3 text-primary" />
-          ) : isError ? (
-            <XIcon className="size-3 text-destructive" />
-          ) : (
-            <CheckIcon className="size-3" />
-          )}
-          {/*
-           * Verb and headline share one span so the `·` separator
-           * reads as a natural inline divider. Splitting them
-           * across two flex children would stack `gap-2` (8px) on
-           * top of the literal `· ` text, yielding "Called Genie
-           * &nbsp;&nbsp;· 1 query" with visibly doubled spacing.
-           * `min-w-0` lets the truncate clip without forcing the
-           * row to overflow when the headline is long.
+           * Verb + count share one span so the `·` separator reads
+           * as a natural inline divider. `min-w-0` lets the truncate
+           * clip without forcing the row to overflow when the verb
+           * is long.
            */}
           <span
             className={cn(
               "min-w-0 flex-1 truncate",
-              isRunning && "animate-pulse text-foreground/90",
+              tone === "running" && "animate-pulse text-foreground/90",
             )}
           >
             {verb}
-            {headline && (
-              <span className="text-muted-foreground/70"> · {headline}</span>
+            {countSuffix && (
+              <span className="text-muted-foreground/70">{countSuffix}</span>
             )}
           </span>
           {/*
-           * Trailing "live" pip on the right edge while the tool is
+           * Trailing "live" pip on the right edge while any tool is
            * in flight. Two-layer: a static dot under an animated
-           * ping ring, identical to the convention native chat
-           * apps use for active recording / streaming indicators.
-           * Renders as a tiny block so it stays out of the way of
-           * the headline truncation but is impossible to miss when
-           * scanning a stack of pills.
+           * ping ring, matching the convention native chat apps use
+           * for active recording / streaming indicators.
            */}
-          {isRunning && (
+          {tone === "running" && (
             <span className="relative ml-1 flex size-2 shrink-0" aria-hidden>
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
               <span className="relative inline-flex size-2 rounded-full bg-primary" />
@@ -812,20 +877,16 @@ const ToolEventPill = ({ event }: { event: ToolEvent }) => {
           )}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <ToolProgressDetails summary={summary} isRunning={isRunning} />
+          <div className="mt-2 flex flex-col gap-1.5">
+            {events.map((event) => (
+              <ToolCallRow key={event.id} event={event} />
+            ))}
+          </div>
         </CollapsibleContent>
       </Collapsible>
     </div>
   );
 };
-
-const ToolEventList = ({ events }: { events: ToolEvent[] }) => (
-  <div className="mb-2 flex flex-col gap-2">
-    {events.map((event) => (
-      <ToolEventPill key={event.id} event={event} />
-    ))}
-  </div>
-);
 
 /**
  * Flatten and de-duplicate the suggested follow-up questions emitted
@@ -835,61 +896,6 @@ const ToolEventList = ({ events }: { events: ToolEvent[] }) => (
  * events we union and dedupe while preserving first-seen order so
  * earlier tools' suggestions still surface.
  */
-/**
- * Merged chart record after walking every tool's progress. Each
- * `chartId` typically gets two writer events from the producer: a
- * dataset event with `data` and a spec event with `option`; this
- * record carries whichever fields have arrived so far.
- *
- * `sourceToolDone` flips true when the tool that emitted the
- * dataset event has reached `done` / `error` status; the chart
- * slot uses it to distinguish "still streaming, wait for the
- * option" from "tool finished without an option" (planner
- * failed - render the dataset-only fallback).
- */
-type MergedChart = Extract<ToolProgress, { type: "chart" }> & {
-  sourceToolDone: boolean;
-};
-
-/**
- * Flatten `chart` events emitted across every tool on this
- * assistant turn so they render at message scope (next to the
- * markdown answer and the suggested-question buttons) instead of
- * being buried inside a tool pill. Two events per `chartId`
- * (dataset, then option) are merged into one record; later
- * events shallow-overwrite earlier ones so the option lands on
- * top of the data. Order is first-seen by `chartId` so charts
- * appear in the order the model requested them.
- */
-const collectCharts = (events: ToolEvent[] | undefined): MergedChart[] => {
-  if (!events || events.length === 0) return [];
-  const order: string[] = [];
-  const byId = new Map<string, MergedChart>();
-  for (const event of events) {
-    const toolDone = event.status !== "running";
-    for (const p of event.progress ?? []) {
-      if (p.type !== "chart") continue;
-      const existing = byId.get(p.chartId);
-      if (!existing) {
-        order.push(p.chartId);
-        byId.set(p.chartId, { ...p, sourceToolDone: toolDone });
-      } else {
-        // Merge each arriving field; keep `chartId` stable.
-        // `sourceToolDone` is monotonic - once any contributing
-        // event's tool is done we treat the chart as finalized.
-        byId.set(p.chartId, {
-          ...existing,
-          ...p,
-          sourceToolDone: existing.sourceToolDone || toolDone,
-        });
-      }
-    }
-  }
-  return order
-    .map((id) => byId.get(id))
-    .filter((c): c is MergedChart => c !== undefined);
-};
-
 const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
   if (!events || events.length === 0) return [];
   const seen = new Set<string>();
@@ -1094,43 +1100,33 @@ const CHART_FRAME_CLASSES =
 const CHART_HEIGHT_PX = 320;
 
 /**
- * Inline chart slot. Each `[[chart:<chartId>]]` marker in the
- * assistant's reply resolves to one of these. The producer
- * (`render_data` tool, or the Genie agent's structured
- * summary) emits a single `type: "chart"` event carrying both
- * the dataset and the resolved Echarts `option`.
+ * Inline chart slot. Each `[chart:<chartId>]` (or
+ * `[[chart:<chartId>]]`) marker in the assistant's reply resolves
+ * to one of these. The Mastra plugin caches the resolved Echarts
+ * spec under the chartId; this slot fetches it via the published
+ * `chartsPathTemplate` (long-poll until ready / error / 404).
  *
  * Render contract:
  *
- *   - `chart.option` present -> render the full Echarts spec.
- *   - Anything else (chart undefined, planner failed, marker
- *     hallucinated) -> render NOTHING. Markers that can't
- *     resolve to a real chart are silently dropped rather than
- *     left as "Unavailable" placeholder frames, because a stale
- *     marker in a long-running chat reads as broken UI more
- *     loudly than its absence does.
- *
- * No HTTP fetching, no per-slot caching - the producer's event
- * already carries the resolved option by the time it lands.
+ *   - Cache entry settled with `result` -> render the full
+ *     Echarts spec.
+ *   - Cache entry still processing (neither `result` nor `error`
+ *     set) -> render NOTHING (the hook keeps polling; the slot
+ *     stays empty so prose layout is unaffected).
+ *   - Cache entry settled with `error`, or 404 (unknown /
+ *     TTL-expired) -> render NOTHING. Markers that can't resolve
+ *     to a real chart are silently dropped rather than left as
+ *     "Unavailable" placeholder frames. The Echarts `option`
+ *     already carries its own `title.text`, so no separate header
+ *     is needed above the chart frame.
  */
-const ChartSlot = ({
-  chart,
-}: {
-  chartId: string;
-  chart?: MergedChart;
-  /** Unused; kept on the prop type so call sites still compile. */
-  isMessageSettled: boolean;
-}) => {
-  if (!chart?.option) return null;
+const ChartSlot = ({ chartId }: { chartId: string }) => {
+  const { chart } = useChartFetch(chartId);
+  if (!chart?.result) return null;
   return (
     <div className={CHART_FRAME_CLASSES}>
-      {chart.title && (
-        <div className="mb-1 px-1 text-xs font-medium text-muted-foreground">
-          {chart.title}
-        </div>
-      )}
       <ReactECharts
-        option={chart.option}
+        option={chart.result.option}
         style={{ height: CHART_HEIGHT_PX, width: "100%" }}
         notMerge
         lazyUpdate
@@ -1140,48 +1136,127 @@ const ChartSlot = ({
 };
 
 /**
- * Marker the LLM is instructed to embed in its markdown reply at
- * the position a `render_data` chart should appear. Captured
- * group is the `chartId` returned by the tool. Allowed id chars
- * are `[A-Za-z0-9_-]` so short hex / nanoid / uuid all work.
+ * Inline data-table slot. Each `[data:<statement_id>]` marker in
+ * the assistant's reply resolves to one of these. A single
+ * OBO-scoped fetch against `${statementsPathTemplate}` returns
+ * the columns + rows; the slot renders them through the same
+ * `MARKDOWN_COMPONENTS` Table family used for markdown tables so
+ * styling stays uniform across the bubble.
+ *
+ * Render contract (matches {@link ChartSlot}):
+ *
+ *   - Fetch in flight, statement unknown / 404, or empty rows
+ *     -> render NOTHING. Stale markers in persisted transcripts
+ *     silently drop so a reload doesn't leave dead frames.
+ *   - Data settled with rows -> render an inline table with a
+ *     trailing "showing N of M" footer when the server-side cap
+ *     truncated the result set.
  */
-const CHART_MARKER_RE = /\[\[chart:([A-Za-z0-9_-]+)\]\]/g;
-
-/** One slice of an assistant message: either prose or a chart spot. */
-type RenderSegment =
-  | { kind: "text"; text: string }
-  | { kind: "chart"; chartId: string; chart: MergedChart }
-  | { kind: "pending"; chartId: string };
+const DataSlot = ({ statementId }: { statementId: string }) => {
+  const { data } = useStatementFetch(statementId);
+  if (!data || data.rows.length === 0) return null;
+  return (
+    <div className={TABLE_WRAPPER_CLASSES}>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {data.columns.map((c) => (
+              <TableHead key={c}>{c}</TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.rows.map((row, i) => (
+            <TableRow key={i}>
+              {data.columns.map((c) => {
+                const v = row[c];
+                const text = v == null ? "" : String(v);
+                return <TableCell key={c}>{colorizeDelta(text)}</TableCell>;
+              })}
+            </TableRow>
+          ))}
+        </TableBody>
+        {data.truncated && (
+          <TableFooter>
+            <TableRow>
+              <TableCell
+                colSpan={data.columns.length}
+                className="text-muted-foreground"
+              >
+                Showing {data.rows.length} of {data.rowCount} rows
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        )}
+      </Table>
+    </div>
+  );
+};
 
 /**
- * Split the assistant's full markdown text on `[[chart:<id>]]`
- * markers, returning an ordered list of prose segments interleaved
- * with chart slots. Markers with a matching {@link MergedChart}
- * resolve to a `chart` segment; markers whose chart hasn't
- * streamed in yet become a `pending` segment so the layout stays
- * stable.
+ * Markers the LLM is instructed to embed in its markdown reply
+ * to defer rendering to the host UI. Two kinds:
  *
- * Marker matching is greedy and tolerant of partial-stream chunks:
- * an unclosed `[[chart:abc` simply falls through as plain text and
- * matches once the closing `]]` arrives in a later chunk.
+ *   - `[chart:<chartId>]` (or legacy `[[chart:<id>]]`) - resolves
+ *     to a `<ChartSlot>` that long-polls the chart cache for an
+ *     Echarts spec.
+ *   - `[data:<statement_id>]` - resolves to a `<DataSlot>` that
+ *     fetches a Databricks statement and renders an inline table.
+ *
+ * Allowed id chars are `[A-Za-z0-9_-]` so short hex / nanoid /
+ * uuid all work for either marker.
  */
-const splitTextWithCharts = (
-  text: string,
-  chartsById: Map<string, MergedChart>,
-): RenderSegment[] => {
-  const segments: RenderSegment[] = [];
-  let lastIdx = 0;
+const CHART_MARKER_RE = /\[\[?chart:([A-Za-z0-9_-]+)\]\]?/g;
+const DATA_MARKER_RE = /\[data:([A-Za-z0-9_-]+)\]/g;
+
+/** One slice of an assistant message: prose, a chart slot, or a data slot. */
+type RenderSegment =
+  | { kind: "text"; text: string }
+  | { kind: "chart"; chartId: string }
+  | { kind: "data"; statementId: string };
+
+/**
+ * Split the assistant's full markdown text on chart and data
+ * markers, returning an ordered list of prose segments
+ * interleaved with embed slots. Each marker resolves to either
+ * a `chart` segment ({@link ChartSlot}) or a `data` segment
+ * ({@link DataSlot}); prose between markers stays as `text`.
+ *
+ * Marker matching is greedy and tolerant of partial-stream
+ * chunks: an unclosed `[chart:abc` or `[data:abc` falls through
+ * as plain text and matches once the closing bracket arrives in
+ * a later chunk.
+ */
+const splitTextWithEmbeds = (text: string): RenderSegment[] => {
+  type Hit = { start: number; end: number; seg: RenderSegment };
+  const hits: Hit[] = [];
   for (const match of text.matchAll(CHART_MARKER_RE)) {
     const start = match.index ?? 0;
-    if (start > lastIdx) {
-      segments.push({ kind: "text", text: text.slice(lastIdx, start) });
+    hits.push({
+      start,
+      end: start + match[0].length,
+      seg: { kind: "chart", chartId: match[1] ?? "" },
+    });
+  }
+  for (const match of text.matchAll(DATA_MARKER_RE)) {
+    const start = match.index ?? 0;
+    hits.push({
+      start,
+      end: start + match[0].length,
+      seg: { kind: "data", statementId: match[1] ?? "" },
+    });
+  }
+  hits.sort((a, b) => a.start - b.start);
+
+  const segments: RenderSegment[] = [];
+  let lastIdx = 0;
+  for (const h of hits) {
+    if (h.start < lastIdx) continue; // overlapping match; drop
+    if (h.start > lastIdx) {
+      segments.push({ kind: "text", text: text.slice(lastIdx, h.start) });
     }
-    const chartId = match[1] ?? "";
-    const chart = chartsById.get(chartId);
-    segments.push(
-      chart ? { kind: "chart", chartId, chart } : { kind: "pending", chartId },
-    );
-    lastIdx = start + match[0].length;
+    segments.push(h.seg);
+    lastIdx = h.end;
   }
   if (lastIdx < text.length) {
     segments.push({ kind: "text", text: text.slice(lastIdx) });
@@ -1190,99 +1265,38 @@ const splitTextWithCharts = (
 };
 
 /**
- * Render the assistant's markdown with charts placed at their
- * inline marker positions. Each prose segment is its own
- * {@link AssistantMarkdown} so streaming chunks still incrementally
- * parse correctly, and chart slots break the markdown flow with a
- * full-width block element. Charts whose `[[chart:<id>]]` marker
- * the model forgot to place are appended below as a fallback so a
- * missing marker can't silently hide the chart.
+ * Render the assistant's markdown with chart and data tables
+ * placed at their inline marker positions. Each prose segment
+ * is its own {@link AssistantMarkdown} so streaming chunks still
+ * incrementally parse correctly; embed slots break the markdown
+ * flow with full-width block elements.
  *
- * Streaming render contract (the "block-on-chart" rule):
+ * Each marker resolves through its own slot:
  *
- *   - Text before the first unresolved marker streams normally.
- *   - Hitting an unresolved marker (`pending` segment) HALTS the
- *     render: that marker renders nothing and every segment after
- *     it is held back. As soon as the chart event for that id
- *     arrives, the marker resolves to a chart and downstream
- *     segments unblock. This gives the desired
- *     text -> chart -> text -> chart sequence; the next bite of
- *     prose never appears before the chart it references.
- *   - Orphan charts (chart events received but no marker placed
- *     yet) are SUPPRESSED while streaming. They only render at
- *     the bottom as a fallback once the message settles, so the
- *     bubble doesn't sprout standalone chart tiles before any text
- *     has appeared.
- *   - Once the message settles, unresolved markers are silently
- *     dropped (no broken "Unavailable" frame) and downstream
- *     prose renders. Orphans appear at the bottom as fallback.
- *     The block-on-chart latch only applies mid-stream.
+ *   - `[chart:<id>]` -> {@link ChartSlot} long-polls the
+ *     server-side chart cache and renders the Echarts spec
+ *     inline once ready (or nothing on miss / TTL-expired).
+ *   - `[data:<statement_id>]` -> {@link DataSlot} fetches the
+ *     statement rows OBO-scoped and renders an inline Table
+ *     (or nothing on 404 / empty result).
+ *
+ * Stale markers in persisted transcript text are silently
+ * dropped on reload so the prose around them stays clean.
  */
-const MarkdownWithCharts = ({
-  text,
-  charts,
-  isMessageSettled,
-}: {
-  text: string;
-  charts: MergedChart[];
-  isMessageSettled: boolean;
-}) => {
-  const chartsById = new Map(charts.map((c) => [c.chartId, c]));
-  const segments = splitTextWithCharts(text, chartsById);
-  const placedIds = new Set(
-    segments
-      .filter((s): s is Extract<RenderSegment, { kind: "chart" }> => s.kind === "chart")
-      .map((s) => s.chartId),
-  );
-  const orphans = charts.filter((c) => !placedIds.has(c.chartId));
-
-  // Block-on-chart latch: during streaming, the first pending
-  // marker we hit freezes the render so nothing past it shows up
-  // until that marker's chart event arrives. After settle, we
-  // never block - hallucinated chartIds fall through to a single
-  // "Unavailable" frame and the rest of the prose renders so the
-  // user isn't left staring at a half-rendered message.
-  const blocked = { tripped: false };
-
+const MarkdownWithEmbeds = ({ text }: { text: string }) => {
+  const segments = splitTextWithEmbeds(text);
   return (
     <>
       {segments.map((seg, i) => {
-        if (blocked.tripped) return null;
         if (seg.kind === "text") {
           if (seg.text.trim().length === 0) return null;
           return <AssistantMarkdown key={`t-${i}`}>{seg.text}</AssistantMarkdown>;
         }
         if (seg.kind === "chart") {
-          return (
-            <ChartSlot
-              key={`c-${seg.chartId}`}
-              chartId={seg.chartId}
-              chart={seg.chart}
-              isMessageSettled={isMessageSettled}
-            />
-          );
+          return <ChartSlot key={`c-${i}-${seg.chartId}`} chartId={seg.chartId} />;
         }
-        // Pending marker: chart event for this id hasn't arrived.
-        // Mid-stream we hide the marker entirely AND latch the
-        // block flag so subsequent text/charts hold until the
-        // chart resolves. Post-settle we silently drop the marker
-        // (model hallucinated a chartId or its chart event was
-        // dropped) so the rest of the prose keeps reading
-        // cleanly instead of being interrupted by a broken frame.
-        if (!isMessageSettled) {
-          blocked.tripped = true;
-        }
-        return null;
+        return <DataSlot key={`d-${i}-${seg.statementId}`} statementId={seg.statementId} />;
       })}
-      {isMessageSettled &&
-        orphans.map((c) => (
-          <ChartSlot
-            key={`o-${c.chartId}`}
-            chartId={c.chartId}
-            chart={c}
-            isMessageSettled={isMessageSettled}
-          />
-        ))}
     </>
   );
 };
@@ -1529,15 +1543,16 @@ const AssistantBubble = ({
   const isStreamingThisBubble =
     isLast && (status === "streaming" || status === "submitted");
   const suggestions = isStreamingThisBubble ? [] : collectSuggestions(events);
-  // Charts publish `chart` events from the `render_data` tool. The
-  // model is instructed to embed `[[chart:<id>]]` markers in its
-  // reply at the desired position; {@link MarkdownWithCharts} splits
-  // the text on those markers and drops the chart in at the right
-  // spot. Charts whose marker hasn't streamed in yet show a
-  // skeleton so the layout doesn't shift; charts without a matching
-  // marker render at the end as a fallback. Suggested questions
+  // Charts and tables are placed at inline marker positions in
+  // the assistant's prose. `prepare_chart` / `render_data` mint
+  // a `chartId` and the model embeds `[chart:<chartId>]` (or
+  // legacy `[[chart:<chartId>]]`); for raw data the model
+  // embeds `[data:<statement_id>]` and the host UI fetches the
+  // rows on its own. {@link MarkdownWithEmbeds} splits the text
+  // on both markers and renders {@link ChartSlot} /
+  // {@link DataSlot} inline; unknown / expired ids resolve as
+  // nothing so the prose flows unaffected. Suggested questions
   // stay gated on settle to avoid pop-in mid-stream.
-  const charts = collectCharts(events);
   const pendingApprovals = mergePendingApprovals(
     collectPendingApprovals(message.parts),
     externalApprovals,
@@ -1578,14 +1593,8 @@ const AssistantBubble = ({
             onResolve={onResolveToolApproval}
           />
         ))}
-        {events && events.length > 0 && <ToolEventList events={events} />}
-        {(hasText || charts.length > 0) && (
-          <MarkdownWithCharts
-            text={fullText}
-            charts={charts}
-            isMessageSettled={!isStreamingThisBubble}
-          />
-        )}
+        {events && events.length > 0 && <ToolSessionPill events={events} />}
+        {hasText && <MarkdownWithEmbeds text={fullText} />}
         {isLast && hasText && (
           <div className="flex items-center gap-1">
             {regenerate && (

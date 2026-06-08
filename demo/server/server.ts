@@ -1,6 +1,12 @@
 import { createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
-import { buildEmailTool, createAgent, mastra, tool } from "@dbx-tools/appkit-mastra";
+import {
+  buildEmailTool,
+  createAgent,
+  GENIE_INSTRUCTIONS,
+  mastra,
+  tool,
+} from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
@@ -25,11 +31,13 @@ import { z } from "zod";
 //
 // Genie integration: register the AppKit `genie()` plugin for its
 // resource manifest (so `app.yaml` picks up the Genie space binding)
-// and its `spaces` config format. The `mastra()` plugin's Genie agent
-// auto-discovers spaces from the registered `genie()` plugin (or
-// from `mastra({ genieSpaces: ... })` if you prefer to declare them
-// there), then talks to Genie directly via `@dbx-tools/genie` for
-// streaming + `getStatement`-backed row hydration.
+// and its `spaces` config format. The `mastra()` plugin's
+// `plugins.genie?.toolkit()` callback returns a flat set of Genie
+// tools (`ask_genie`, `get_statement`, `prepare_chart`,
+// `get_space_description`, `get_space_serialized`) the central
+// agent drives directly. The tools talk to Genie via
+// `@dbx-tools/genie` for streaming + `getStatement`-backed row
+// hydration; no inner Genie orchestrator agent.
 //
 // Required env vars (see .env.example):
 // - DATABRICKS_SERVING_ENDPOINT_NAME=databricks-claude-sonnet-4-6
@@ -64,31 +72,12 @@ const support = createAgent({
   name: "support",
   instructions: [
     "You help customers with data. When a question needs a SQL query,",
-    "call Genie. For general help / definitions / clarifications,",
-    "answer directly without calling Genie.",
+    "drive the Genie tools (`ask_genie`, `get_statement`,",
+    "`prepare_chart`, `get_space_description`, `get_space_serialized`)",
+    "below. For general help / definitions / clarifications, answer",
+    "directly without calling them.",
     "",
-    "Issue ONE Genie call per turn (don't shop for phrasings; ask the",
-    "user to clarify if the answer doesn't fit). Reuse the previous",
-    "`conversationId` to follow up in the same thread. Prefer",
-    "aggregated queries for time-series and distributions.",
-    "",
-    "Charting contract:",
-    "- Genie's `summary[]` may contain `visualize` items whose",
-    "  `dataset.chart.chartId` is a chart that is ALREADY rendered.",
-    "  To place it in your reply, embed `[[chart:<chartId>]]` on its",
-    "  own line at the position you want it to appear. Use the",
-    "  chartId verbatim.",
-    "- Do NOT call `render_data` for a dataset Genie already",
-    "  charted. It would render the same chart a second time and",
-    "  stall the stream while it runs.",
-    "- Only call `render_data` when you have a dataset Genie did",
-    "  not return (e.g. you computed it yourself) and a chart is",
-    "  the right format. Call it BEFORE you start writing prose so",
-    "  the stream doesn't pause mid-sentence.",
-    "",
-    "Add interpretation around each chart; quote specific numbers",
-    "Genie called out in its prose `string` items exactly when you",
-    "reference them.",
+    GENIE_INSTRUCTIONS,
   ].join("\n"),
   tools(plugins) {
     return {
@@ -131,11 +120,15 @@ await createApp({
     server({ host }),
     // `genie()` with no config reads `DATABRICKS_GENIE_SPACE_ID`
     // from the env and registers it as the `default` alias. The
-    // `mastra()` plugin's Genie agent auto-discovers these spaces
-    // and exposes one tool per alias to the calling agent. Pass
-    // `genie({ spaces: { sales: "...", ops: "..." } })` to wire
-    // multiple aliases, or set `mastra({ genieSpaces: { ... } })`
-    // if you want to declare them on the Mastra plugin directly.
+    // `mastra()` plugin's `plugins.genie?.toolkit()` callback
+    // auto-discovers these spaces and surfaces a flat set of
+    // Genie tools (`ask_genie`, `get_statement`, `prepare_chart`,
+    // `get_space_description`, `get_space_serialized`) to the
+    // calling agent. Pass `genie({ spaces: { sales: "...", ops:
+    // "..." } })` to wire multiple aliases (per-space tools then
+    // get suffixed as `ask_genie_sales`, `ask_genie_ops`, ...),
+    // or set `mastra({ genieSpaces: { ... } })` if you want to
+    // declare them on the Mastra plugin directly.
     genie(),
     lakebase(),
     mastra({

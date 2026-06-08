@@ -7,23 +7,26 @@ Generated from the AppKit `app init` template, then adapted to:
 
 - Mount the Mastra plugin alongside `server`, `genie`, and `lakebase`,
   with `autopg()` discovery for Lakebase env vars.
-- Spread the AppKit `genie` toolkit into the agent so the LLM can ask
-  the configured Genie space (`DATABRICKS_GENIE_SPACE_ID`) for SQL-
-  backed answers without any hand-written tool code. Genie streaming
-  events (status pills, SQL text, row sets, suggested follow-ups) are
-  forwarded through Mastra's `ToolStream` so the UI shows live
-  progress while the model is still waiting on the final result.
-- Inline-render Genie query results as Echarts visualizations. Each
-  Genie SQL statement gets a short `chartId`; the model embeds
-  `[[chart:<chartId>]]` in its markdown reply at the position the
-  chart should appear. The chart-planner agent runs server-side per
-  dataset and ships its `EChartsOption` straight back through the
-  writer, so the client's `<ChartSlot>` just merges the dataset and
-  spec events by `chartId` and renders inline - no HTTP round-trip
-  to fetch chart specs. The system-default `render_data` tool uses
-  the same pipeline, so hand-built charts and Genie charts feel
-  identical in the UI. See `packages/appkit-mastra/README.md` for the full
-  contract.
+- Hand the central Mastra agent the flat Genie toolset
+  (`ask_genie`, `get_statement`, `prepare_chart`, plus per-space
+  description / serialization tools) and the canonical
+  `GENIE_INSTRUCTIONS` block so the LLM can ask the configured
+  Genie space (`DATABRICKS_GENIE_SPACE_ID`) for SQL-backed
+  answers without any hand-written tool code. Genie streaming
+  events (status pills, thinking, SQL text, row sets, suggested
+  follow-ups) are forwarded through Mastra's `ToolStream` so the
+  UI shows live progress while the model is still waiting on the
+  final result.
+- Inline-render query results as Echarts visualizations. The
+  `prepare_chart` and `render_data` tools mint a short `chartId`
+  and kick chart planning into the background; the model embeds
+  `[chart:<chartId>]` in its markdown reply at the position the
+  chart should appear. The client's `<ChartSlot>` long-polls
+  `${basePath}/charts/:chartId` (a route the Mastra plugin
+  exposes) for the resolved `EChartsOption` and renders it in
+  place. Unknown or TTL-expired ids resolve as nothing so the
+  prose flows undisturbed. See `packages/appkit-mastra/README.md`
+  for the full contract.
 - Render the chat UI exclusively with `@databricks/appkit-ui`
   primitives (no `ai-elements`, no vendored shadcn) plus
   `streamdown` for GitHub-flavored markdown rendering (tables, task
@@ -62,12 +65,11 @@ demo/
       ErrorBoundary.tsx
       index.css           # @import "@databricks/appkit-ui/styles.css" + tailwindcss + tw-animate-css
       lib/
-        mastra-client.ts  # useMastraClient + useMastraModels + fetchMastraHistory
-        genie-history.ts  # rebuild ToolEvents from /history results so reloads still show pills
+        mastra-client.ts  # useMastraClient + useMastraModels + fetchMastraHistory + useChartFetch
         utils.ts          # cn() helper
       components/
         chat-view.tsx     # shared chat surface: appkit-ui primitives + streamdown +
-                          # ChartSlot (Echarts) merging chart writer events at [[chart:<id>]] markers
+                          # ChartSlot (Echarts) long-polling the chart cache at [chart:<id>] markers
       pages/
         Chat.tsx          # /chat - @ai-sdk/react useChat against /api/mastra/route/chat
         Stream.tsx        # /stream - MastraClient.stream() with live tool-output events

@@ -178,10 +178,13 @@ import { commonUtils } from "@dbx-tools/shared";
 // Memoize by all-args; sync results cache forever, async failures bust.
 const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));
 
-// Marker-friendly short id (default 8 hex chars from a v4 UUID).
-// Safe within a single conversation / job / batch. Use a full UUID
-// when global uniqueness is needed.
-commonUtils.shortId(); // e.g. "a3f1c92b"
+// Mint an id. With no arg, a full v4 UUID (use when global
+// uniqueness matters - cross-process / cross-storage). Pass
+// `length` for the first N hex chars of one (use for marker-
+// friendly typeable ids bounded to a single conversation /
+// batch).
+commonUtils.id();  // "123e4567-e89b-12d3-a456-426614174000"
+commonUtils.id(8); // "a3f1c92b"
 
 // Short, deterministic hash for cache keys / slug suffixes / etc.
 // Pure-JS FNV-1a in Crockford-style base-32 (digits + lowercase
@@ -191,9 +194,11 @@ commonUtils.fnvHashWithOptions({ length: 4 }, "user@example.com");
 
 // Async generator that polls a producer on an interval. Yields each
 // value; stops when `predicate` returns false or the signal aborts.
+// `timeoutMs` caps the total loop lifetime - when it elapses the
+// loop throws the `TimeoutError` from `AbortSignal.timeout(...)`.
 for await (const status of commonUtils.poll(
   async ({ signal }) => fetchStatus(signal),
-  { intervalMs: 250, predicate: (s) => s !== "ready" },
+  { intervalMs: 250, timeoutMs: 30_000, predicate: (s) => s !== "ready" },
 )) {
   render(status);
 }

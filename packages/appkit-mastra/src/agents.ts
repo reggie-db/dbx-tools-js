@@ -20,12 +20,12 @@ import { createTool } from "@mastra/core/tools";
 import type { Tool } from "@mastra/core/tools";
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
-import { buildRenderDataTool } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { buildGenieToolkitProvider, resolveGenieSpaces } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
 import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
 import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
+import { buildRenderDataTool } from "./chart.js";
 
 /**
  * Tool record accepted by every Mastra `Agent.tools` field and by the
@@ -323,6 +323,17 @@ export interface BuiltAgents {
 /** Fallback agent id used when `config.agents` is omitted entirely. */
 export const FALLBACK_AGENT_ID = "default";
 
+/**
+ * Default per-turn step ceiling applied to every registered agent
+ * when {@link MastraPluginConfig.agentMaxSteps} is unset. Sized to
+ * fit a decomposed Genie turn (grounding + several `ask_genie`
+ * calls + `prepare_chart` per dataset + the final-text reply) with
+ * headroom for the model to chain a couple of follow-ups before
+ * answering - well above Mastra's own `agent.generate` default of
+ * 5, which would cut multi-step orchestration off mid-loop.
+ */
+export const DEFAULT_AGENT_MAX_STEPS = 25;
+
 const FALLBACK_AGENT_INSTRUCTIONS = `You are a data analyst. The user will ask questions about
 business metrics and may share personal preferences you should remember across turns.
 
@@ -435,6 +446,9 @@ export async function buildAgents(opts: {
       ...(def.description !== undefined ? { description: def.description } : {}),
       instructions: composeInstructions(def.instructions, style),
       model: resolveModel(config, def.model),
+      defaultOptions: {
+        maxSteps: config.agentMaxSteps ?? DEFAULT_AGENT_MAX_STEPS,
+      },
       tools,
       ...(memory ? { memory } : {}),
       ...(inputProcessors.length > 0 ? { inputProcessors } : {}),
