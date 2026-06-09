@@ -3,7 +3,7 @@
  *
  * Wraps `client.statementExecution.getStatement` with the shape
  * + size + error handling the plugin's tools and the
- * `/statements/:statementId` route both need:
+ * `/embed/data/:id` route both need:
  *
  *   - {@link fetchStatementData}: low-level fetch that returns the
  *     raw `{columns, rows, rowCount}` shape used by the
@@ -12,7 +12,7 @@
  *     numeric strings to numbers so downstream charts /
  *     aggregations don't have to.
  *   - {@link STATEMENT_ROW_CAP}: hard cap callers (notably the
- *     `/statements/:statementId` route) clamp `limit` to so a
+ *     `/embed/data/:id` route) clamp `limit` to so a
  *     runaway result set can't hose a response.
  *   - {@link isStatementNotFoundError}: structural detector that
  *     normalizes the SDK's two error classes plus the loose
@@ -33,7 +33,7 @@ import { apiUtils } from "@dbx-tools/shared";
 
 /**
  * Hard server-side cap on rows returned by the
- * `/statements/:statementId` route. Sized to keep responses small
+ * `/embed/data/:id` route. Sized to keep responses small
  * enough for inline tables to render snappily; the route surfaces
  * a `truncated` flag whenever the upstream `rowCount` exceeds
  * this so end users know they're seeing a sample.
@@ -66,7 +66,7 @@ function coerceCell(cell: string | null): unknown {
  *
  * Exported because every consumer in the plugin (the
  * `get_statement` tool, the `prepare_chart` dataset resolver, and
- * the `/statements/:statementId` route) needs the exact same
+ * the `/embed/data/:id` route) needs the exact same
  * fetch + coercion pipeline so LLM-side `get_statement` output
  * and UI-side `[data:<id>]` rendering stay shape-identical for
  * the same `statement_id`.
@@ -110,7 +110,7 @@ export async function fetchStatementData(
  * catalogued.
  *
  * Pulled into its own helper so callers (notably the
- * `/statements/:statementId` route) stay decoupled from SDK
+ * `/embed/data/:id` route) stay decoupled from SDK
  * error-class identity, and the conversion logic stays testable
  * in isolation.
  */

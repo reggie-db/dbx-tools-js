@@ -1,4 +1,4 @@
-import { createApp, genie, lakebase, server } from "@databricks/appkit";
+import { CacheManager, createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
 import {
   buildEmailTool,
@@ -133,3 +133,5 @@ await createApp({
     enabled: true,
   },
 });
+
+console.log(await CacheManager.getInstanceSync().isStorageHealthy());

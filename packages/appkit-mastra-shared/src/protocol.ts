@@ -11,7 +11,7 @@
  * and the React client keeps working.
  *
  * URL helpers ({@link chatUrl}, {@link historyUrl},
- * {@link chartUrl}) live in the sibling `mastra.ts` module so
+ * {@link embedUrl}) live in the sibling `mastra.ts` module so
  * this file stays purely declarative (schemas + inferred types
  * only).
  *
@@ -52,24 +52,24 @@ import { z } from "zod";
  *     `${basePath}/route/history/:agentId`. Use this to reach a
  *     non-default agent's history; clients should normally call
  *     {@link historyUrl} instead.
- *   - `chartsPathTemplate`: templated chart fetch endpoint:
- *     `${basePath}/charts/:chartId`. The host UI long-polls this
- *     to resolve `[chart:<chartId>]` markers - the route blocks
- *     until the cached entry transitions to `ready` / `error` (or
- *     the server-side budget elapses, returning a `processing`
- *     entry the client polls again). Returns 404 once the 1h TTL
- *     elapses. Optional `?timeoutMs=<n>` knob (default 60s,
- *     capped at 5min) tunes the long-poll window. Clients should
- *     normally call {@link chartUrl} instead of substituting the
- *     placeholder by hand.
- *   - `statementsPathTemplate`: templated statement fetch endpoint:
- *     `${basePath}/statements/:statementId`. The host UI hits this
- *     to resolve `[data:<statement_id>]` markers in agent prose -
- *     a single OBO-scoped fetch returns the rows of a Genie /
- *     Statement Execution result so the client can render a table
- *     inline. Optional `?limit=<n>` query knob caps the rows
- *     returned (server clamps to a sane upper bound). Returns 404
- *     when the statement id is unknown / expired upstream.
+ *   - `embedPathTemplate`: templated generic embed fetch endpoint:
+ *     `${basePath}/embed/:type/:id`. One route resolves every embed
+ *     marker the agent emits: `:type` is the marker's `<type>`
+ *     token (`chart`, `data`, ...) and `:id` its id. The server
+ *     dispatches on `:type` through its resolver registry and 404s
+ *     any type it doesn't register, so new embed kinds are
+ *     server-only changes. Behavior is per-type:
+ *       - `chart`: long-polls the chart cache until the entry
+ *         settles (`result` / `error`) or the server budget
+ *         elapses (then returns the still-`processing` entry to
+ *         poll again). 404 once the 1h TTL expires. Optional
+ *         `?timeoutMs=<n>` (default 60s, capped at 5min).
+ *       - `data`: one OBO-scoped fetch returns the rows of a Genie
+ *         / Statement Execution result. Optional `?limit=<n>`
+ *         caps rows (server clamps). 404 when the statement id is
+ *         unknown / expired upstream.
+ *     Clients should call {@link embedUrl} rather than substituting
+ *     the placeholders by hand.
  *   - `defaultAgent`: agent id `chatRoute` binds to when the client
  *     doesn't name one.
  *   - `agents`: every registered agent id in registration order.
@@ -81,8 +81,7 @@ export const MastraClientConfigSchema = z.object({
   modelsPath: z.string(),
   historyPath: z.string(),
   historyPathTemplate: z.string(),
-  chartsPathTemplate: z.string(),
-  statementsPathTemplate: z.string(),
+  embedPathTemplate: z.string(),
   defaultAgent: z.string(),
   agents: z.array(z.string()),
 });
@@ -253,7 +252,7 @@ export type ChartResult = z.infer<typeof ChartResultSchema>;
  * `option` is typed as a generic record so this package stays
  * dependency-free of `echarts`. The server (`chart.ts`) imports
  * this schema directly; the demo client polls the
- * `/charts/:chartId` route and parses responses against it.
+ * `/embed/chart/:id` route and parses responses against it.
  */
 export const ChartSchema = z.object({
   chartId: z
@@ -276,8 +275,7 @@ export type Chart = z.infer<typeof ChartSchema>;
 /* ------------------------------- statements ------------------------------- */
 
 /**
- * Wire-format payload returned by
- * `GET ${basePath}/statements/:statementId`.
+ * Wire-format payload returned by `GET ${basePath}/embed/data/:id`.
  *
  * Mirrors the agent-side `get_statement` tool's output so the
  * host UI and the LLM see the exact same shape for the same

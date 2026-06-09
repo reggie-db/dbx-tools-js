@@ -58,17 +58,6 @@ const isToolProgress = (value: unknown): value is ToolProgress =>
   value !== null &&
   typeof (value as { type?: unknown }).type === "string";
 
-const PLACEHOLDER_MARKER_RE =
-  /\[\[?([^\s:\]]+):(?![0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\]?\]?)([^\s\]]+)\]\]?/i;
-
-const replaceNextPlaceholder = (text: string, type: string, id: string): string => {
-  const marker = `[${type}:${id}]`;
-
-  return PLACEHOLDER_MARKER_RE.test(text)
-    ? text.replace(PLACEHOLDER_MARKER_RE, marker)
-    : `${text}${text.endsWith("\n") || text.length === 0 ? "" : "\n"}\n${marker}`;
-};
-
 const Stream = () => {
   const [model, setModel] = useState("");
   // `useMastraClient(model)` rebuilds the client with
@@ -150,16 +139,29 @@ const Stream = () => {
       // accumulated for `assistantId` so resuming after approval
       // appends rather than overwrites.
       const existing = messagesRef.current.find((m) => m.id === assistantId);
-      let assistantText = "";
+      // Text is tracked as ordered segments, one per `text-start` the
+      // agent emits. In a multi-step turn the model opens a fresh text
+      // block in each step (a short preamble before each tool call),
+      // and those blocks read as distinct "updates". Keeping them as
+      // separate segments lets the bubble render each as its own block
+      // instead of mashing "...summary.This is..." into one paragraph.
+      const textSegments: string[] = [];
       let assistantReasoning = "";
       if (existing) {
         for (const part of existing.parts) {
-          if (part.type === "text") assistantText += part.text;
+          if (part.type === "text") textSegments.push(part.text);
           else if (part.type === "reasoning") {
             assistantReasoning += (part as { text?: string }).text ?? "";
           }
         }
       }
+      // Append a text delta to the current (most recent) segment,
+      // opening one if none exists yet (defensive: a provider could
+      // stream deltas without a leading `text-start`).
+      const appendText = (delta: string) => {
+        if (textSegments.length === 0) textSegments.push("");
+        textSegments[textSegments.length - 1] += delta;
+      };
 
       const upsertAssistant = () => {
         const prev = messagesRef.current;
@@ -169,8 +171,10 @@ const Stream = () => {
         if (assistantReasoning) {
           parts.push({ type: "reasoning", text: assistantReasoning });
         }
-        if (assistantText) {
-          parts.push({ type: "text", text: assistantText });
+        // One text part per non-empty segment, in stream order, so the
+        // bubble renders each step's text as its own block.
+        for (const segment of textSegments) {
+          if (segment.length > 0) parts.push({ type: "text", text: segment });
         }
         const message: UIMessage = {
           id: assistantId,
@@ -211,10 +215,19 @@ const Stream = () => {
             runIdRef.current = chunk.runId;
           }
           switch (chunk.type) {
+            case "text-start":
+              // Open a new text segment so each step's preamble stays
+              // a separate part (and thus a separate rendered block).
+              textSegments.push("");
+              break;
             case "text-delta":
-              assistantText += chunk.payload?.text ?? "";
+              appendText(chunk.payload?.text ?? "");
               upsertAssistant();
               markStreaming();
+              break;
+            case "text-end":
+              // Segment boundary is driven by `text-start`; nothing to
+              // do on end - the next start opens the next segment.
               break;
             case "reasoning-delta":
               assistantReasoning += chunk.payload?.text ?? "";
@@ -282,16 +295,10 @@ const Stream = () => {
             case "tool-result": {
               const toolCallId = chunk.payload?.toolCallId;
               if (typeof toolCallId !== "string") break;
-              const toolName = chunk.payload?.toolName;
-              const chartId =
-                toolName === "prepare_chart" &&
-                typeof chunk.payload?.result?.chartId === "string"
-                  ? chunk.payload.result.chartId
-                  : null;
-              if (chartId) {
-                assistantText = replaceNextPlaceholder(assistantText, chartId);
-                upsertAssistant();
-              }
+              // Charts resolve from `[chart:<id>]` markers in the
+              // assistant's prose (the model embeds the id returned
+              // by `prepare_chart`), so the tool-result payload is
+              // opaque here - we only need it to flip the pill.
               // Genie tools (`ask_genie`, `get_statement`,
               // `prepare_chart`) stream their entire progress
               // surface through `ctx.writer` and arrive on this

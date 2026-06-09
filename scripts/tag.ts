@@ -10,6 +10,7 @@
 //   bun run tag patch          # patch bump
 //   bun run tag minor          # minor bump
 //   bun run tag major          # major bump
+//   bun run tag --readme       # also sync package READMEs (off by default)
 //   bun run tag --dry-run      # print everything, write nothing
 //
 // All `@dbx-tools/*` packages are version-fixed via
@@ -46,14 +47,13 @@
 //   is skipped silently when `gh` is not on `PATH`.
 //
 // README sync:
-//   Before the release commit is built, the script runs
-//   `syncReadmes({ upgrade: true })` from `readme.ts` over every
-//   publishable package. The intent is sync-with-code, not fresh
-//   regeneration: the agent is told to preserve every section that
-//   still matches the source and only rewrite drift. Any
+//   Off by default. Pass `--readme` to run `syncReadmes({ upgrade:
+//   true })` from `readme.ts` over every publishable package before
+//   the release commit is built. The intent is sync-with-code, not
+//   fresh regeneration: the agent is told to preserve every section
+//   that still matches the source and only rewrite drift. Any
 //   resulting edits get auto-staged and folded into the release
-//   commit, so the shipped READMEs always match the tagged code.
-//   Pass `--no-readmes` to skip this pass when iterating fast.
+//   commit, so the shipped READMEs match the tagged code.
 
 import { which } from "bun";
 import { Command, InvalidArgumentError } from "commander";
@@ -147,6 +147,12 @@ Skip the tools when commit subjects already tell the story.
 Requirements:
 - Be terse
 - Group by theme (Features, Fixes, Internals); skip empty sections
+- Describe what changed and why it matters, not how the diff looks
+- Never cite line counts, diff stats, churn, or file sizes (no
+  "~800 lines reworked", "+71 lines", "~1300 lines changed"); the
+  stat is context for you only, not content for the notes
+- A refactor entry should name the new behavior or structure, not
+  quantify the edit
 - No preamble
 - No closing remarks
 - No emojis
@@ -285,16 +291,16 @@ const program = new Command()
   )
   .option("-n, --dry-run", "print everything, write nothing", false)
   .option(
-    "--no-readmes",
-    "skip the pre-commit README sync pass (faster, but READMEs may drift)",
+    "--readme",
+    "sync package READMEs with source before the release commit (off by default)",
+    false,
   )
   .parse(process.argv);
 
 const [bump] = program.processedArgs as [Bump];
-const { dryRun, readmes } = program.opts<{
+const { dryRun, readme } = program.opts<{
   dryRun: boolean;
-  // commander turns `--no-readmes` into `readmes: false`.
-  readmes: boolean;
+  readme: boolean;
 }>();
 
 const { version: currentVersion, pkgs } = await findPublishables();
@@ -359,11 +365,11 @@ if (ahead !== "0") {
 }
 console.log();
 
-// Sync READMEs with current source before the release commit is
-// built so the shipped docs match the tagged code. Runs against
-// every publishable package; the agent preserves accurate sections
-// and only rewrites drift. Skipped via `--no-readmes`.
-if (readmes) {
+// Opt-in via `--readme`: sync READMEs with current source before the
+// release commit is built so the shipped docs match the tagged code.
+// Runs against every publishable package; the agent preserves accurate
+// sections and only rewrites drift.
+if (readme) {
   console.log("Syncing READMEs with current source...");
   await syncReadmes({ upgrade: true, dryRun });
   console.log();

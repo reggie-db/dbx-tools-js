@@ -688,3 +688,36 @@ export function isDatabricksAppEnv(env?: Record<string, string | undefined>): bo
 
   return true;
 }
+
+/**
+ * Narrow `value` to a plain (non-array) object. Use as a type guard
+ * before indexing into / mutating parsed JSON so the access is
+ * type-safe.
+ *
+ * @example
+ * if (commonUtils.isRecord(parsed)) parsed.foo = 1;
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Delete every key in `keys` that is present on `value`, returning
+ * whether anything was removed. A no-op that returns `false` when
+ * `value` isn't a record (see {@link isRecord}), so callers can pass
+ * an `unknown` nested field directly.
+ *
+ * @example
+ * commonUtils.deleteKeys(payload, ["output", "messages"]);
+ */
+export function deleteKeys(value: unknown, keys: readonly string[]): boolean {
+  if (!isRecord(value)) return false;
+  let modified = false;
+  for (const key of keys) {
+    if (key in value) {
+      delete value[key];
+      modified = true;
+    }
+  }
+  return modified;
+}

@@ -199,7 +199,7 @@ once regardless of how many spaces are wired:
   Genie statement. Use only when the agent needs to read values
   to reason about them; otherwise embed `[data:<statement_id>]`.
 - `prepare_chart({statement_id, title?, description?})` - mint a
-  short `chartId`, kick off a background chart-planner task,
+  `chartId` (v4 UUID), kick off a background chart-planner task,
   cache the resolved Echarts spec under the id for one hour.
   Returns `{chartId}` synchronously so the agent can embed
   `[chart:<chartId>]` in prose without blocking.
@@ -254,8 +254,9 @@ Genie writer event flow:
 - Charts ride out-of-band: `prepare_chart` mints a `chartId`
   synchronously, the planner runs in the background and writes
   the spec to the chart cache (1h TTL). The host UI long-polls
-  `${MastraClientConfig.chartsPathTemplate}` by id and renders
-  inline at the matching `[chart:<chartId>]` marker.
+  `${MastraClientConfig.embedPathTemplate}` (`/embed/chart/:id`)
+  by id and renders inline at the matching `[chart:<chartId>]`
+  marker.
 - After a hard reload, the live `started` / `status` / `sql`
   events are gone (they only ride the writer, not persisted
   tool results); the central agent's text reply (with embedded
@@ -285,7 +286,7 @@ off the chart-planner in the background. The tool returns just
 `{ chartId }` so the model can embed `[chart:<chartId>]` in
 prose immediately without blocking on chart generation.
 
-1. Mint a short `chartId` (8 hex chars).
+1. Mint a `chartId` (v4 UUID via `crypto.randomUUID()`).
 2. Cache an empty `{ chartId }` placeholder so the first
    `fetchChart` call always sees an entry (no spurious 404 race).
 3. Fire-and-forget: resolve the dataset (trivial for
@@ -297,26 +298,27 @@ prose immediately without blocking on chart generation.
 4. Return `{ chartId }` to the LLM immediately.
 
 The host UI resolves `[chart:<chartId>]` markers by hitting
-the plugin's `GET /charts/:chartId` route, which long-polls
+the plugin's generic `GET /embed/chart/:id` route, which long-polls
 until the entry settles or the server-side timeout elapses.
 
 #### Inline placement contract
 
-The model embeds `[[chart:<chartId>]]` on its own line in its
-markdown reply at the position where the chart should appear:
+The model embeds `[chart:<chartId>]` on its own line in its
+markdown reply at the position where the chart should appear
+(the `<chartId>` is the v4 UUID the tool returned):
 
 ```markdown
 ## Audit Score
 
 Audit Score is stable at ~94%, hovering between 93.5 and 95.0.
 
-[[chart:a3f9c1d2]]
+[chart:a3f9c1d2-7b4e-4c1a-9f2d-1e6b8c0a5d31]
 
 ## Service Time
 
 Service time is the outlier at 162.5s, up from a target of 150s.
 
-[[chart:b7e2d4f1]]
+[chart:b7e2d4f1-3a9c-4e58-8d10-2f7a4b6c9e02]
 ```
 
 The chat client splits the assistant text on these markers and
@@ -330,7 +332,7 @@ frame so the layout doesn't jump as charts resolve.
 #### Trade-offs
 
 - Chart entries live in the cache with a 1h TTL. After expiry
-  the `/charts/:chartId` route returns 404. The model can call
+  the `/embed/chart/:id` route returns 404. The model can call
   `render_data` again on the next turn if the user wants the
   chart back.
 - The chart-planner is a separate model call per dataset (fast

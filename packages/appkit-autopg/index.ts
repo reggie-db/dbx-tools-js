@@ -15,4 +15,5 @@
  */
 export * from "./src/address.js";
 export * from "./src/autopg.js";
+export * from "./src/provision.js";
 export * from "./src/resolver.js";

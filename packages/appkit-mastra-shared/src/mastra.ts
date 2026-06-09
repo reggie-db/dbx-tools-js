@@ -53,58 +53,41 @@ export function historyUrl(
 }
 
 /**
- * Build the chart fetch URL for a given `chartId`.
- * Substitutes the `:chartId` placeholder in
- * {@link MastraClientConfig.chartsPathTemplate} and appends
- * `?timeoutMs=<n>` when an explicit long-poll budget is supplied.
+ * Build the generic embed fetch URL for a marker of kind `type`
+ * and the given `id`. Substitutes the `:type` and `:id`
+ * placeholders in {@link MastraClientConfig.embedPathTemplate}
+ * (`${basePath}/embed/:type/:id`) and appends any `query` entries
+ * as query-string params.
  *
- * The host UI typically polls this URL when it encounters a
- * `[chart:<chartId>]` marker in an assistant reply: the server
- * blocks until the chart cache entry transitions to
- * `ready` / `error` or the long-poll budget elapses, at which
- * point it returns the last seen value (still `processing`) so
- * the client can re-poll. A `404` means the chartId is unknown
- * or its 1h TTL has elapsed; treat it as a missing slot.
- */
-export function chartUrl(
-  config: Pick<MastraClientConfig, "chartsPathTemplate">,
-  chartId: string,
-  options: { timeoutMs?: number } = {},
-): string {
-  const base = config.chartsPathTemplate.replace(
-    ":chartId",
-    encodeURIComponent(chartId),
-  );
-  if (options.timeoutMs === undefined) return base;
-  const params = new URLSearchParams();
-  params.set("timeoutMs", String(options.timeoutMs));
-  return `${base}?${params.toString()}`;
-}
-
-/**
- * Build the statement fetch URL for a given `statementId`.
- * Substitutes the `:statementId` placeholder in
- * {@link MastraClientConfig.statementsPathTemplate} and appends
- * `?limit=<n>` when an explicit row cap is supplied.
+ * This is the single resolver for every embed marker the agent
+ * emits - `[chart:<id>]`, `[data:<id>]`, and any future kind. The
+ * `type` segment is opaque here; the server dispatches on it and
+ * returns `404` for a type it doesn't register (or for an
+ * unknown / expired id of a known type), which the host treats as
+ * a missing slot. Per-type query knobs ride in `query`:
  *
- * The host UI hits this URL when it encounters a
- * `[data:<statement_id>]` marker in an assistant reply: a single
- * OBO-scoped fetch returns the rows of the corresponding Genie /
- * Statement Execution result so the client can render an inline
- * table. A `404` means the statement id is unknown or no longer
- * resolvable through the workspace; treat as a missing slot.
+ *   - `chart`: `{ timeoutMs }` tunes the long-poll window.
+ *   - `data`: `{ limit }` caps the rows returned.
+ *
+ * @example
+ * ```ts
+ * embedUrl(config, "chart", chartId, { timeoutMs: 30_000 });
+ * embedUrl(config, "data", statementId, { limit: 100 });
+ * ```
  */
-export function statementUrl(
-  config: Pick<MastraClientConfig, "statementsPathTemplate">,
-  statementId: string,
-  options: { limit?: number } = {},
+export function embedUrl(
+  config: Pick<MastraClientConfig, "embedPathTemplate">,
+  type: string,
+  id: string,
+  query: Record<string, number | string> = {},
 ): string {
-  const base = config.statementsPathTemplate.replace(
-    ":statementId",
-    encodeURIComponent(statementId),
-  );
-  if (options.limit === undefined) return base;
+  const base = config.embedPathTemplate
+    .replace(":type", encodeURIComponent(type))
+    .replace(":id", encodeURIComponent(id));
   const params = new URLSearchParams();
-  params.set("limit", String(options.limit));
-  return `${base}?${params.toString()}`;
+  for (const [key, value] of Object.entries(query)) {
+    params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
 }

@@ -43,7 +43,8 @@
     "zod": "catalog:"
   },
   "overrides": {
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "ai": "5.0.193"
   },
   "peerDependencies": {
     "@databricks/appkit": "catalog:"

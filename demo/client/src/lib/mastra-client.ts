@@ -3,10 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { UIMessage } from "ai";
 import { usePluginClientConfig } from "@databricks/appkit-ui/react";
 import {
-  chartUrl,
   chatUrl,
+  embedUrl,
   historyUrl,
-  statementUrl,
   type MastraClearHistoryResponse,
   type MastraClientConfig,
   type MastraHistoryResponse,
@@ -361,8 +360,8 @@ const chartIsTerminal = (c: Chart): boolean =>
 const statementIsTerminal = (_: StatementData): boolean => true;
 
 /**
- * Fetch a chart by id from the Mastra plugin's
- * `/charts/:chartId` endpoint. Used by the chat UI to resolve
+ * Fetch a chart by id from the Mastra plugin's generic
+ * `/embed/chart/:id` endpoint. Used by the chat UI to resolve
  * `[chart:<chartId>]` markers the agent embeds in prose.
  *
  * The chart planner runs in the background after `prepare_chart`
@@ -380,17 +379,17 @@ const statementIsTerminal = (_: StatementData): boolean => true;
  *     nothing.
  */
 export const useChartFetch = (chartId: string | undefined): ByIdFetchState<Chart> => {
-  const { chartsPathTemplate } = useMastraConfig();
+  const { embedPathTemplate } = useMastraConfig();
   const url = useMemo(
-    () => (chartId ? chartUrl({ chartsPathTemplate }, chartId) : undefined),
-    [chartId, chartsPathTemplate],
+    () => (chartId ? embedUrl({ embedPathTemplate }, "chart", chartId) : undefined),
+    [chartId, embedPathTemplate],
   );
   return useByIdFetch<Chart>(chartId, url, chartIsTerminal);
 };
 
 /**
  * Fetch the rows of a Databricks statement by id from the Mastra
- * plugin's `/statements/:statementId` endpoint. Used by the chat
+ * plugin's generic `/embed/data/:id` endpoint. Used by the chat
  * UI to resolve `[data:<statement_id>]` markers the agent embeds
  * in prose. Server-side, the route reuses the `get_statement`
  * tool's fetch + coercion pipeline so the shape matches what the
@@ -401,11 +400,11 @@ export const useChartFetch = (chartId: string | undefined): ByIdFetchState<Chart
 export const useStatementFetch = (
   statementId: string | undefined,
 ): ByIdFetchState<StatementData> => {
-  const { statementsPathTemplate } = useMastraConfig();
+  const { embedPathTemplate } = useMastraConfig();
   const url = useMemo(
     () =>
-      statementId ? statementUrl({ statementsPathTemplate }, statementId) : undefined,
-    [statementId, statementsPathTemplate],
+      statementId ? embedUrl({ embedPathTemplate }, "data", statementId) : undefined,
+    [statementId, embedPathTemplate],
   );
   return useByIdFetch<StatementData>(statementId, url, statementIsTerminal);
 };

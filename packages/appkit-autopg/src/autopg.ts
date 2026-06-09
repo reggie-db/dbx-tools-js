@@ -33,8 +33,10 @@
  * untouched and just inspect the returned record.
  */
 
+import { getUsernameWithApiLookup } from "@databricks/appkit";
 import { logUtils } from "@dbx-tools/shared";
 
+import { provisionCacheSchema } from "./provision.js";
 import {
   applyToEnv,
   resolveConnection,
@@ -51,6 +53,17 @@ export interface AutopgOptions extends ResolverInputs {
    * the resolved record back.
    */
   exportEnv?: boolean;
+  /**
+   * When `true` (the default), and only when running OUTSIDE a Databricks
+   * App, grant the connecting role full rights on the AppKit
+   * persistent-cache schema (`appkit`) via {@link provisionCacheSchema} -
+   * but only if that schema already exists (it is never created here).
+   * This stops the cache from silently disabling itself (and 404-ing every
+   * persistent read) on an identity that lacks privileges on the schema.
+   * Requires `exportEnv` so the connection is on `process.env`. No-ops
+   * inside a Databricks App regardless of this flag.
+   */
+  provisionCache?: boolean;
 }
 
 /**
@@ -67,14 +80,30 @@ export interface AutopgOptions extends ResolverInputs {
  *   the caller can pin the right one via env or config.
  */
 export async function autopg(opts: AutopgOptions = {}): Promise<Resolved> {
-  const { exportEnv = true, ...inputs } = opts;
+  const { exportEnv = true, provisionCache = true, ...inputs } = opts;
   const log = logUtils.logger("autopg");
   const resolved = await resolveConnection(inputs, log);
-  if (exportEnv) {
-    applyToEnv(resolved);
-    log.info("env updated", redactForLog(resolved));
-  } else {
+  if (!exportEnv) {
     log.info("resolved (env untouched)", redactForLog(resolved));
+    return resolved;
+  }
+  applyToEnv(resolved);
+
+  // Export the connecting identity as PGUSER. The AppKit persistent cache
+  // builds its Lakebase pool via createLakebasePool's SYNCHRONOUS username
+  // lookup (config.user / PGUSER / DATABRICKS_CLIENT_ID). Locally none are
+  // set, so the pool throws and `cache.strictPersistence` silently disables
+  // the cache - it never even reaches its CREATE SCHEMA migration, so every
+  // persistent read 404s. `getUsernameWithApiLookup` returns PGUSER as-is
+  // when already set (no API call), else falls back to `currentUser.me()`.
+  const user = await getUsernameWithApiLookup({});
+  if (user) process.env.PGUSER ??= user;
+  log.info("env updated", { ...redactForLog(resolved), user });
+
+  // Best-effort: grant the resolved role rights on the cache schema when it
+  // already exists (CacheManager creates it later, during createApp).
+  if (provisionCache) {
+    await provisionCacheSchema(log, user);
   }
   return resolved;
 }

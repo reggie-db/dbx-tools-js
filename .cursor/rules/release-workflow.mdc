@@ -18,6 +18,7 @@ There is no PR-based versioning bot and no auto-publish on push to
 bun run tag                 # patch bump (default)
 bun run tag minor           # minor bump
 bun run tag major           # major bump
+bun run tag --readme        # also sync package READMEs (off by default)
 bun run tag --dry-run       # preview without writing or pushing
 ```
 

@@ -431,7 +431,7 @@ export async function buildAgents(opts: {
   const style = resolveStyleInstructions(config);
   // Default-on protection against the model copying turn-scoped
   // chartIds from prior assistant tool results into the new
-  // turn's `[[chart:<id>]]` markers. Opt out per-plugin via
+  // turn's `[chart:<id>]` markers. Opt out per-plugin via
   // `config.stripStaleCharts: false`.
   const inputProcessors =
     config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor];

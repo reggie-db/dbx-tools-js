@@ -40,7 +40,7 @@ Always publish through `safeWrite` (see `dry-helpers` rule).
 
 ## Chart pipeline
 
-Inline charts use the `[[chart:<chartId>]]` marker pattern. Two
+Inline charts use the `[chart:<chartId>]` marker pattern. Two
 producers, one wire format:
 
 - `render_data` tool: generic dataset → chart. Mints a `chartId`,

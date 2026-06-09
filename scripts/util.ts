@@ -30,7 +30,6 @@
 //     augmented with the contents of `.cursor/rules/*.mdc` so it
 //     shares the same repo conventions the IDE rules describe.
 
-import { execa } from "execa";
 import { which } from "bun";
 import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
 import { Agent } from "@mastra/core/agent";
@@ -301,6 +300,7 @@ function createExecuteTypescriptTool() {
         "run",
         "-", // read script from stdin
       ];
+      const { execa } = await import("execa");
       const result = await execa(dockerCommand, args, {
         input: code,
         reject: false,
@@ -477,8 +477,11 @@ function createReadFilesTool(base: string) {
  */
 function createGitTools() {
   if (!which("git")) return undefined;
-  const runGit = (args: string[]) =>
-    execa("git", args, { cwd: ROOT, reject: false, timeout: 10_000 });
+
+  const runGit = async (args: string[]) => {
+    const { execa } = await import("execa");
+    return execa("git", args, { cwd: ROOT, reject: false, timeout: 10_000 });
+  };
   const result = z.object({
     ok: z.boolean(),
     stdout: z.string(),
@@ -663,11 +666,8 @@ export const getScriptAgent = pMemoize(
     // the repo conventions (package map, dry-helpers, docstring style)
     // without each caller having to glue them in by hand.
     const rules = loadCursorRules();
-    const baseInstructions =
-      overrides.instructions ?? DEFAULT_AGENT_INSTRUCTIONS;
-    const instructions = rules
-      ? `${baseInstructions}\n\n${rules}`
-      : baseInstructions;
+    const baseInstructions = overrides.instructions ?? DEFAULT_AGENT_INSTRUCTIONS;
+    const instructions = rules ? `${baseInstructions}\n\n${rules}` : baseInstructions;
     return new Agent({
       id: "dbx-tools-script-agent",
       name: "dbx-tools-script-agent",
@@ -777,7 +777,10 @@ function _isRateLimit(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { statusCode?: unknown; responseBody?: unknown };
   if (e.statusCode === 429) return true;
-  if (typeof e.responseBody === "string" && e.responseBody.includes("REQUEST_LIMIT_EXCEEDED")) {
+  if (
+    typeof e.responseBody === "string" &&
+    e.responseBody.includes("REQUEST_LIMIT_EXCEEDED")
+  ) {
     return true;
   }
   return false;

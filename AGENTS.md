@@ -50,7 +50,7 @@ similar agent-speak. Tests are exempt for regression notes. See
 ### 4. appkit-mastra specifics
 
 Writer events are flat `{ type, ...fields }`; chart specs are held
-off-band on `RequestContext` and referenced by `[[chart:<id>]]`
+off-band on `RequestContext` and referenced by `[chart:<id>]`
 markers in model output. The plugin's Genie integration talks to
 Genie directly via `@dbx-tools/genie`, not through AppKit's stock
 `genie` plugin. See

@@ -37,7 +37,7 @@ import {
   type PluginManifest,
   type ResourceRequirement,
 } from "@databricks/appkit";
-import { appkitUtils, logUtils } from "@dbx-tools/shared";
+import { appkitUtils, commonUtils, logUtils } from "@dbx-tools/shared";
 import { chatRoute } from "@mastra/ai-sdk";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
@@ -54,6 +54,10 @@ import { historyRoute } from "./history.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
+import {
+  installStreamEventInterceptor,
+  type StreamFrameInterceptor,
+} from "./intercept.js";
 import {
   clearServingEndpointsCache,
   listServingEndpoints,
@@ -208,8 +212,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       modelsPath: `${basePath}/models`,
       historyPath: `${basePath}/route/history`,
       historyPathTemplate: `${basePath}/route/history/:agentId`,
-      chartsPathTemplate: `${basePath}/charts/:chartId`,
-      statementsPathTemplate: `${basePath}/statements/:statementId`,
+      embedPathTemplate: `${basePath}/embed/:type/:id`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
     };
@@ -229,52 +232,76 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         .catch(next);
     });
 
-    // `GET /charts/:chartId` long-polls the chart cache.
-    //
-    // Charts kicked off by the Genie agent's `prepare_chart` tool
-    // (or the system `render_data` tool) resolve asynchronously
-    // and land in the AppKit cache under a chartId. The host UI
-    // resolves `[chart:<chartId>]` markers by hitting this route,
-    // which blocks until the entry settles (`result` or `error`
-    // set) or the server-side budget elapses (then returns the
-    // last seen still-processing entry so the client can poll
-    // again).
+    // `GET /embed/:type/:id` is the single resolver for every embed
+    // marker the agent emits in prose (`[chart:<id>]`,
+    // `[data:<id>]`, ...). `:type` selects a resolver from the
+    // registry below; `:id` is that resolver's lookup key. The
+    // grammar (see `marker.ts`) is type-agnostic on purpose - new
+    // embed kinds are added by registering a resolver here, with no
+    // client or grammar change.
     //
     // Status codes:
-    //   - 200 with JSON body when the entry is found (any state).
-    //   - 404 when the chartId doesn't exist or its 1h TTL elapsed.
+    //   - 200 with the resolver's JSON body when the id resolves.
+    //   - 404 when `:type` isn't registered (unsupported embed
+    //     type) OR a registered resolver can't find `:id` (unknown
+    //     / expired - e.g. a chart past its 1h TTL or a fabricated
+    //     id the model never minted).
+    //   - 400 when `:id` is empty.
     //
-    // Query params:
-    //   - `timeoutMs` (optional, default 60000): how long to long-poll
-    //     before returning a still-processing entry.
+    // Per-type query knobs and behavior:
+    //   - `chart`: long-polls the chart cache until the entry
+    //     settles (`result` / `error`) or the budget elapses (then
+    //     returns the still-processing entry to poll again).
+    //     `?timeoutMs=<n>` (default 60s, capped 5min) tunes it.
+    //   - `data`: one OBO-scoped Statement Execution fetch.
+    //     `?limit=<n>` caps rows (clamped to STATEMENT_ROW_CAP).
     //
-    // Wired with `req.signal` so a closed connection unblocks the
-    // poll immediately and the request thread frees up. Cache
-    // failures bubble through `next(err)` to Express's default
-    // error handler.
-    router.get("/charts/:chartId", (req, res, next) => {
-      const chartId = req.params["chartId"];
-      if (!chartId) {
-        res.status(400).json({ error: "chartId is required" });
+    // Built once (this handler is registered once) and keyed by the
+    // raw `:type` token. Each resolver gets the request (for query
+    // parsing + OBO scoping) and an `AbortSignal` bridged off the
+    // connection `close` event so a long-poll unblocks the instant
+    // the client disconnects. `undefined` from a resolver maps to a
+    // clean 404; thrown errors bubble through `next(err)`.
+    const embedResolvers: Record<string, EmbedResolver> = {
+      chart: (req, id, signal) => {
+        const timeoutMs = parseTimeoutMs(req.query["timeoutMs"]);
+        return fetchChart(id, {
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          signal,
+        });
+      },
+      data: (req, id, signal) => {
+        const limit = parseStatementLimit(req.query["limit"]);
+        return this.userScopedSelf(req).fetchStatement(id, {
+          ...(limit !== undefined ? { limit } : {}),
+          signal,
+        });
+      },
+    };
+
+    router.get("/embed/:type/:id", (req, res, next) => {
+      const type = req.params["type"] ?? "";
+      const id = req.params["id"];
+      const resolve = embedResolvers[type];
+      if (!resolve) {
+        res.status(404).json({ error: `unsupported embed type: ${type}` });
         return;
       }
-      const timeoutMs = parseTimeoutMs(req.query["timeoutMs"]);
-      // Express's `req` predates `AbortSignal`. Bridge the
-      // `close` event onto an `AbortController` so a closed
-      // connection unblocks the long-poll immediately and frees
-      // the request thread. The `close` listener also fires on
-      // a normal completion, but at that point we no longer
-      // care about the abort and the listener is GC'd with the
-      // request.
+      if (!id) {
+        res.status(400).json({ error: "id is required" });
+        return;
+      }
+      // Express's `req` predates `AbortSignal`; bridge the `close`
+      // event onto an `AbortController` so a closed connection
+      // unblocks any long-poll immediately and frees the request
+      // thread. The listener is GC'd with the request on normal
+      // completion.
       const controller = new AbortController();
       req.on("close", () => controller.abort());
-      fetchChart(chartId, {
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        signal: controller.signal,
-      })
+      resolve(req, id, controller.signal)
         .then((entry) => {
-          if (!entry) {
-            res.status(404).json({ error: "chart not found" });
+          if (entry === undefined) {
+            res.status(404).json({ error: `${type} not found` });
             return;
           }
           res.json(entry);
@@ -282,61 +309,20 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         .catch(next);
     });
 
-    // `GET /statements/:statementId` resolves a Genie / Statement
-    // Execution result for inline rendering as a table.
-    //
-    // The agent embeds `[data:<statement_id>]` markers in prose
-    // (see `GENIE_INSTRUCTIONS`) whenever it wants the host UI to
-    // display a result set without the model re-spelling every
-    // row in markdown. This route is what those markers resolve
-    // against - one OBO-scoped fetch returns the columns + rows
-    // so the client renders an AppKit Table inline.
-    //
-    // Status codes:
-    //   - 200 with `StatementData` body when the statement is found.
-    //   - 404 when the workspace can't find / read the statement.
-    //
-    // Query params:
-    //   - `limit` (optional): row cap. Clamped to
-    //     {@link STATEMENT_ROW_CAP} so a runaway result set
-    //     can't hose the response.
-    //
-    // OBO-scoped via {@link userScopedSelf} so the caller's
-    // workspace permissions apply; SDK errors propagate through
-    // `next(err)` to Express's default error handler.
-    router.get("/statements/:statementId", (req, res, next) => {
-      const statementId = req.params["statementId"];
-      if (!statementId) {
-        res.status(400).json({ error: "statementId is required" });
-        return;
-      }
-      const limit = parseStatementLimit(req.query["limit"]);
-      const controller = new AbortController();
-      req.on("close", () => controller.abort());
-      this.userScopedSelf(req)
-        .fetchStatement(statementId, {
-          ...(limit !== undefined ? { limit } : {}),
-          signal: controller.signal,
-        })
-        .then((data) => {
-          if (!data) {
-            res.status(404).json({ error: "statement not found" });
-            return;
-          }
-          res.json(data);
-        })
-        .catch(next);
-    });
-
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
+      // Run each Mastra `/stream` SSE frame through the interceptor
+      // (keep / rewrite / drop). Only engages on a
+      // `200 text/event-stream` body, so the JSON routes above and any
+      // error response are untouched.
+      installStreamEventInterceptor(res, interceptStreamFrame);
       return this.userScopedSelf(req).mastraApp!(req, res, next);
     });
   }
 
   /**
-   * Implementation backing the `/statements/:statementId` route.
-   * Runs inside the AppKit user-context proxy so
+   * Implementation backing the `data` embed resolver
+   * (`GET /embed/data/:id`). Runs inside the AppKit user-context proxy so
    * `getExecutionContext()` returns the OBO-scoped workspace
    * client, then reuses the same `fetchStatementData` pipeline
    * the `get_statement` tool runs so the LLM and the UI see the
@@ -473,8 +459,21 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 }
 
 /**
+ * Resolver for one embed `<type>` behind the generic
+ * `GET /embed/:type/:id` route. Returns the JSON body to send on
+ * success, or `undefined` to signal a 404 (unknown / expired id).
+ * `signal` aborts when the client disconnects so long-polling
+ * resolvers (e.g. `chart`) unblock immediately.
+ */
+type EmbedResolver = (
+  req: express.Request,
+  id: string,
+  signal: AbortSignal,
+) => Promise<unknown | undefined>;
+
+/**
  * Parse the optional `?timeoutMs=<n>` query parameter from a
- * `GET /charts/:chartId` request. Accepts a positive integer up
+ * `GET /embed/chart/:id` request. Accepts a positive integer up
  * to 5 minutes (clamped) and rejects everything else as
  * `undefined` so {@link fetchChart} falls back to its default.
  * Express produces `string | string[] | undefined`; we normalize
@@ -490,7 +489,7 @@ function parseTimeoutMs(raw: unknown): number | undefined {
 
 /**
  * Parse the optional `?limit=<n>` query parameter from a
- * `GET /statements/:statementId` request. Accepts a non-negative
+ * `GET /embed/data/:id` request. Accepts a non-negative
  * integer and lets the route clamp to `STATEMENT_ROW_CAP`;
  * rejects anything else as `undefined` so the route falls back
  * to the server-side cap.
@@ -502,5 +501,37 @@ function parseStatementLimit(raw: unknown): number | undefined {
   if (!Number.isFinite(n) || n < 0) return undefined;
   return Math.floor(n);
 }
+
+/**
+ * {@link StreamFrameInterceptor} for Mastra `/stream` responses.
+ *
+ * Removes large, redundant payloads from terminal `step-finish`,
+ * `finish`, and `tool-result` frames before they reach the browser.
+ * These frames often repeat information already delivered incrementally
+ * via streamed text and tool events, including full tool outputs,
+ * accumulated responses, message history, SQL results, chart data, and
+ * other large result payloads.
+ *
+ * The interceptor deletes heavyweight payload properties
+ * (`output`, `messages`, `response`, and `result`) while preserving the
+ * event envelope and lifecycle metadata required by the client.
+ *
+ * Deletion is key based, so streams that do not contain these
+ * fields are passed through unchanged.
+ */
+const interceptStreamFrame: StreamFrameInterceptor = (chunk) => {
+  if (!commonUtils.isRecord(chunk)) return true;
+  if (!["step-finish", "finish", "tool-result"].find((type) => type === chunk.type))
+    return true;
+  const payload = chunk.payload;
+  if (!commonUtils.isRecord(payload)) return true;
+  const trimmedPayload = commonUtils.deleteKeys(payload, [
+    "output",
+    "messages",
+    "response",
+    "result",
+  ]);
+  return trimmedPayload ? { replace: chunk } : true;
+};
 
 export const mastra = toPlugin(MastraPlugin);

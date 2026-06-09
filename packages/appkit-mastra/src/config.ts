@@ -216,7 +216,7 @@ export interface MastraPluginConfig extends BasePluginConfig {
    * processor that strips `chartId` fields from prior assistant
    * tool-invocation results before they reach the model. This
    * prevents the model from reusing turn-scoped chartIds it sees
-   * in memory recall (which would leave `[[chart:<id>]]` markers
+   * in memory recall (which would leave `[chart:<id>]` markers
    * pointing at writer events that no longer exist).
    *
    * Set to `false` to opt out - useful if a non-default agent

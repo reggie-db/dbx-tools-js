@@ -183,8 +183,9 @@ export type SummaryEvent = z.infer<typeof SummaryEventSchema>;
  * @deprecated The Mastra plugin no longer emits `chart` events.
  * Charts are queued by the `prepare_chart` / `render_data` tools
  * and resolved out-of-band via the chart cache: the host UI
- * long-polls `${MastraClientConfig.chartsPathTemplate}` for a
- * {@link Chart} payload keyed on `chartId`. The schema is kept
+ * long-polls `${MastraClientConfig.embedPathTemplate}`
+ * (`/embed/chart/:id`) for a {@link Chart} payload keyed on
+ * `chartId`. The schema is kept
  * in the wire-format vocabulary so external producers can still
  * emit `chart` events through their own pipelines, but the
  * built-in plugin no longer relies on it.
@@ -276,8 +277,8 @@ export type GenieDatasetData = z.infer<typeof GenieDatasetDataSchema>;
  *
  * `option` is intentionally NOT included. The resolved Echarts
  * spec lives off-band in the chart cache: the host UI fetches it
- * by `chartId` via `${MastraClientConfig.chartsPathTemplate}`
- * (see {@link Chart}). Embedding the full spec inline would
+ * by `chartId` via `${MastraClientConfig.embedPathTemplate}`
+ * (`/embed/chart/:id`, see {@link Chart}). Embedding the full spec inline would
  * inflate every dataset by several KB per chart and round-trip
  * through the LLM context for zero benefit (the model only needs
  * the `chartId` to place a `[chart:<chartId>]` marker in its

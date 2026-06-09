@@ -238,13 +238,11 @@ type ChartPlan = z.infer<typeof chartPlanSchema>;
  * sees a planner request, only the resolved {@link Chart}.
  */
 export const chartPlannerRequestSchema = z.object({
-  title: z
-    .string()
-    .describe(
-      stringUtils.toDescription(`
+  title: z.string().describe(
+    stringUtils.toDescription(`
         Concise title shown above the chart (e.g. "Top 10 SKUs by Revenue").
       `),
-    ),
+  ),
   description: z
     .string()
     .optional()
@@ -676,7 +674,7 @@ function planToEchartsOption(
  * an empty placeholder, and kicks off the chart-planner in the
  * background. Returns just the `chartId`; the host UI resolves
  * `[chart:<chartId>]` markers by hitting the plugin's
- * `/charts/:chartId` route.
+ * `/embed/chart/:id` route.
  *
  * For Genie statement results, prefer the Genie agent's
  * `prepare_chart` tool, which accepts a `statement_id` and

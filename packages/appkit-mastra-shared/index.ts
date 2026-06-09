@@ -10,5 +10,6 @@
  * and composes URLs with {@link chatUrl}.
  */
 export * from "./src/genie.js";
+export * from "./src/marker.js";
 export * from "./src/mastra.js";
 export * from "./src/protocol.js";

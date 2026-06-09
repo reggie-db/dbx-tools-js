@@ -42,7 +42,7 @@ AppKit plugin that mounts Mastra
 workspace host and `/serving-endpoints` with per-request user auth, reuses the
 `lakebase` plugin pool for Mastra Memory when `storage` / `memory` are enabled,
 forwards Genie streaming events through `ToolStream` for live UI feedback,
-and renders inline Echarts visualizations via `[[chart:<id>]]` markers - the
+and renders inline Echarts visualizations via `[chart:<id>]` markers - the
 chart-planner agent runs server-side per dataset and ships its `EChartsOption`
 straight back through the writer, so the client never has to round-trip for
 chart specs.

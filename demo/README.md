@@ -22,8 +22,8 @@ Generated from the AppKit `app init` template, then adapted to:
   and kick chart planning into the background; the model embeds
   `[chart:<chartId>]` in its markdown reply at the position the
   chart should appear. The client's `<ChartSlot>` long-polls
-  `${basePath}/charts/:chartId` (a route the Mastra plugin
-  exposes) for the resolved `EChartsOption` and renders it in
+  `${basePath}/embed/chart/:id` (the generic embed route the Mastra
+  plugin exposes) for the resolved `EChartsOption` and renders it in
   place. Unknown or TTL-expired ids resolve as nothing so the
   prose flows undisturbed. See `packages/appkit-mastra/README.md`
   for the full contract.

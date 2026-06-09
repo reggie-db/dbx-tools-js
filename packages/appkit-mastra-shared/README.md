@@ -14,8 +14,7 @@ import {
   // URL helpers
   chatUrl,
   historyUrl,
-  chartUrl,
-  statementUrl,
+  embedUrl,
   // Protocol types + schemas
   type MastraClientConfig,
   type ServingEndpointSummary,
@@ -57,20 +56,24 @@ interface MastraClientConfig {
   modelsPath: string;            // ${basePath}/models
   historyPath: string;           // ${basePath}/route/history (default agent)
   historyPathTemplate: string;   // ${basePath}/route/history/:agentId
-  chartsPathTemplate: string;    // ${basePath}/charts/:chartId
-  statementsPathTemplate: string; // ${basePath}/statements/:statementId
+  embedPathTemplate: string;     // ${basePath}/embed/:type/:id
   defaultAgent: string;          // agent id chatRoute uses when no :agentId
   agents: string[];              // every registered agent id
 }
 ```
 
-The chart-render pipeline uses `chartsPathTemplate` as a long-poll
-endpoint: the host UI encounters a `[chart:<chartId>]` marker in
-an assistant reply, calls `chartUrl(config, chartId)`, and
-long-polls until the server resolves the chart to a `ready` or
-`error` state. Similarly, `statementsPathTemplate` resolves
-`[data:<statement_id>]` markers to inline table data via
-`statementUrl(config, statementId)`.
+Every embed marker the agent emits resolves through the single
+generic `embedPathTemplate` endpoint. The host UI parses a
+`[<type>:<id>]` marker out of an assistant reply and calls
+`embedUrl(config, type, id)`; the server dispatches on `<type>`
+and `404`s any type it doesn't register. The two types it ships:
+
+- `chart` (`/embed/chart/:id`) long-polls the chart cache until
+  the entry resolves to a `ready` / `error` state - e.g.
+  `embedUrl(config, "chart", chartId, { timeoutMs: 30_000 })`.
+- `data` (`/embed/data/:id`) resolves `[data:<statement_id>]`
+  markers to inline table data - e.g.
+  `embedUrl(config, "data", statementId, { limit: 100 })`.
 
 ## URL helpers
 
@@ -110,34 +113,24 @@ const payload = (await res.json()) as MastraHistoryResponse;
 // payload.uiMessages is oldest -> newest, ready to prepend to live transcript
 ```
 
-### `chartUrl(config, chartId, options?)`
+### `embedUrl(config, type, id, query?)`
 
-Substitutes the `:chartId` placeholder in `chartsPathTemplate` and
-optionally appends `?timeoutMs=<n>` to tune the long-poll window.
-The server blocks until the chart cache entry transitions to
-`ready` / `error` or the budget elapses.
-
-```ts
-import { chartUrl, type MastraClientConfig, type Chart } from "@dbx-tools/appkit-mastra-shared";
-
-const url = chartUrl(config, chartId, { timeoutMs: 30_000 });
-const res = await fetch(url, { credentials: "include" });
-const chart = (await res.json()) as Chart;
-```
-
-### `statementUrl(config, statementId, options?)`
-
-Substitutes the `:statementId` placeholder in
-`statementsPathTemplate` and optionally appends `?limit=<n>` to
-cap the returned rows. Resolves `[data:<statement_id>]` markers
-the agent embeds in prose.
+Substitutes the `:type` and `:id` placeholders in
+`embedPathTemplate` (`${basePath}/embed/:type/:id`) and appends
+any `query` entries as query-string params. The one resolver for
+every embed marker - `type` is opaque here, the server dispatches
+on it and `404`s unknown types (and unknown / expired ids).
 
 ```ts
-import { statementUrl, type MastraClientConfig, type StatementData } from "@dbx-tools/appkit-mastra-shared";
+import { embedUrl, type MastraClientConfig, type Chart, type StatementData } from "@dbx-tools/appkit-mastra-shared";
 
-const url = statementUrl(config, statementId, { limit: 100 });
-const res = await fetch(url, { credentials: "include" });
-const data = (await res.json()) as StatementData;
+// chart: long-poll the chart cache (?timeoutMs tunes the window)
+const chartFetchUrl = embedUrl(config, "chart", chartId, { timeoutMs: 30_000 });
+const chart = (await (await fetch(chartFetchUrl, { credentials: "include" })).json()) as Chart;
+
+// data: one OBO-scoped statement fetch (?limit caps rows)
+const dataFetchUrl = embedUrl(config, "data", statementId, { limit: 100 });
+const data = (await (await fetch(dataFetchUrl, { credentials: "include" })).json()) as StatementData;
 ```
 
 ## Wire-format types
@@ -205,7 +198,7 @@ interface Chart {
 ### Statements
 
 `StatementData` is the payload returned by
-`GET ${basePath}/statements/:statementId`. Mirrors the agent-side
+`GET ${basePath}/embed/data/:id`. Mirrors the agent-side
 `get_statement` tool output so the host UI and the LLM see the
 same shape.
 
@@ -268,7 +261,7 @@ bun add @dbx-tools/appkit-mastra-shared
 ## Usage
 
 ```ts
-import { chatUrl, historyUrl, chartUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
+import { chatUrl, historyUrl, embedUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 
 declare const config: MastraClientConfig;
 
@@ -278,16 +271,15 @@ const chat = chatUrl(config);
 // History with pagination
 const history = historyUrl(config, { page: 0, perPage: 50 });
 
-// Chart long-poll URL
-const chart = chartUrl(config, "abc123", { timeoutMs: 30_000 });
+// Chart long-poll URL (generic embed endpoint, type = "chart")
+const chart = embedUrl(config, "chart", "abc123", { timeoutMs: 30_000 });
 ```
 
 ## API
 
 - `chatUrl(config, agentId?)` - returns the chat endpoint URL for a given agent (or the default).
 - `historyUrl(config, options?)` - builds the paginated history URL for an agent.
-- `chartUrl(config, chartId, options?)` - builds the long-poll chart fetch URL for a given chart id.
-- `statementUrl(config, statementId, options?)` - builds the statement fetch URL for a given statement id.
+- `embedUrl(config, type, id, query?)` - builds the generic `/embed/:type/:id` fetch URL for any embed marker (`chart`, `data`, ...).
 - `isGenieAgentResult(value)` - O(1) structural type guard for `GenieAgentResult`.
 - `genieResultToWriterEvents(result)` - replays terminal writer events from a completed result.
 - `MastraClientConfig` - shape published by the plugin's `clientConfig()`.

@@ -725,9 +725,13 @@ function buildPrepareChartTool(opts: { config: MastraPluginConfig }) {
       `
         To display the chart in your reply, embed
         \`[chart:<chartId>]\` on its own line at the position you
-        want it to appear. The tool returns immediately - do NOT
-        wait or call it again to "check progress"; the chart
-        resolves asynchronously on the host UI's side.
+        want it to appear, using the EXACT \`chartId\` string this
+        call returned. Never construct a chart id yourself (it is
+        not the \`statement_id\` or any variation of it) - only a
+        value returned by this tool resolves to a real chart. The
+        tool returns immediately - do NOT wait or call it again to
+        "check progress"; the chart resolves asynchronously on the
+        host UI's side.
       `,
       `
         Use this only when the data has a story a chart conveys
@@ -842,6 +846,17 @@ export const GENIE_INSTRUCTIONS = stringUtils.toDescription([
               chart should appear. Use a chart when the data has a
               story a visual conveys better than a table (trends,
               rankings, distributions, parts-of-a-whole).
+
+              NEVER invent or hand-build a \`<chartId>\`. A valid
+              \`<chartId>\` is the opaque token a \`prepare_chart\`
+              call returned to you in THIS turn - nothing else. It
+              is NOT a \`statement_id\`, and it is NOT a
+              \`statement_id\` prefix with a label appended (e.g.
+              \`01f1...-region-fill\`). If you have not called
+              \`prepare_chart\` and received an id back, do not write
+              a \`[chart:...]\` marker at all - use \`[data:...]\`
+              instead. A fabricated chart id renders nothing and
+              wastes a request.
             `,
           ],
         },

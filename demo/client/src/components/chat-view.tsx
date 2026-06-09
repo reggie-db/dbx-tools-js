@@ -1,6 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { UIMessage } from "ai";
 import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
+import {
+  parseMarkers,
+  stripIncompleteMarkerTail,
+  type ParsedMarker,
+} from "@dbx-tools/appkit-mastra-shared";
 import { humanizeStatus } from "@dbx-tools/genie-shared";
 import { Streamdown } from "streamdown";
 import { useChartFetch, useStatementFetch } from "../lib/mastra-client.js";
@@ -1094,11 +1099,12 @@ const CHART_FRAME_CLASSES =
 const CHART_HEIGHT_PX = 320;
 
 /**
- * Inline chart slot. Each `[chart:<chartId>]` (or
- * `[[chart:<chartId>]]`) marker in the assistant's reply resolves
- * to one of these. The Mastra plugin caches the resolved Echarts
- * spec under the chartId; this slot fetches it via the published
- * `chartsPathTemplate` (long-poll until ready / error / 404).
+ * Inline chart slot. Each `[chart:<chartId>]` marker in the
+ * assistant's reply resolves to one of these. The Mastra plugin
+ * caches the resolved Echarts
+ * spec under the chartId; this slot fetches it via the generic
+ * `embedPathTemplate` (`/embed/chart/:id`, long-poll until ready /
+ * error / 404).
  *
  * Render contract:
  *
@@ -1132,8 +1138,8 @@ const ChartSlot = ({ chartId }: { chartId: string }) => {
 /**
  * Inline data-table slot. Each `[data:<statement_id>]` marker in
  * the assistant's reply resolves to one of these. A single
- * OBO-scoped fetch against `${statementsPathTemplate}` returns
- * the columns + rows; the slot renders them through the same
+ * OBO-scoped fetch against `embedPathTemplate` (`/embed/data/:id`)
+ * returns the columns + rows; the slot renders them through the same
  * `MARKDOWN_COMPONENTS` Table family used for markdown tables so
  * styling stays uniform across the bubble.
  *
@@ -1187,40 +1193,6 @@ const DataSlot = ({ statementId }: { statementId: string }) => {
   );
 };
 
-/**
- * Markers the LLM is instructed to embed in its markdown reply
- * to defer rendering to the host UI. Two kinds:
- *
- *   - `[chart:<chartId>]` (or legacy `[[chart:<id>]]`) - resolves
- *     to a `<ChartSlot>` that long-polls the chart cache for an
- *     Echarts spec.
- *   - `[data:<statement_id>]` - resolves to a `<DataSlot>` that
- *     fetches a Databricks statement and renders an inline table.
- *
- * Allowed id chars are `[A-Za-z0-9_-]` so short hex / nanoid /
- * uuid all work for either marker.
- */
-const CHART_MARKER_RE = /\[\[?chart:([A-Za-z0-9_-]+)\]\]?/g;
-const DATA_MARKER_RE = /\[data:([A-Za-z0-9_-]+)\]/g;
-
-/**
- * Trailing `[<non-whitespace-non-bracket>...` lookalike that
- * hasn't received its closing `]` yet. While the model streams
- * text-deltas a marker arrives across several chunks (`[chart`,
- * `:abc-`, `def]`...), and rendering each interim state would
- * briefly flash literal `[chart:abc-` text before the closing
- * bracket finally swaps it for a chart slot.
- *
- * Hiding any trailing `[…` suffix keeps the prose stable: the
- * partial is buffered until either a `]` (full marker -> embed
- * slot) or whitespace (definitely not a marker -> plain prose)
- * lands and the regex stops matching. Persisted transcripts
- * never end mid-marker, so this is a no-op on reload.
- */
-const INCOMPLETE_MARKER_TAIL_RE = /\[[^\s[\]]*$/;
-const stripIncompleteMarkerTail = (text: string): string =>
-  text.replace(INCOMPLETE_MARKER_TAIL_RE, "");
-
 /** One slice of an assistant message: prose, a chart slot, or a data slot. */
 type RenderSegment =
   | { kind: "text"; text: string }
@@ -1239,36 +1211,38 @@ type RenderSegment =
  * before splitting, so the prose doesn't flash the literal
  * `[chart:` prefix before the closing bracket arrives.
  */
-const splitTextWithEmbeds = (text: string): RenderSegment[] => {
-  type Hit = { start: number; end: number; seg: RenderSegment };
-  const hits: Hit[] = [];
-  for (const match of text.matchAll(CHART_MARKER_RE)) {
-    const start = match.index ?? 0;
-    hits.push({
-      start,
-      end: start + match[0].length,
-      seg: { kind: "chart", chartId: match[1] ?? "" },
-    });
+/**
+ * Map one parsed marker onto its render segment. The marker grammar
+ * matches ANY `[<type>:<id>]` (and already guarantees a UUID-shaped
+ * id), but rendering is type-aware - charts need ECharts, data needs
+ * a Table - so map only the kinds this UI can render. Anything else
+ * collapses to an empty text segment: the marker is consumed so no
+ * literal `[<type>:...]` leaks into the prose, but no slot renders
+ * and no `/embed/<type>/:id` request fires.
+ */
+const markerSegment = (marker: ParsedMarker): RenderSegment => {
+  switch (marker.type) {
+    case "chart":
+      return { kind: "chart", chartId: marker.id };
+    case "data":
+      return { kind: "data", statementId: marker.id };
+    default:
+      return { kind: "text", text: "" };
   }
-  for (const match of text.matchAll(DATA_MARKER_RE)) {
-    const start = match.index ?? 0;
-    hits.push({
-      start,
-      end: start + match[0].length,
-      seg: { kind: "data", statementId: match[1] ?? "" },
-    });
-  }
-  hits.sort((a, b) => a.start - b.start);
+};
 
+const splitTextWithEmbeds = (text: string): RenderSegment[] => {
   const segments: RenderSegment[] = [];
   let lastIdx = 0;
-  for (const h of hits) {
-    if (h.start < lastIdx) continue; // overlapping match; drop
-    if (h.start > lastIdx) {
-      segments.push({ kind: "text", text: text.slice(lastIdx, h.start) });
+  // `parseMarkers` yields hits in source order with no overlaps (one
+  // regex pass), so the spans splice in directly - no sort or
+  // overlap guard needed.
+  for (const marker of parseMarkers(text)) {
+    if (marker.start > lastIdx) {
+      segments.push({ kind: "text", text: text.slice(lastIdx, marker.start) });
     }
-    segments.push(h.seg);
-    lastIdx = h.end;
+    segments.push(markerSegment(marker));
+    lastIdx = marker.end;
   }
   if (lastIdx < text.length) {
     segments.push({ kind: "text", text: text.slice(lastIdx) });
@@ -1559,9 +1533,8 @@ const AssistantBubble = ({
   const suggestions = isStreamingThisBubble ? [] : collectSuggestions(events);
   // Charts and tables are placed at inline marker positions in
   // the assistant's prose. `prepare_chart` / `render_data` mint
-  // a `chartId` and the model embeds `[chart:<chartId>]` (or
-  // legacy `[[chart:<chartId>]]`); for raw data the model
-  // embeds `[data:<statement_id>]` and the host UI fetches the
+  // a `chartId` and the model embeds `[chart:<chartId>]`; for raw
+  // data the model embeds `[data:<statement_id>]` and the host UI fetches the
   // rows on its own. {@link MarkdownWithEmbeds} splits the text
   // on both markers and renders {@link ChartSlot} /
   // {@link DataSlot} inline; unknown / expired ids resolve as
@@ -1608,7 +1581,17 @@ const AssistantBubble = ({
           />
         ))}
         {events && events.length > 0 && <ToolSessionPill events={events} />}
-        {hasText && <MarkdownWithEmbeds text={fullText} />}
+        {/*
+         * Render each text part as its own block. A multi-step turn
+         * carries one text part per step (see Stream.tsx segmentation),
+         * so this keeps each step's preamble visually separate instead
+         * of concatenating them into a single run of prose.
+         */}
+        {textParts.map((part, i) =>
+          part.text.trim().length > 0 ? (
+            <MarkdownWithEmbeds key={`text-${i}`} text={part.text} />
+          ) : null,
+        )}
         {isLast && hasText && (
           <div className="flex items-center gap-1">
             {regenerate && (
@@ -1909,69 +1892,71 @@ export const ChatView = ({
             )}
           </div>
         )}
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="relative flex-1 overflow-y-auto"
-        >
-          {messages.length === 0 && !isLoadingHistory ? (
-            <Empty className="h-full">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <MessageSquareIcon className="size-5" />
-                </EmptyMedia>
-                <EmptyTitle>Start a conversation</EmptyTitle>
-                <EmptyDescription>
-                  Ask anything, or pick a suggestion below.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <div className="flex flex-col gap-4 p-4">
-              {(isLoadingMore || isLoadingHistory) && (
-                <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
-                  <Spinner className="size-3" />
-                  <span>
-                    {isLoadingHistory
-                      ? "Loading history..."
-                      : "Loading older messages..."}
-                  </span>
-                </div>
-              )}
-              {messages.map((message, i) => {
-                const isLast = i === messages.length - 1;
-                if (message.role === "assistant") {
-                  return (
-                    <AssistantBubble
-                      key={message.id}
-                      message={message}
-                      isLast={isLast}
-                      status={status}
-                      events={toolEventsByMessage[message.id]}
-                      regenerate={regenerate}
-                      onSuggestionClick={(text) => sendMessage({ text })}
-                      onResolveToolApproval={onResolveToolApproval}
-                      externalApprovals={pendingApprovalsByMessage[message.id]}
-                    />
-                  );
-                }
-                return <UserBubble key={message.id} message={message} />;
-              })}
-              {showWaiting && (
-                <div className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
-                  <Spinner className="size-3" />
-                  <span className="animate-pulse">{waitingLabel}</span>
-                </div>
-              )}
-            </div>
-          )}
+        <div className="relative flex flex-1 flex-col overflow-hidden">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto"
+          >
+            {messages.length === 0 && !isLoadingHistory ? (
+              <Empty className="h-full">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <MessageSquareIcon className="size-5" />
+                  </EmptyMedia>
+                  <EmptyTitle>Start a conversation</EmptyTitle>
+                  <EmptyDescription>
+                    Ask anything, or pick a suggestion below.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <div className="flex flex-col gap-4 p-4">
+                {(isLoadingMore || isLoadingHistory) && (
+                  <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
+                    <Spinner className="size-3" />
+                    <span>
+                      {isLoadingHistory
+                        ? "Loading history..."
+                        : "Loading older messages..."}
+                    </span>
+                  </div>
+                )}
+                {messages.map((message, i) => {
+                  const isLast = i === messages.length - 1;
+                  if (message.role === "assistant") {
+                    return (
+                      <AssistantBubble
+                        key={message.id}
+                        message={message}
+                        isLast={isLast}
+                        status={status}
+                        events={toolEventsByMessage[message.id]}
+                        regenerate={regenerate}
+                        onSuggestionClick={(text) => sendMessage({ text })}
+                        onResolveToolApproval={onResolveToolApproval}
+                        externalApprovals={pendingApprovalsByMessage[message.id]}
+                      />
+                    );
+                  }
+                  return <UserBubble key={message.id} message={message} />;
+                })}
+                {showWaiting && (
+                  <div className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
+                    <Spinner className="size-3" />
+                    <span className="animate-pulse">{waitingLabel}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {!isAtBottom && (
             <Button
               type="button"
               variant="outline"
               size="icon"
               onClick={scrollToBottom}
-              className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full shadow"
+              className="absolute bottom-4 right-4 rounded-full shadow"
             >
               <ArrowDownIcon className="size-4" />
             </Button>
