@@ -35,7 +35,11 @@ smell. See [`.cursor/rules/dry-helpers.mdc`](.cursor/rules/dry-helpers.mdc).
 ### 2. Docstrings document the current contract
 
 No "no longer used", "previously did", "kept private for now", or
-similar agent-speak. Tests are exempt for regression notes. See
+similar agent-speak. Tests are exempt for regression notes. Module /
+file header docstrings and READMEs describe **purpose**, not a roster
+of functions by name (naming exports in the header makes every rename
+a doc edit and the list rots); a symbol's own docstring may name what
+it documents. See
 [`.cursor/rules/docstring-style.mdc`](.cursor/rules/docstring-style.mdc).
 
 ### 3. Workspace scripts

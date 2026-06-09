@@ -3,30 +3,14 @@
  * the `@dbx-tools/genie` package. Safe to import from browser
  * bundles (no `node:*`, no `WorkspaceClient`, no I/O).
  *
- * What lives here:
- *
- *   - {@link ./src/protocol.js}: wire-format zod schemas + types
- *     extending the generated `@dbx-tools/sdk-shared` Genie shapes
- *     (`GenieMessageSchema`, `GenieAttachmentSchema`,
- *     `GenieQueryAttachmentSchema`, `GenieThoughtSchema`,
- *     `MessageStatusSchema`, ...) plus the high-level event
- *     vocabulary the `genieEventChat` driver emits
- *     (`GenieChatEvent`, `GenieChatLocation`, per-variant payload
- *     interfaces) and terminal-status / attachment-discriminator
- *     helpers (`TERMINAL_STATUSES`, `isTerminalStatus`,
- *     `detectAttachmentType`, `tagAttachment`).
- *   - {@link ./src/event.js}: pure sync detectors
- *     (`detectStatus`, `detectThinking`, `detectAttachmentAdded`,
- *     `detectText`, `detectQuery`, `detectStatement`,
- *     `detectRows`, `detectSuggestedQuestions`) and the
- *     `eventsFromMessage` orchestrator generator. Used by
- *     `genieEventChat` server-side; also reusable from the
- *     browser when consumers want to derive UI events from
- *     `GenieMessage` snapshots themselves.
- *
- * Server-only chat driving (`genieChat`, `genieEventChat`) lives
- * in `@dbx-tools/genie` and pulls these types in. Frontends only
- * need this package.
+ * Bundles the Genie wire-format schemas and types (extending the
+ * generated `@dbx-tools/sdk-shared` Genie shapes), the high-level
+ * event vocabulary the `genieEventChat` driver emits, and the
+ * pure detectors that derive those events from `GenieMessage`
+ * snapshots. Live chat driving lives in `@dbx-tools/genie` and
+ * pulls these types in; frontends only need this package, and can
+ * reuse the detectors to derive UI events from snapshots
+ * themselves.
  */
 
 export * from "./src/event.js";

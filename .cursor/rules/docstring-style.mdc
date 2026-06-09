@@ -1,6 +1,6 @@
 ---
-description: Docstring style for the workspace; no agent-speak or historical commentary
-globs: **/*.ts
+description: Docstring & README style; current contract only, no agent-speak, and headers describe purpose rather than listing functions by name
+globs: **/*.ts,**/*.tsx,**/README.md
 alwaysApply: false
 ---
 
@@ -48,14 +48,57 @@ counter++;
 Code comments should explain non-obvious **intent, trade-offs, or
 constraints**. If the code is self-evident, don't comment it.
 
-## Module docstrings: lead with the contract
+## Module / file header docstrings: describe purpose, not a function roster
 
-Open with one paragraph describing what the module exposes and to
-whom. Reserve nested bullets for the per-symbol breakdown. Avoid
-"this file used to..." or "this was extracted from...".
+Open with one paragraph describing what the module is **for** - the
+capability it provides and to whom. Describe behavior and intent, not
+an inventory of its exports. Avoid "this file used to..." or "this
+was extracted from...".
+
+Do NOT enumerate the module's functions by name in the header just to
+list them. Naming every `fooBar` / `buildBaz` in the header turns a
+rename into a multi-site edit (the symbol, its call sites, AND the
+header prose), and the list silently rots the moment someone adds or
+removes an export. Renaming should touch code, not documentation - a
+stale roster is worse than no roster.
+
+```ts
+// BAD: a roster that must be maintained in lock-step with exports.
+/**
+ * Marker utilities. Exports `parseMarkers`, `isChartId`,
+ * `stripIncompleteMarkerTail`, and the `ParsedMarker` type.
+ */
+
+// GOOD: describe the purpose; let the exports speak for themselves.
+/**
+ * Agent-prose embed marker grammar - the single source of truth for
+ * how `[type:id]` markers are parsed, so every consumer reads them
+ * the same way.
+ */
+```
+
+Name a specific symbol in a header only when the name is **truly**
+load-bearing for the reader - i.e. it communicates a contract the
+prose alone can't, e.g. "all parsing goes through
+{@link parseMarkers}; nothing else should scan marker text". A bare
+roster is never load-bearing; drop it.
+
+## READMEs: same rule
+
+A package README sells the **purpose** and shows a couple of runnable
+examples - it is not a line-by-line catalog of every exported
+function. A hand-curated "API" list keyed by function name drifts out
+of sync on the first rename and doubles the cost of every signature
+change. Describe what the package does and how to use it; let
+consumers read the types / source for the exhaustive surface. Mention
+a function by name only inside a worked example, or when the name
+itself is the contract being documented.
 
 ## JSDoc references
 
-Cross-link with `{@link Name}` so doc tooling resolves the symbol.
-Prefer real type links over prose paths like
-`"see ./other.ts line 42"`.
+Per-symbol docstrings (the doc directly above a function / type) may
+and should name what they document. When you reference *another*
+symbol, cross-link with `{@link Name}` so doc tooling resolves it, and
+prefer real type links over prose paths like `"see ./other.ts line
+42"`. This is distinct from the header rule above: the ban is on
+rosters that re-list symbols, not on a symbol's own docstring.

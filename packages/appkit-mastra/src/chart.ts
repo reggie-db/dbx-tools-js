@@ -20,18 +20,9 @@
  * dataset, custom API). The module has no knowledge of Genie or
  * statement ids; those concerns live in the tools that wrap it.
  *
- * Wire-format schemas (`ChartSchema`, `ChartResultSchema`,
- * {@link ChartTypeSchema}) live in
- * `@dbx-tools/appkit-mastra-shared` so the demo client and any
- * other UI consumer share the exact same shape this module reads
- * and writes.
- *
- * Public surface (everything else is module-private):
- *   - {@link chartPlannerRequestSchema} / {@link ChartPlannerRequest}
- *   - {@link prepareChart} / {@link PrepareChartOptions}
- *   - {@link fetchChart} / {@link FetchChartOptions}
- *   - {@link buildRenderDataTool} (the `render_data` Mastra tool
- *     auto-wired on every agent in `agents.ts`)
+ * Wire-format schemas live in `@dbx-tools/appkit-mastra-shared` so
+ * the demo client and any other UI consumer share the exact same
+ * shape this module reads and writes.
  */
 
 import { CacheManager } from "@databricks/appkit";

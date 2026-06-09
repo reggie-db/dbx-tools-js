@@ -1,36 +1,7 @@
 // Shared helpers for the workspace scripts in this directory. Anything
 // duplicated across more than one script lives here.
-//
-// Conventions:
-//   - `ROOT` is the monorepo root.
-//   - `discoverPackages()` is the single source of truth for "what's a
-//     workspace package?" - every script that walks the workspace goes
-//     through it (or its lower-level sibling `discoverPackageJsons()`)
-//     instead of re-implementing the readdir + filter loop.
-//   - File I/O goes through `Bun.file` / `Bun.write` so we lean on
-//     Bun's built-in primitives instead of pulling in `node:fs` for
-//     every read.
-//   - `writeJson()` preserves the trailing newline of the original
-//     file so we don't trigger spurious diffs against `prettier
-//     --write`.
-//   - `run(...)` is a thin async wrapper over `Bun.spawn` for one-shot
-//     subprocess calls (git, npm, tsc, ...) with consistent error
-//     handling. We use Bun's built-in spawner directly because every
-//     script in this directory runs under `bun`, so reaching for
-//     `execa` / `node:child_process` would just add a dependency for
-//     no benefit.
-//   - `aiQuery()` is a one-shot Databricks model-serving call - no
-//     tools, no agent loop, just prompt -> reply. Use it when you
-//     only need a single completion.
-//   - `agentQuery()` runs the same prompt through a Mastra agent that
-//     can call a `read_files` tool to inspect files under `ROOT` on
-//     demand. Use it when the LLM needs to drill into source to
-//     produce a higher-fidelity answer (e.g. release notes that cite
-//     specific helpers). The agent's system prompt is always
-//     augmented with the contents of `.cursor/rules/*.mdc` so it
-//     shares the same repo conventions the IDE rules describe.
 
-import { which } from "bun";
+import { FileSink, which } from "bun";
 import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
 import { Agent } from "@mastra/core/agent";
 import type { MastraModelConfig } from "@mastra/core/llm";
@@ -152,54 +123,123 @@ export async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 /**
- * Run a subprocess. Defaults `stdio: "inherit"` so output streams to
- * the user, captures stdout/stderr instead when `capture: true`, and
- * aborts the script with a clear message when the child exits non-zero
- * (set `check: false` to opt out of that behavior).
- *
- * Returns the trimmed stdout when capturing, or the empty string when
- * inheriting (because nothing was captured).
+ * `Bun.spawn` options plus our extras: `input` pipes a string to the
+ * child's stdin (and closes it), `disableWhich` skips the `PATH`
+ * lookup so the command is spawned verbatim, and `disableCheck`
+ * suppresses the throw-on-non-zero-exit behavior so the caller can
+ * inspect `exitCode` instead.
  */
-export async function run(
-  command: string,
-  args: readonly string[],
-  opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
-): Promise<string> {
-  const { capture = false, check = true, cwd = ROOT } = opts;
-  const proc = Bun.spawn([command, ...args], {
-    cwd,
-    stdout: capture ? "pipe" : "inherit",
-    stderr: capture ? "pipe" : "inherit",
-    stdin: "inherit",
-  });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    capture && proc.stdout ? new Response(proc.stdout).text() : Promise.resolve(""),
-    capture && proc.stderr ? new Response(proc.stderr).text() : Promise.resolve(""),
-  ]);
-  if (check && exitCode !== 0) {
-    const detail = capture ? `: ${stderr.trim() || stdout.trim()}` : "";
-    fail(`\`${command} ${args.join(" ")}\` failed (exit ${exitCode})${detail}`);
-  }
-  return stdout.trim();
-}
+type ExecOptions = NonNullable<Parameters<typeof Bun.spawn>[1]> & {
+  input?: string;
+  disableWhich?: boolean;
+  disableCheck?: boolean;
+};
+
+const execResultSchema = z
+  .object({
+    exitCode: z
+      .number()
+      .int()
+      .describe("Process exit code. A value of 0 indicates success."),
+    stdout: z.string().describe("Standard output produced by the process."),
+    stderr: z
+      .string()
+      .describe(
+        "Standard error output produced by the process, including warnings and errors.",
+      ),
+  })
+  .describe(
+    "Result of executing a command, including its exit code and any output written to standard output or standard error.",
+  );
+
+export type ExecResult = z.infer<typeof execResultSchema>;
 
 /**
- * Shorthand for `bun x <args>`. Bun is on the PATH because these
- * scripts run under `bun`, so we don't need the `which` lookup or the
- * Windows `.cmd` shim that a node-based runner would.
+ * Run a subprocess and capture its output. Resolves `command` on
+ * `PATH` (skip with `disableWhich`), spawns it with `args` from
+ * `ROOT`, and pipes stdout/stderr - both are collected and returned
+ * trimmed on an {@link ExecResult}. stdin is inherited unless `input`
+ * is supplied, in which case that string is written to the child's
+ * stdin and the stream is closed.
+ *
+ * Throws when the child exits non-zero, unless `disableCheck` is set -
+ * then the non-zero `exitCode` is returned on the result for the
+ * caller to inspect.
  */
-export async function bunx(
-  args: readonly string[],
-  opts: { capture?: boolean; check?: boolean; cwd?: string } = {},
-): Promise<string> {
-  return run("bun", ["x", ...args], opts);
+export async function exec(
+  command: string,
+  args?: readonly string[],
+  options?: ExecOptions,
+): Promise<ExecResult> {
+  if (!options?.disableWhich) {
+    const filePath = which(command);
+    if (!filePath) {
+      throw new Error(`Program not found: ${command}`);
+    }
+    command = filePath;
+  }
+  const hasInput = options?.input !== undefined;
+  if (hasInput && options?.stdin && options.stdin !== "pipe") {
+    throw new Error("stdin must be a pipe when input is provided");
+  }
+  const proc = Bun.spawn([command, ...(args ?? [])], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: hasInput ? "pipe" : "inherit",
+    ...options,
+  });
+
+  if (hasInput) {
+    const stdin = proc.stdin as FileSink;
+    await stdin.write(options.input);
+    await stdin.end();
+  }
+
+  const outText = async (
+    out: number | ReadableStream<Uint8Array<ArrayBuffer>>,
+  ): Promise<string> => {
+    if (typeof out === "number") return Promise.resolve("");
+    const text = await new Response(out).text();
+    return text.trim();
+  };
+
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    outText(proc.stdout),
+    outText(proc.stderr),
+  ]);
+  if (!options?.disableCheck && exitCode !== 0) {
+    const detail = stderr || stdout;
+    throw new Error(
+      `\`${command} ${args.join(" ")}\` failed (exit ${exitCode})${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  return {
+    exitCode,
+    stdout,
+    stderr,
+  };
 }
 
-/** Print `message` to stderr and exit the script with code 1. */
 export function fail(message: string): never {
   console.error(`✗ ${message}`);
   process.exit(1);
+}
+
+/**
+ * Shorthand for `bun x <args>`, returning the command's trimmed
+ * stdout. Bun is on the PATH because these scripts run under `bun`,
+ * so we skip the `which` lookup (`disableWhich`) and the Windows
+ * `.cmd` shim that a node-based runner would need.
+ */
+export async function bunx(
+  args: readonly string[],
+  options?: ExecOptions,
+): Promise<string> {
+  return exec("bun", ["x", ...args], { disableWhich: true, ...options }).then(
+    (result) => result.stdout,
+  );
 }
 
 /**
@@ -278,11 +318,7 @@ function createExecuteTypescriptTool() {
     inputSchema: z.object({
       code: z.string(),
     }),
-    outputSchema: z.object({
-      stdout: z.string(),
-      stderr: z.string(),
-      exitCode: z.number(),
-    }),
+    outputSchema: execResultSchema,
     execute: async ({ code }) => {
       const args = [
         "run",
@@ -300,11 +336,10 @@ function createExecuteTypescriptTool() {
         "run",
         "-", // read script from stdin
       ];
-      const { execa } = await import("execa");
-      const result = await execa(dockerCommand, args, {
+      const result = await exec(dockerCommand, args, {
         input: code,
-        reject: false,
         timeout: 10_000,
+        disableCheck: true,
       });
       return {
         stdout: result.stdout,
@@ -467,6 +502,11 @@ function createReadFilesTool(base: string) {
   });
 }
 
+/** Wraps a git invocation with our standard subprocess defaults. */
+export async function git(args: string[], options?: ExecOptions): Promise<ExecResult> {
+  return exec("git", args, options);
+}
+
 /**
  * Build the `git_status` / `git_diff` / `git_log` tool trio for the
  * agent, all rooted at {@link ROOT}. Returns `undefined` when `git`
@@ -476,26 +516,11 @@ function createReadFilesTool(base: string) {
  * repo root) for drilling into a specific file or subdir.
  */
 function createGitTools() {
-  if (!which("git")) return undefined;
-
+  const gitFilePath = Bun.which("git");
+  if (!gitFilePath) return undefined;
   const runGit = async (args: string[]) => {
-    const { execa } = await import("execa");
-    return execa("git", args, { cwd: ROOT, reject: false, timeout: 10_000 });
+    return await git(args, { disableWhich: true, disableCheck: true });
   };
-  const result = z.object({
-    ok: z.boolean(),
-    stdout: z.string(),
-    stderr: z.string(),
-  });
-  const toResult = (r: {
-    exitCode?: number | undefined;
-    stdout: string;
-    stderr: string;
-  }) => ({
-    ok: r.exitCode === 0,
-    stdout: r.stdout,
-    stderr: r.stderr,
-  });
   return {
     git_status: createTool({
       id: "git_status",
@@ -504,8 +529,8 @@ function createGitTools() {
         "Use to discover which files in the dbx-tools-js repo " +
         "are modified, added, untracked, or staged.",
       inputSchema: z.object({}),
-      outputSchema: result,
-      execute: async () => toResult(await runGit(["status", "--porcelain"])),
+      outputSchema: execResultSchema,
+      execute: async () => await runGit(["status", "--porcelain"]),
     }),
     git_diff: createTool({
       id: "git_diff",
@@ -519,12 +544,12 @@ function createGitTools() {
         path: z.string().optional(),
         stat: z.boolean().optional(),
       }),
-      outputSchema: result,
+      outputSchema: execResultSchema,
       execute: async ({ path, stat }) => {
         const args = ["diff"];
         if (stat) args.push("--stat");
         if (path) args.push("--", path);
-        return toResult(await runGit(args));
+        return await runGit(args);
       },
     }),
     git_log: createTool({
@@ -538,7 +563,7 @@ function createGitTools() {
         path: z.string().optional(),
         limit: z.number().int().min(1).max(200).optional(),
       }),
-      outputSchema: result,
+      outputSchema: execResultSchema,
       execute: async ({ path, limit }) => {
         const args = [
           "log",
@@ -547,7 +572,7 @@ function createGitTools() {
           `-n${limit ?? 20}`,
         ];
         if (path) args.push("--", path);
-        return toResult(await runGit(args));
+        return await runGit(args);
       },
     }),
   };

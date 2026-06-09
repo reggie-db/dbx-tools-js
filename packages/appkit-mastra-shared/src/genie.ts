@@ -10,33 +10,17 @@
  * module so downstream callers keep a single
  * `@dbx-tools/appkit-mastra-shared` import.
  *
- * What lives here:
- *
- *   - {@link MinimalWriter}: structural shape of `ctx.writer`,
- *     used by every Mastra tool that publishes Genie events.
- *   - {@link GenieAgentEvent}: lifecycle and chart events the
- *     Mastra Genie agent emits that are NOT on the Genie wire
- *     (`started`, `ask_genie_done`, `error`, `chart`). Same flat
- *     `{type, ...fields}` shape as the wire's
- *     {@link GenieChatEvent} so subscribers union both with one
- *     `switch (event.type)`.
- *   - {@link GenieWriterEvent}: the unified vocabulary the Genie
- *     agent writes through `ctx.writer`. Subscribers narrow on
- *     `type` and read the event's fields directly - no
- *     translation layer.
- *   - Workflow output shapes ({@link GenieDataset},
- *     {@link GenieDatasetChart}, {@link GenieSummaryItem},
- *     {@link GenieAgentResult}): structurally Mastra-only because
- *     the agent's two-step workflow (agent step + finalize step)
- *     embeds a chart-planner output (`dataset.chart`) and a mixed
- *     `(string | visualize)[]` summary that the Genie wire knows
- *     nothing about.
- *   - {@link genieResultToWriterEvents}: helper that replays the
- *     terminal `error` event from a completed
- *     {@link GenieAgentResult} (e.g. on history reload). Chart
- *     replay is intentionally not supported - the resolved
- *     Echarts spec is held off-band on the per-request
- *     `RequestContext`, not on the persisted summary.
+ * On top of that wire vocabulary this module adds the pieces the
+ * Mastra Genie agent needs but the wire knows nothing about: the
+ * structural `ctx.writer` shape its tools publish through, the
+ * lifecycle and chart events the agent emits off-band (same flat
+ * `{type, ...fields}` shape as the wire events so subscribers
+ * union both with one `switch (event.type)`), and the agent's
+ * two-step workflow output shapes plus the helper that replays a
+ * completed run's terminal event on history reload. Chart replay
+ * is intentionally unsupported: the resolved Echarts spec is held
+ * off-band on the per-request `RequestContext`, not on the
+ * persisted summary.
  *
  * Pure types and small helpers; no Node-only imports, safe for
  * browser bundles.

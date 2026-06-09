@@ -58,7 +58,7 @@ import {
   discoverPackages,
   fail,
   ROOT,
-  run,
+  exec,
   writeJson,
   type PackageJson,
   type WorkspacePackage,
@@ -262,12 +262,12 @@ async function isAlreadyPublished(
 ): Promise<boolean> {
   const { name, version } = pkg.meta;
   if (!name || !version) return false;
-  const out = await run(
+  const out = await exec(
     "npm",
     ["view", `${name}@${version}`, "version", `--registry=${registry}`],
-    { capture: true, check: false },
+    { disableCheck: true },
   );
-  return out === version;
+  return out.stdout === version;
 }
 
 /**
@@ -329,20 +329,17 @@ async function publishOne(pkg: WorkspacePackage): Promise<void> {
 
     if (isLocalRegistry(registry)) {
       const { host } = new URL(registry);
-      await Bun.write(
-        resolve(stageDir, ".npmrc"),
-        `//${host}/:_authToken=anonymous\n`,
-      );
+      await Bun.write(resolve(stageDir, ".npmrc"), `//${host}/:_authToken=anonymous\n`);
     }
 
     if (dryRun) {
-      await run("bun", ["pm", "pack", "--dry-run"], { cwd: stageDir });
+      await exec("bun", ["pm", "pack", "--dry-run"], { cwd: stageDir });
       console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
       return;
     }
     const args = ["publish", "--access=public", `--registry=${registry}`];
     if (otp) args.push(`--otp=${otp}`);
-    await run("npm", args, { cwd: stageDir });
+    await exec("npm", args, { cwd: stageDir });
     console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
   } finally {
     rmSync(stageDir, { recursive: true, force: true });

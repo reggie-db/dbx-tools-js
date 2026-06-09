@@ -10,10 +10,8 @@
  * without hard-coding `/api/mastra` anywhere - rename the plugin
  * and the React client keeps working.
  *
- * URL helpers ({@link chatUrl}, {@link historyUrl},
- * {@link embedUrl}) live in the sibling `mastra.ts` module so
- * this file stays purely declarative (schemas + inferred types
- * only).
+ * URL helpers live in the sibling `mastra.ts` module so this file
+ * stays purely declarative (schemas + inferred types only).
  *
  * @example
  * ```tsx

@@ -6,26 +6,14 @@
  * row-count progress, follow-up suggestions, text deltas) and
  * yield them as typed {@link GenieChatEvent}s.
  *
- * Architecture:
- *
- *   - Each detector is built with {@link eventDetector}, which
- *     takes the event name as a literal string and a `detect`
- *     callback. TS infers `T extends GenieChatEventType` from the
- *     literal, looks up its scope in {@link DetectorScope}, and
- *     resolves `detect`'s parameter list (message vs
- *     per-attachment) and return type
- *     ({@link DetectorResult}<T>) accordingly. Pass an unknown
- *     name (`"status2"`) and the call fails to compile; pass a
- *     payload shape that doesn't match the named event and the
- *     return fails to compile.
- *   - {@link eventsFromMessage}: sync generator. Walks the
- *     snapshot diff and yields flat `{type, ...fields}` events
- *     for every detector that fires, in a stable order (status
- *     first, then per-attachment field deltas) so a subscriber
- *     that simply logs events as they arrive sees them in a
- *     sensible sequence.
- *   - Private helpers (`matchPrevAttachment`, `thoughtKey`):
- *     diff plumbing shared across detectors.
+ * Detectors are built through a single typed factory that ties
+ * each event's name to its scope (whole-message vs per-attachment)
+ * and payload shape, so a misnamed event or a payload that doesn't
+ * match its event fails to compile. An orchestrator walks the
+ * snapshot diff and yields every detector that fires in a stable
+ * order (status first, then per-attachment field deltas) so a
+ * subscriber that logs events as they arrive sees a sensible
+ * sequence.
  *
  * The module is intentionally pure: no `EventEmitter`, no `this`,
  * no I/O, no module-level mutable state. The `message` and

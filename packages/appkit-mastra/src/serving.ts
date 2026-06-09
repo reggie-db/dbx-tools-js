@@ -1,23 +1,16 @@
 /**
  * Dynamic model resolution against Databricks Model Serving.
  *
- * Three concerns live here:
- *
- * 1. **Listing** - {@link listServingEndpoints} pulls the workspace's
- *    `/serving-endpoints` via the SDK and caches the result per host
- *    with a TTL. Concurrent callers share one in-flight promise (the
- *    same coalescing pattern as Python's `cachetools-async`).
- * 2. **Fuzzy matching** - {@link resolveModelId} runs the user's input
- *    through `fuse.js` extended search so loose tokens like
- *    `"claude sonnet"` snap to `databricks-claude-sonnet-4-6` even
- *    when typed without the full endpoint name.
- * 3. **Per-request override** - {@link extractModelOverride} pulls a
- *    model name from the `X-Mastra-Model` header, `?model=` query
- *    string, or `model` body field so the same agent can be exercised
- *    against different endpoints without redeploying.
- *
- * `model.ts` glues these together inside the per-step model resolver;
- * `plugin.ts` exposes the cached list at `GET /models`.
+ * Turns loose, human-typed model names into real serving-endpoint ids
+ * so the same agent can target different endpoints without code
+ * changes. The workspace's `/serving-endpoints` list is fetched once
+ * per host and cached with a TTL, with concurrent callers sharing one
+ * in-flight promise (the coalescing pattern of Python's
+ * `cachetools-async`). Names are matched through `fuse.js` extended
+ * search so tokens like `"claude sonnet"` snap to
+ * `databricks-claude-sonnet-4-6`, and a per-request override can be
+ * pulled from the request header, query string, or body so a model
+ * can be swapped per call without redeploying.
  */
 
 import { CacheManager, type getExecutionContext } from "@databricks/appkit";

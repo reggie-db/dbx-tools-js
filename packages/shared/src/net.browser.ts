@@ -4,13 +4,9 @@
  * module is the canonical home for anything URL-shaped that also has
  * to run in a Vite / Webpack / esbuild client bundle.
  *
- * Public API: {@link joinUrl}, {@link parseUrl}. The
- * single-leading/trailing-slash stripper `stripBoundarySlashes` is
- * private to this module.
- *
  * The server-side `./net.ts` re-exports everything here verbatim and
- * tacks on its own node-only helpers (e.g. `getRandomPort`), so the
- * `netUtils` namespace looks identical from both entry points.
+ * tacks on its own node-only helpers, so the `netUtils` namespace
+ * looks identical from both entry points.
  */
 
 // ────────────────────────────────────────────────────────────────

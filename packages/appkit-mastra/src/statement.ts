@@ -1,24 +1,17 @@
 /**
  * Databricks Statement Execution helpers for the Mastra plugin.
  *
- * Wraps `client.statementExecution.getStatement` with the shape
- * + size + error handling the plugin's tools and the
- * `/embed/data/:id` route both need:
- *
- *   - {@link fetchStatementData}: low-level fetch that returns the
- *     raw `{columns, rows, rowCount}` shape used by the
- *     `get_statement` tool's output, the `prepare_chart` tool's
- *     dataset resolver, and the route's response body. Coerces
- *     numeric strings to numbers so downstream charts /
- *     aggregations don't have to.
- *   - {@link STATEMENT_ROW_CAP}: hard cap callers (notably the
- *     `/embed/data/:id` route) clamp `limit` to so a
- *     runaway result set can't hose a response.
- *   - {@link isStatementNotFoundError}: structural detector that
- *     normalizes the SDK's two error classes plus the loose
- *     `does not exist` / `not found` message shapes into a single
- *     boolean - lets the route map upstream 404s to a clean
- *     HTTP 404 without coupling to SDK error-class identity.
+ * Wraps `client.statementExecution.getStatement` with the shape,
+ * size, and error handling the plugin's tools and the
+ * `/embed/data/:id` route both need: a low-level fetch that returns a
+ * raw `{columns, rows, rowCount}` shape and coerces numeric strings
+ * to numbers so downstream charts and aggregations don't have to, a
+ * hard row cap callers clamp `limit` to so a runaway result set can't
+ * hose a response, and a structural not-found detector that
+ * normalizes the SDK's error classes and loose `does not exist` /
+ * `not found` message shapes into one boolean so the route can map
+ * upstream 404s to a clean HTTP 404 without coupling to SDK
+ * error-class identity.
  *
  * Not Genie-specific: a Databricks `statement_id` is workspace
  * scoped and lives in the Statement Execution API regardless of

@@ -59,16 +59,29 @@ import { which } from "bun";
 import { Command, InvalidArgumentError } from "commander";
 import semver from "semver";
 import { syncReadmes } from "./readme.js";
-import { agentQuery, discoverPackages, fail, run, writeJson } from "./util.js";
+import { agentQuery, discoverPackages, fail, git, writeJson } from "./util.js";
 
 type Bump = "major" | "minor" | "patch";
 
-/** Wraps a git invocation with our standard subprocess defaults. */
-async function git(
-  args: string[],
-  opts: { capture?: boolean; check?: boolean } = {},
-): Promise<string> {
-  return run("git", args, opts);
+/**
+ * `git rev-parse <args>`, returning trimmed stdout. Tolerant by
+ * design (`disableCheck`): rev-parse exits non-zero when a ref is
+ * unknown (e.g. an unset `@{u}` upstream or a missing tag), and every
+ * caller here treats "unknown" as an empty string rather than an
+ * error.
+ */
+async function gitRevParse(...args: string[]): Promise<string> {
+  return (await git(["rev-parse", ...args], { disableCheck: true })).stdout;
+}
+
+/** `git status --porcelain` stdout (one entry per changed path). */
+async function gitStatus(): Promise<string> {
+  return (await git(["status", "--porcelain"])).stdout;
+}
+
+/** `git push origin <ref>` (commit branch or tag). */
+async function gitPush(ref: string): Promise<void> {
+  await git(["push", "origin", ref]);
 }
 
 /**
@@ -162,7 +175,7 @@ Output the release notes only.`.trim();
 
 /**
  * Build the release-notes prompt from git history + working tree.
- * Async because the underlying `run()` wrapper is async; the
+ * Async because the underlying `git()` wrapper is async; the
  * function itself is still pure-shaped (no side effects) so it's
  * safe to preview in dry-run.
  *
@@ -183,18 +196,16 @@ async function buildReleaseNotesContext(
 ): Promise<ReleaseNotesContext> {
   const range = prevTag ? `${prevTag}..HEAD` : null;
   const commits = range
-    ? (await git(["log", "--no-merges", "--pretty=- %s", range], { capture: true }))
+    ? (await git(["log", "--no-merges", "--pretty=- %s", range])).stdout
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
-  const pendingFiles = (await git(["status", "--porcelain"], { capture: true }))
+  const pendingFiles = (await gitStatus())
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  const diffStat = prevTag
-    ? await git(["diff", "--stat", prevTag], { capture: true })
-    : "";
+  const diffStat = prevTag ? (await git(["diff", "--stat", prevTag])).stdout : "";
 
   const prompt = [
     `Write release notes for ${nextTag}.`,
@@ -312,39 +323,29 @@ const tag = `v${nextVersion}`;
 // The script is permissive about local state: dirty files get folded
 // into the release commit and unpushed commits get pushed along with
 // it. Dry-run still skips everything that touches disk or the remote.
-const branch = await git(["rev-parse", "--abbrev-ref", "HEAD"], { capture: true });
-const dirty = await git(["status", "--porcelain"], { capture: true });
+const branch = await gitRevParse("--abbrev-ref", "HEAD");
+const dirty = await gitStatus();
 let ahead = "0";
 if (!dryRun) {
-  const upstream = await git(
-    ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    { capture: true, check: false },
-  );
+  const upstream = await gitRevParse("--abbrev-ref", "--symbolic-full-name", "@{u}");
   if (!upstream) {
     fail(
       `Branch ${branch} has no upstream. Push the branch first so the release commit lands on a known ref.`,
     );
   }
-  ahead = await git(["rev-list", "--count", `${upstream}..HEAD`], { capture: true });
+  ahead = (await git(["rev-list", "--count", `${upstream}..HEAD`])).stdout;
 }
 
-if (
-  await git(["rev-parse", "--verify", `refs/tags/${tag}`], {
-    capture: true,
-    check: false,
-  })
-) {
+if (await gitRevParse("--verify", `refs/tags/${tag}`)) {
   fail(`Tag ${tag} already exists locally. Pick a different bump.`);
 }
 
-if (
-  await git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { capture: true })
-) {
+if ((await git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`])).stdout) {
   fail(`Tag ${tag} already exists on origin. Pick a different bump.`);
 }
 
 const prevTag =
-  (await git(["describe", "--tags", "--abbrev=0"], { capture: true, check: false })) ||
+  (await git(["describe", "--tags", "--abbrev=0"], { disableCheck: true })).stdout ||
   null;
 
 console.log(`Bump:    ${bump}`);
@@ -352,7 +353,7 @@ console.log(`Current: ${currentVersion}`);
 console.log(`Next:    ${nextVersion}`);
 console.log(`Tag:     ${tag}`);
 console.log(`Prev:    ${prevTag ?? "(none)"}`);
-const headSha = await git(["rev-parse", "--short", "HEAD"], { capture: true });
+const headSha = await gitRevParse("--short", "HEAD");
 console.log(`HEAD:    ${headSha} (${branch})`);
 console.log(`Packages:`);
 for (const p of pkgs) console.log(`  ${p.name}`);
@@ -407,13 +408,13 @@ await git(["add", "-A"]);
 await git(["commit", "-m", `chore: release ${tag}`]);
 
 console.log(`Pushing ${branch}...`);
-await git(["push", "origin", branch]);
+await gitPush(branch);
 
 console.log(`Tagging HEAD as ${tag}...`);
 await git(["tag", "-a", tag, "-m", tagMessage]);
 
 console.log(`Pushing ${tag} to origin...`);
-await git(["push", "origin", tag]);
+await gitPush(tag);
 
 // The annotated tag message shows up as plaintext on GitHub's tag
 // page. The Release object renders the same body as markdown.

@@ -1,41 +1,19 @@
 /**
  * Genie tools for Mastra.
  *
- * Each configured Genie space is surfaced as a small set of flat
- * Mastra tools the calling agent can drive directly - no inner
- * orchestrator agent. The central agent decomposes user questions,
- * picks which Genie space to ask, and composes the final reply.
- *
- * Per-space tools (suffixed with `_<alias>` for non-default
- * aliases):
- *
- *   - `ask_genie`: drives one `genieEventChat` turn and
- *     forwards every wire event (status, thinking, sql, rows)
- *     through `ctx.writer` for streaming UI updates. Returns
- *     the terminal `GenieMessage` only - rows are NOT fetched
- *     eagerly.
- *   - `get_space_description`: cheap title / description /
- *     warehouse id lookup for grounding.
- *   - `get_space_serialized`: full `GenieSpace` JSON for
- *     column-level grounding when the description isn't enough.
- *
- * Space-agnostic shared tools (registered once, regardless of
- * how many spaces are wired):
- *
- *   - `get_statement`: opt-in lookup of a Genie statement's rows
- *     by `statement_id` (with a row `limit`). The agent calls
- *     this only when it needs to read values to reason about
- *     them; if the data is just being displayed, it embeds a
- *     `[data:<statement_id>]` marker in prose instead and lets
- *     the host UI resolve it.
- *   - `prepare_chart`: mints a short `chartId`, kicks off a
- *     background task that fetches the statement's rows and
- *     runs the chart-planner, and caches the resolved Echarts
- *     spec under the id (1h TTL). Returns the `chartId`
- *     synchronously so the agent embeds `[chart:<chartId>]`
- *     markers in prose without blocking on chart generation;
- *     the host UI fetches the cached chart by id once it's
- *     ready (see {@link fetchChart}).
+ * Surfaces each configured Genie space as a small set of flat Mastra
+ * tools the calling agent drives directly - no inner orchestrator
+ * agent. The central agent decomposes user questions, picks which
+ * space to ask, streams the per-turn wire events (status, thinking,
+ * sql, rows) through `ctx.writer`, and composes the final reply.
+ * Rows are never fetched eagerly: the agent reads a statement's
+ * values only when it needs to reason about them, otherwise it embeds
+ * a `[data:<statement_id>]` marker in prose and lets the host UI
+ * resolve the data. Charts are minted asynchronously and referenced
+ * by `[chart:<chartId>]` markers so prose isn't blocked on chart
+ * generation; the host UI fetches the cached spec by id once ready.
+ * Space description and serialized-space lookups are available for
+ * grounding when the agent needs schema context.
  *
  * Each tool's `execute` pulls the per-request
  * {@link WorkspaceClient} off `ctx.requestContext` (stamped by

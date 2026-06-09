@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-serving",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "dependencies": {
     "@databricks/appkit": "catalog:",
     "@dbx-tools/shared": "workspace:*"

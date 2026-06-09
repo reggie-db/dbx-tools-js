@@ -1,28 +1,24 @@
 /**
  * `@dbx-tools/genie` chat driver.
  *
- * Two async generators ship from this file. Both take a single
- * `content` string for one turn against a Genie space; for
- * multi-turn conversations, the caller drives the loop and
- * threads the `conversation_id` returned on each
- * `GenieMessage` into the next call's `options.conversationId`.
+ * Drives a single turn against a Genie space from one `content`
+ * string; multi-turn conversations are the caller's job (thread
+ * the `conversation_id` returned on each `GenieMessage` back into
+ * the next turn's `options.conversationId`).
  *
- *   - {@link genieChat}: low-level. Yields every poll-observed
- *     `GenieMessage` verbatim. Cancellation, conversation seeding,
- *     distinct-filtering, and SDK quirks (Waiter stripping) live
- *     here. Use directly when you want the raw stream.
- *   - {@link genieEventChat}: high-level. Wraps `genieChat` and
- *     emits semantic, deduplicated events as a typed
- *     `{ type, payload }` stream (see {@link GenieChatEvent}). The
- *     final yield for a successful turn is always
- *     `{ type: "result", payload }` carrying the terminal
- *     `GenieMessage`. Errors propagate by the generator throwing -
- *     there is no `"error"` variant.
- *
- * Pick the layer that matches your consumer. Iterating UI / agent
- * code that wants every message verbatim should use `genieChat`.
- * Subscribers that want to react to "Genie is thinking about X"
- * or "Genie produced text Y" should use `genieEventChat`.
+ * Two layers serve two kinds of consumer. The low-level layer
+ * yields every poll-observed `GenieMessage` verbatim and owns the
+ * messy parts - cancellation, conversation seeding,
+ * distinct-filtering, and SDK quirks (Waiter stripping); reach for
+ * it when you want the raw stream. The high-level layer wraps it
+ * and emits semantic, deduplicated `{ type, payload }` events
+ * (see {@link GenieChatEvent}), always closing a successful turn
+ * with a terminal `result` event carrying the final
+ * `GenieMessage`; errors propagate by throwing, with no `error`
+ * variant. Iterating UI / agent code that wants every message
+ * verbatim takes the low-level stream; subscribers reacting to
+ * "Genie is thinking about X" or "Genie produced text Y" take the
+ * event layer.
  */
 
 import { WorkspaceClient } from "@databricks/sdk-experimental";

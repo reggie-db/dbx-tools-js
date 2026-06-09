@@ -1,20 +1,10 @@
 /**
- * HTTP header helpers shared across AppKit plugins: framework
- * agnostic readers for HTTP headers and cookies that work uniformly
- * across Express, Node `IncomingMessage`, WHATWG `Request` / `Response`
- * / `Headers`, Hono, and any object that exposes a `headers` field of
- * one of those shapes.
- *
- * Public API: {@link forEachHeaderValue}, {@link parseCookies}.
- * Everything else (the header guards `isHeaders` / `isWrapped` /
- * `unwrap`, the single cookie-header parser `parseCookieString`) is
- * private to this module.
- *
- * URL parsing and path joining moved to `netUtils` (`./net.browser.ts`)
- * so the URL surface lives next to the rest of the browser-safe
- * networking helpers. The Databricks-aware REST helper that used to
- * live here moved to `apiUtils.fetchApi` (`./api.ts`) so this module
- * can stay dependency-free and browser-safe.
+ * Framework-agnostic readers for HTTP headers and cookies, shared
+ * across AppKit plugins. Works uniformly across Express, Node
+ * `IncomingMessage`, WHATWG `Request` / `Response` / `Headers`, Hono,
+ * and any object that exposes a `headers` field of one of those
+ * shapes. Dependency-free and browser-safe so it can run in either a
+ * server or a client bundle.
  */
 
 // ────────────────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 /**
- * AppKit Mastra integration: {@link MastraPlugin} / {@link mastra},
- * plugin config types, agent registration helpers, Genie tool
- * builders, and dynamic Model Serving endpoint resolution.
+ * Server-side entry point for the AppKit Mastra integration. Mounts
+ * the plugin via {@link mastra} and re-exports the full server surface
+ * (config, agent wiring, Genie and chart tooling, and dynamic Model
+ * Serving resolution) so apps build agent backends from one import.
  *
  * Client-side consumers should import URL helpers and the
  * {@link MastraClientConfig} type from `@dbx-tools/appkit-mastra-shared`
