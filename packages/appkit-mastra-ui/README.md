@@ -37,7 +37,7 @@ The headline component. Mount it anywhere under the Mastra plugin and it
 wires itself from the plugin's published client config (mount paths,
 default agent). It drives the conversation directly over
 `@mastra/client-js`, so it gets streaming, inline tool-session pills,
-approval gating, model selection, and history pagination out of the box.
+approval gating, a stop control, and history pagination out of the box.
 
 ```tsx
 import { MastraChat } from "@dbx-tools/appkit-mastra-ui/react";
@@ -45,6 +45,14 @@ import { MastraChat } from "@dbx-tools/appkit-mastra-ui/react";
 export default function ChatPage() {
   return <MastraChat />;
 }
+```
+
+The model picker is **off by default** (the catalogue isn't even
+fetched). Opt in with `showModelPicker` to let the user override the
+serving endpoint per turn:
+
+```tsx
+<MastraChat showModelPicker />
 ```
 
 ## Controlled: `ChatView`
@@ -87,4 +95,9 @@ function Chat() {
 - Consolidated tool-session pills with per-call Genie progress detail.
 - Suggested follow-up question pills.
 - Inline approval cards for `requireApproval` tools.
+- Stop button to abort an in-flight response (Send is disabled while
+  streaming; `ChatView` takes an `onStop` callback).
+- Destructive error Alert with a Retry action when a turn fails
+  (`ChatView` takes an `error` prop; the drop-in surfaces it itself).
+- Optional model picker (`showModelPicker`, off by default).
 - Infinite-scroll-up thread history.

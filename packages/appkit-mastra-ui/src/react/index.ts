@@ -10,6 +10,17 @@
 // Internal building blocks (bubbles, tool pills, markdown, data grid,
 // embed slots, suggestions) are intentionally not re-exported.
 
+export {
+  clearMastraHistory,
+  fetchMastraHistory,
+  useChartFetch,
+  useChatUrl,
+  useMastraClient,
+  useMastraConfig,
+  useMastraModels,
+  useStatementFetch,
+} from "../lib/mastra-client.js";
+export type { ByIdFetchState, MastraHistoryPage } from "../lib/mastra-client.js";
 export { ChatView } from "./chat-view.js";
 export { MastraChat, useMastraChat } from "./mastra-chat.js";
 export type { MastraChatProps, UseMastraChatOptions } from "./mastra-chat.js";
@@ -22,14 +33,3 @@ export type {
   ToolEvent,
   ToolProgress,
 } from "./types.js";
-export {
-  clearMastraHistory,
-  fetchMastraHistory,
-  useChartFetch,
-  useChatUrl,
-  useMastraClient,
-  useMastraConfig,
-  useMastraModels,
-  useStatementFetch,
-} from "../lib/mastra-client.js";
-export type { ByIdFetchState, MastraHistoryPage } from "../lib/mastra-client.js";

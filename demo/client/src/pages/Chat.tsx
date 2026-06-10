@@ -1,3 +1,4 @@
+import { useChat } from "@ai-sdk/react";
 import {
   ChatView,
   clearMastraHistory,
@@ -6,7 +7,6 @@ import {
   useMastraModels,
   type ApprovalDecision,
 } from "@dbx-tools/appkit-mastra-ui/react";
-import { useChat } from "@ai-sdk/react";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { DefaultChatTransport } from "ai";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -45,9 +45,10 @@ const Chat = () => {
     [api],
   );
 
-  const { messages, sendMessage, status, regenerate, setMessages, stop } = useChat({
-    transport,
-  });
+  const { messages, sendMessage, status, regenerate, setMessages, stop, error } =
+    useChat({
+      transport,
+    });
 
   /**
    * Wipe the server-side thread and reset the in-memory `useChat`
@@ -118,8 +119,10 @@ const Chat = () => {
     <ChatView
       messages={messages}
       status={status}
+      error={error}
       sendMessage={(message) => sendMessage(message)}
       regenerate={regenerate}
+      onStop={stop}
       models={models}
       model={model}
       onModelChange={setModel}

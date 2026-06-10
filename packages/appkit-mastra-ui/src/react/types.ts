@@ -36,8 +36,24 @@ export type ChatModelOption = { name: string };
 export type ChatViewProps = {
   messages: UIMessage[];
   status: ChatStatus;
+  /**
+   * The error from the last failed turn, surfaced as a destructive
+   * Alert when `status` is `"error"`. When omitted, the Alert shows a
+   * generic message. Pairs with the AI SDK `useChat`'s `error` on the
+   * controlled path; `useMastraChat` populates it on the drop-in path.
+   */
+  error?: Error | null;
   sendMessage: (message: { text: string }) => void;
   regenerate?: () => void;
+  /**
+   * Abort the in-flight response. When provided and the chat is running
+   * (`status` is `"submitted"` or `"streaming"`), the composer swaps the
+   * Send button for a Stop button that calls this. The handler should
+   * cancel the active generation and return the chat to `"ready"`. Omit
+   * to hide the Stop affordance (the Send button just disables while a
+   * response streams).
+   */
+  onStop?: () => void;
   /** Extra classes merged onto the root layout container. */
   className?: string;
   suggestions?: string[];

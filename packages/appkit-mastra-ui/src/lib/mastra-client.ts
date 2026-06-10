@@ -60,18 +60,27 @@ export const useChatUrl = (agentId?: string): string => {
  * doesn't surface embedding / vision / agent-bricks endpoints. The
  * response itself is server-cached for 5 minutes so polling cost is
  * negligible.
+ *
+ * Pass `enabled: false` to skip the fetch entirely (e.g. when the
+ * model picker is hidden), in which case `models` stays empty.
  */
-export const useMastraModels = (): {
+export const useMastraModels = (
+  enabled = true,
+): {
   models: ServingEndpointSummary[];
   loading: boolean;
   error: Error | null;
 } => {
   const { modelsPath } = useMastraConfig();
   const [models, setModels] = useState<ServingEndpointSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -99,7 +108,7 @@ export const useMastraModels = (): {
     return () => {
       cancelled = true;
     };
-  }, [modelsPath]);
+  }, [modelsPath, enabled]);
 
   return { models, loading, error };
 };

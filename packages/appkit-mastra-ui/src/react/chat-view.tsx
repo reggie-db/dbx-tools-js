@@ -1,4 +1,7 @@
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Button,
   Empty,
   EmptyDescription,
@@ -21,11 +24,15 @@ import {
   TooltipTrigger,
   cn,
 } from "@databricks/appkit-ui/react";
+import { commonUtils } from "@dbx-tools/shared";
 import {
   ArrowDownIcon,
   MessageSquareIcon,
+  RefreshCwIcon,
   SendIcon,
+  SquareIcon,
   Trash2Icon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AssistantBubble, UserBubble } from "./bubbles.js";
@@ -61,8 +68,10 @@ const DEFAULT_MODEL_VALUE = "__default__";
 export const ChatView = ({
   messages,
   status,
+  error,
   sendMessage,
   regenerate,
+  onStop,
   className,
   suggestions = DEFAULT_SUGGESTIONS,
   toolEventsByMessage = {},
@@ -146,8 +155,16 @@ export const ChatView = ({
     });
   };
 
+  // A turn is in flight from the moment the run opens (`submitted`)
+  // until the server signals done (`ready`/`error`). Used to gate new
+  // submissions and to swap the composer's Send button for Stop.
+  const isRunning = status === "submitted" || status === "streaming";
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // Don't queue a new turn while one is streaming - the Enter-key
+    // path would otherwise bypass the disabled Send button.
+    if (isRunning) return;
     const text = input.trim();
     if (!text) return;
     sendMessage({ text });
@@ -170,7 +187,7 @@ export const ChatView = ({
         Boolean((p as { text?: string }).text),
     ) || (lastEvents?.length ?? 0) > 0;
   const hasRunningTool = (lastEvents ?? []).some((e) => e.status === "running");
-  const showWaiting = status === "submitted" || status === "streaming";
+  const showWaiting = isRunning;
   const waitingLabel = !lastAssistantHasContent
     ? "Thinking..."
     : hasRunningTool
@@ -203,7 +220,9 @@ export const ChatView = ({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className={cn("mx-auto flex h-full max-w-4xl flex-col p-0 md:p-6", className)}>
+      <div
+        className={cn("mx-auto flex h-full max-w-4xl flex-col p-0 md:p-6", className)}
+      >
         {showHeader && (
           <div className="flex items-center justify-end gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground">
             {showModelPicker && (
@@ -322,6 +341,31 @@ export const ChatView = ({
                     <span className="animate-pulse">{waitingLabel}</span>
                   </div>
                 )}
+                {status === "error" && (
+                  <div className="flex flex-col items-start gap-2">
+                    <Alert variant="destructive">
+                      <TriangleAlertIcon className="size-4" />
+                      <AlertTitle>Something went wrong</AlertTitle>
+                      <AlertDescription>
+                        {error
+                          ? commonUtils.errorMessage(error)
+                          : "The assistant ran into an error. Please try again."}
+                      </AlertDescription>
+                    </Alert>
+                    {regenerate && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={regenerate}
+                        className="gap-1.5"
+                      >
+                        <RefreshCwIcon className="size-3" />
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -369,20 +413,31 @@ export const ChatView = ({
               rows={1}
             />
             <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                type="submit"
-                size="icon-sm"
-                variant="default"
-                disabled={
-                  !input.trim() || status === "streaming" || status === "submitted"
-                }
-              >
-                {status === "streaming" || status === "submitted" ? (
-                  <Spinner className="size-3" />
-                ) : (
-                  <SendIcon className="size-3" />
-                )}
-              </InputGroupButton>
+              {isRunning && onStop ? (
+                <InputGroupButton
+                  type="button"
+                  size="icon-sm"
+                  variant="default"
+                  onClick={onStop}
+                  aria-label="Stop response"
+                >
+                  <SquareIcon className="size-3 fill-current" />
+                </InputGroupButton>
+              ) : (
+                <InputGroupButton
+                  type="submit"
+                  size="icon-sm"
+                  variant="default"
+                  disabled={!input.trim() || isRunning}
+                  aria-label="Send message"
+                >
+                  {isRunning ? (
+                    <Spinner className="size-3" />
+                  ) : (
+                    <SendIcon className="size-3" />
+                  )}
+                </InputGroupButton>
+              )}
             </InputGroupAddon>
           </InputGroup>
         </form>

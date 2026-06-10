@@ -40,10 +40,13 @@
       "path": "./packages/appkit-mastra-shared/tsconfig.build.json"
     },
     {
-      "path": "./packages/appkit-mastra/tsconfig.build.json"
+      "path": "./packages/appkit-mastra-ui/tsconfig.build.json"
     },
     {
-      "path": "./packages/appkit-mastra-ui/tsconfig.build.json"
+      "path": "./packages/appkit-mastra-ui/tsconfig.json"
+    },
+    {
+      "path": "./packages/appkit-mastra/tsconfig.build.json"
     },
     {
       "path": "./packages/appkit-serving/tsconfig.build.json"

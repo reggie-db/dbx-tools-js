@@ -11,7 +11,6 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-  cn,
 } from "@databricks/appkit-ui/react";
 import type { UIMessage } from "ai";
 import {

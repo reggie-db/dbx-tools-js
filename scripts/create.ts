@@ -183,13 +183,20 @@ const pluginPackageJson = {
 
 // Shared packages ship a browser/server split: the `exports` map points
 // browser-aware bundlers at `index.client.{ts,js}` and Node at
-// `index.{ts,js}`. `source` exposes the unbuilt `.ts` entries so other
-// workspace packages compile straight from source. Mirrors the
-// `@dbx-tools/shared` package.json.
+// `index.{ts,js}`. `source` is listed FIRST and exposes the unbuilt
+// `.ts` entries so in-repo tooling (which activates the `source`
+// condition via the root tsconfig's `customConditions`) compiles
+// straight from source instead of stale `dist/*.d.ts`. Condition
+// matching is order-sensitive, so `source` must precede `types` /
+// `import` / `default`. Mirrors the `@dbx-tools/shared` package.json.
 const sharedPackageJson = {
   ...basePackageJson,
   exports: {
     ".": {
+      source: {
+        browser: "./index.client.ts",
+        default: "./index.ts",
+      },
       browser: {
         types: "./dist/index.client.d.ts",
         default: "./dist/index.client.js",
@@ -197,10 +204,6 @@ const sharedPackageJson = {
       import: {
         types: "./dist/index.d.ts",
         default: "./dist/index.js",
-      },
-      source: {
-        browser: "./index.client.ts",
-        default: "./index.ts",
       },
       default: {
         types: "./dist/index.d.ts",

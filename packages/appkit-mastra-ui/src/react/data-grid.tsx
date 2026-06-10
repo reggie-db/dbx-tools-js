@@ -55,8 +55,7 @@ export function colorizeDelta(content: React.ReactNode): React.ReactNode {
   const match = DELTA_PATTERN.exec(text);
   if (!match) return content;
   const sign = match[1];
-  if (sign === "+")
-    return <span className="font-medium text-success">{content}</span>;
+  if (sign === "+") return <span className="font-medium text-success">{content}</span>;
   if (sign === "-" || sign === "\u2212")
     return <span className="font-medium text-destructive">{content}</span>;
   return content;
