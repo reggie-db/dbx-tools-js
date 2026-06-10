@@ -39,7 +39,7 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 import type { MastraPluginConfig } from "./config.js";
-import { buildModel, ModelTier, modelForTier } from "./model.js";
+import { buildModel, modelForTier, ModelTier } from "./model.js";
 
 const log = logUtils.logger("mastra/chart");
 

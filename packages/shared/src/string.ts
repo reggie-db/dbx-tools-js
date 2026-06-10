@@ -1,9 +1,9 @@
 // Direct import (not via the barrel) to avoid a self-import cycle:
 // `index.client.ts` re-exports `* as stringUtils from "./src/string.js"`,
 // so going back through it would close a loop.
-import { fnvHash, fnvHashWithOptions } from "./common.js";
+import { fnvHashWithOptions } from "./common.js";
 
-type TokenizeOptions = {
+export type TokenizeOptions = {
   distinct?: boolean;
   lowerCase?: boolean;
   capitalize?: boolean;
@@ -14,13 +14,13 @@ type TokenizeOptions = {
 
 // Keys/identifiers/slugs are always lowercased; `lowerCase` is not a
 // caller-configurable option.
-type KeyOptions = Omit<TokenizeOptions, "lowerCase" | "capitalize"> & {
+export type KeyOptions = Omit<TokenizeOptions, "lowerCase" | "capitalize"> & {
   maxLength?: number;
   truncateStrategy?: "hash" | "trim" | "empty";
   truncateHashLength?: number;
 };
 
-type IdentifierOptions = KeyOptions & {
+export type IdentifierOptions = KeyOptions & {
   delimiter?: string;
 };
 
@@ -31,6 +31,14 @@ type ResolvedIdentifierOptions = Required<
 
 const TOKENIZE_CAMEL_CASE_REGEXP = /[A-Z]?[a-z]+|[0-9]+|[A-Z]+(?![a-z])/g;
 const TOKENIZE_NON_ALPHANUMERIC_REGEXP = /[a-zA-Z0-9]+/g;
+const TOKENIZE_OVERRIDES: ((token: string, options: TokenizeOptions) => string)[] = [
+  (token, options) => {
+    if (options.capitalize && token.toLowerCase() === "ai") {
+      return "AI";
+    }
+    return token;
+  },
+];
 const URI_REGEXP = /^([a-zA-Z][a-zA-Z0-9+.-]*)?:\/\/([^\s/?#][^\s]*)?$/;
 const EMAIL_REGEXP =
   /^([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+)@([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)$/;
@@ -80,6 +88,11 @@ export function* tokenizeWithOptions(
       let token = tokenMatch[0]!;
       if (opts.lowerCase) token = token.toLowerCase();
       if (opts.capitalize) token = token.charAt(0).toUpperCase() + token.slice(1);
+      if (!token) continue;
+      for (const override of TOKENIZE_OVERRIDES) {
+        token = override(token, opts);
+        if (!token) break;
+      }
       if (!token || seen?.has(token)) continue;
       seen?.add(token);
       yield token;

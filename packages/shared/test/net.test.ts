@@ -108,9 +108,9 @@ describe("urlBuilder", () => {
     });
 
     it("replaces the pathname wholesale", () => {
-      expect(urlBuilder("https://host/base")?.withPathReplace("a", "b").toString()).toBe(
-        "https://host/a/b",
-      );
+      expect(
+        urlBuilder("https://host/base")?.withPathReplace("a", "b").toString(),
+      ).toBe("https://host/a/b");
     });
 
     it("flattens arrays and trims boundary slashes on each segment", () => {

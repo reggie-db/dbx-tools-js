@@ -1,11 +1,11 @@
 // Shared helpers for the workspace scripts in this directory. Anything
 // duplicated across more than one script lives here.
 
-import { FileSink, which } from "bun";
 import { WorkspaceClient } from "@databricks/sdk-experimental";
-import { Agent, AgentInstructions } from "@mastra/core/agent";
+import { Agent } from "@mastra/core/agent";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import { createTool } from "@mastra/core/tools";
+import { FileSink, which } from "bun";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import pMemoize from "p-memoize";
@@ -63,7 +63,13 @@ export async function* discoverPackageJsons(
   if (includeRoot) yield rootJson;
   const { workspaces = [] } = (await Bun.file(rootJson).json()) as PackageJson;
   for (const ws of workspaces) {
-    yield* new Bun.Glob(`${ws}/package.json`).scan({ cwd: ROOT, absolute: true });
+    const packageJsonScan = new Bun.Glob(`${ws}/package.json`).scan({
+      cwd: ROOT,
+      absolute: true,
+    });
+    for await (const packageJson of packageJsonScan) {
+      yield packageJson;
+    }
   }
 }
 
@@ -259,6 +265,11 @@ export const getWorkspaceClient = pMemoize(
     }
   },
 );
+
+const getGitFilePath = pMemoize(async (): Promise<string | undefined> => {
+  const filePath = which("git");
+  return filePath || undefined;
+});
 
 /**
  * Env var holding the script agent's model spec as `provider/model`
@@ -476,7 +487,9 @@ function createReadFilesTool(base: string) {
 
 /** Wraps a git invocation with our standard subprocess defaults. */
 export async function git(args: string[], options?: ExecOptions): Promise<ExecResult> {
-  return exec("git", args, options);
+  const gitFilePath = await getGitFilePath();
+  if (!gitFilePath) throw new Error("git not found");
+  return exec(gitFilePath, args, { disableWhich: true, ...options });
 }
 
 /**
@@ -487,8 +500,8 @@ export async function git(args: string[], options?: ExecOptions): Promise<ExecRe
  * pattern). Tools accept an optional path filter (relative to the
  * repo root) for drilling into a specific file or subdir.
  */
-function createGitTools() {
-  const gitFilePath = Bun.which("git");
+async function createGitTools() {
+  const gitFilePath = await getGitFilePath();
   if (!gitFilePath) return undefined;
   const runGit = async (args: string[]) => {
     return await git(args, { disableWhich: true, disableCheck: true });
@@ -664,9 +677,7 @@ async function buildDatabricksModel(
  * splices keep_alive into the request body so the model unloads
  * shortly after the run.
  */
-async function buildOllamaModel(
-  model: string,
-): Promise<MastraModelConfig | undefined> {
+async function buildOllamaModel(model: string): Promise<MastraModelConfig | undefined> {
   const ollamaFilePath = Bun.which("ollama");
   if (!ollamaFilePath) return undefined;
   await exec(ollamaFilePath, ["pull", model], {
@@ -742,7 +753,7 @@ export const getScriptAgent = pMemoize(
     const model = await buildScriptModel(spec);
     if (!model) return null;
     const base = overrides.cwd ?? ROOT;
-    const gitTools = createGitTools();
+    const gitTools = await createGitTools();
     const sandbox = createExecuteTypescriptTool();
     // Always append the .cursor/rules block so per-script overrides
     // (release notes prompt, README generator prompt, ...) still get

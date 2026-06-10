@@ -10,30 +10,30 @@
  * is the right surface for browser bundles and `usePluginClientConfig`
  * consumers.
  */
-export * from "./src/plugin.js";
 export * from "@dbx-tools/appkit-mastra-shared";
-export * from "./src/config.js";
 export * from "./src/agents.js";
 export * from "./src/chart.js";
+export * from "./src/config.js";
 export * from "./src/genie.js";
-export * from "./src/tools/email.js";
 export {
-  clearServingEndpointsCache,
-  extractModelOverride,
-  listServingEndpoints,
+  FALLBACK_MODEL_IDS,
+  MODEL_CATALOG,
+  ModelTier,
+  modelForTier,
+  modelsForTier,
+} from "./src/model.js";
+export * from "./src/plugin.js";
+export {
   MASTRA_MODEL_OVERRIDE_KEY,
   MODEL_OVERRIDE_BODY_FIELDS,
   MODEL_OVERRIDE_HEADER,
   MODEL_OVERRIDE_QUERY,
+  clearServingEndpointsCache,
+  extractModelOverride,
+  listServingEndpoints,
   resolveModelId,
-  type ResolvedModel,
   type ResolveModelOptions,
+  type ResolvedModel,
   type ServingEndpointSummary,
 } from "./src/serving.js";
-export {
-  FALLBACK_MODEL_IDS,
-  MODEL_CATALOG,
-  modelForTier,
-  modelsForTier,
-  ModelTier,
-} from "./src/model.js";
+export * from "./src/tools/email.js";

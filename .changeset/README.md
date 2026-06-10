@@ -17,12 +17,12 @@ package under the `@dbx-tools/*` scope is configured as `fixed` in
 `config.json`, so they always bump together regardless of which one you
 selected. The `demo` package is private and never publishes.
 
-The canonical "main" version of the monorepo is the `version` field on the
-root `package.json`. It mirrors the bumped version of the fixed group: the
-root `version` script chains `changeset version && bun scripts/sync-version.ts`
-so the root manifest auto-tracks whatever changesets just emitted. Newly
-scaffolded packages (`bun run create plugin <slug>`) start at this version so
-they're already in lockstep with the rest of the workspace.
+The canonical "main" version of the monorepo lives on the publishable
+`@dbx-tools/*` packages themselves (they bump together as a `fixed` group).
+The root `package.json` carries no `version` field - there's nothing to keep
+in sync. Newly scaffolded packages (`bun run create plugin <slug>`) read the
+current group version straight off the published packages, so they start
+already in lockstep with the rest of the workspace.
 
 ## Skipping the prompt
 

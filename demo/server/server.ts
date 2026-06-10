@@ -1,4 +1,4 @@
-import { CacheManager, createApp, genie, lakebase, server } from "@databricks/appkit";
+import { createApp, genie, lakebase, server } from "@databricks/appkit";
 import { autopg } from "@dbx-tools/appkit-autopg";
 import {
   buildEmailTool,

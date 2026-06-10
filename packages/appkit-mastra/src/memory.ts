@@ -35,10 +35,7 @@ import { PgVector, PostgresStore } from "@mastra/pg";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 
-import type {
-  MastraAgentDefinition,
-  MastraMemoryConfigOverride,
-} from "./agents.js";
+import type { MastraAgentDefinition, MastraMemoryConfigOverride } from "./agents.js";
 import type { MastraPluginConfig } from "./config.js";
 
 const log = logUtils.logger("mastra/memory");
@@ -63,8 +60,7 @@ export function needsLakebase(config: MastraPluginConfig): boolean {
   if (settingNeedsSharedPool(config.memory)) return true;
   const defs = collectAgentDefinitions(config);
   return defs.some(
-    (d) =>
-      settingNeedsSharedPool(d.storage) || settingNeedsSharedPool(d.memory),
+    (d) => settingNeedsSharedPool(d.storage) || settingNeedsSharedPool(d.memory),
   );
 }
 
@@ -169,9 +165,7 @@ export class MemoryBuilder {
       ...(vector ? { vector, embedder: fastembed } : {}),
       options: {
         lastMessages: 10,
-        ...(vector
-          ? { semanticRecall: { topK: 3, messageRange: 2 } }
-          : {}),
+        ...(vector ? { semanticRecall: { topK: 3, messageRange: 2 } } : {}),
       },
     });
   }
@@ -280,9 +274,7 @@ function settingNeedsSharedPool(
 }
 
 /** Walk the three shapes of `config.agents` into a flat list. */
-function collectAgentDefinitions(
-  config: MastraPluginConfig,
-): MastraAgentDefinition[] {
+function collectAgentDefinitions(config: MastraPluginConfig): MastraAgentDefinition[] {
   const agents = config.agents;
   if (!agents) return [];
   if (Array.isArray(agents)) return agents;

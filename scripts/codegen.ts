@@ -62,8 +62,8 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, relative, resolve } from "node:path";
-import ts from "typescript";
 import { generate } from "ts-to-zod";
+import ts from "typescript";
 import {
   discoverPackages,
   fail,

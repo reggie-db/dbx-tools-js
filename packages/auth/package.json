@@ -1,7 +1,6 @@
 {
   "name": "@dbx-tools/auth",
   "version": "0.1.28",
-  "private": true,
   "dependencies": {
     "@dbx-tools/shared": "workspace:*",
     "jose": "^6"
@@ -14,5 +13,6 @@
   "peerDependencies": {
     "express": "catalog:"
   },
+  "private": true,
   "type": "module"
 }

@@ -76,9 +76,7 @@ export async function buildObservability(
   options?: BuildObservabilityOptions,
 ): Promise<Observability | undefined> {
   const serviceName =
-    options?.serviceName ??
-    (await projectUtils.name()) ??
-    DEFAULT_SERVICE_NAME;
+    options?.serviceName ?? (await projectUtils.name()) ?? DEFAULT_SERVICE_NAME;
   const requestContextKeys = [
     ...(options?.requestContextKeys ?? TRACE_REQUEST_CONTEXT_KEYS),
   ];

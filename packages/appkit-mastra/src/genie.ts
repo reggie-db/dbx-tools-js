@@ -36,13 +36,13 @@
 
 import { CacheManager, genie } from "@databricks/appkit";
 import { ApiError, HttpError, WorkspaceClient } from "@databricks/sdk-experimental";
-import { genieEventChat } from "@dbx-tools/genie";
-import { type GenieMessage } from "@dbx-tools/genie-shared";
 import {
   ChartSchema,
   type MinimalWriter,
   type StartedEvent,
 } from "@dbx-tools/appkit-mastra-shared";
+import { genieEventChat } from "@dbx-tools/genie";
+import { type GenieMessage } from "@dbx-tools/genie-shared";
 import {
   apiUtils,
   appkitUtils,

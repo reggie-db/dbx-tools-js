@@ -1,7 +1,3 @@
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { useCallback, useMemo, useRef, useState } from "react";
-import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { ChatView, type ApprovalDecision } from "@/components/chat-view";
 import {
   clearMastraHistory,
@@ -9,6 +5,10 @@ import {
   useMastraConfig,
   useMastraModels,
 } from "@/lib/mastra-client";
+import { useChat } from "@ai-sdk/react";
+import { commonUtils, logUtils } from "@dbx-tools/shared";
+import { DefaultChatTransport } from "ai";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 const log = logUtils.logger("client/chat");
 

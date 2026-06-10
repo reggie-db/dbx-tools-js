@@ -71,15 +71,17 @@
 // (`appkit-foo`) while the runtime addresses plugins by their short
 // name (`foo`).
 //
-// The initial `version` is read off the root `package.json` instead
-// of being hardcoded. That keeps a freshly scaffolded package in
-// lockstep with the changesets `fixed` group, so the next
-// `changeset version` bumps it alongside everyone else.
+// The initial `version` is derived from the publishable packages
+// themselves (not hardcoded, not a mirrored label). That keeps a
+// freshly scaffolded package in lockstep with the changesets `fixed`
+// group, so the next `changeset version` / `tag` bumps it alongside
+// everyone else.
 
+import { Command, InvalidArgumentError } from "commander";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { Command, InvalidArgumentError } from "commander";
-import { fail, ROOT, writeJson, type PackageJson } from "./util.js";
+import semver from "semver";
+import { discoverPackages, fail, ROOT, writeJson } from "./util.js";
 
 const SCOPE = "@dbx-tools";
 // AppKit's version range lives in the root `catalog` (see root
@@ -88,15 +90,24 @@ const SCOPE = "@dbx-tools";
 const APPKIT_PEER_RANGE = "catalog:";
 const SHARED_PKG = `${SCOPE}/shared`;
 
-// Canonical "main" version for the monorepo. Lives on the root
-// `package.json` (kept in sync with the changesets `fixed` group by
-// `scripts/sync-version.ts`). New packages start here so they're
-// already in lockstep with the rest of the workspace - the next
-// `changeset version` will then bump them alongside everyone else.
-const rootMeta = (await Bun.file(resolve(ROOT, "package.json")).json()) as PackageJson;
-const INITIAL_VERSION = rootMeta.version;
+// Canonical "main" version for the monorepo: the version the fixed
+// `@dbx-tools/*` group is currently on. Read straight off the
+// publishable packages (the same set `tag` / `release` operate on) and
+// take the highest, so a freshly scaffolded package starts in lockstep
+// with the rest and the next release bumps it alongside everyone else.
+// Reading the packages directly - rather than a mirrored label - means
+// create can't fall behind when a release path forgets to update it.
+const publishedVersions = (await discoverPackages())
+  .map((pkg) => pkg.meta.version)
+  .filter((version): version is string => Boolean(version));
+const INITIAL_VERSION = publishedVersions.reduce<string | undefined>(
+  (highest, version) => (!highest || semver.gt(version, highest) ? version : highest),
+  undefined,
+);
 if (!INITIAL_VERSION) {
-  fail("root package.json has no `version` field; run `bun run sync-version` first");
+  fail(
+    "no publishable packages with a `version` found to derive the initial version from",
+  );
 }
 
 type Kind = "plugin" | "shared" | "standard";

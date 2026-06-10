@@ -10,8 +10,7 @@
 // are skipped: private packages (e.g. the demo) aren't shipped to npm
 // and have their own build pipelines.
 
-import { rmSync } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { bunx, discoverPackages, fail } from "./util.js";
 

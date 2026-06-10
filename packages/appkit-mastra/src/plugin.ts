@@ -37,17 +37,17 @@ import {
   type PluginManifest,
   type ResourceRequirement,
 } from "@databricks/appkit";
-import { appkitUtils, commonUtils, logUtils } from "@dbx-tools/shared";
+import { appkitUtils, logUtils } from "@dbx-tools/shared";
 import { chatRoute } from "@mastra/ai-sdk";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
 import express from "express";
 
-import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import type {
   MastraClientConfig,
   StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
+import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { historyRoute } from "./history.js";
@@ -65,7 +65,6 @@ import {
   isStatementNotFoundError,
   STATEMENT_ROW_CAP,
 } from "./statement.js";
-import { ResultProcessor } from "./processor.js";
 
 const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;

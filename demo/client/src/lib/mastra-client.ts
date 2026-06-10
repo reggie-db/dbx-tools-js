@@ -1,19 +1,19 @@
-import { MastraClient } from "@mastra/client-js";
-import { useEffect, useMemo, useState } from "react";
-import type { UIMessage } from "ai";
 import { usePluginClientConfig } from "@databricks/appkit-ui/react";
 import {
   chatUrl,
   embedUrl,
   historyUrl,
+  type Chart,
   type MastraClearHistoryResponse,
   type MastraClientConfig,
   type MastraHistoryResponse,
-  type Chart,
   type ServingEndpointSummary,
   type ServingEndpointsResponse,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
+import { MastraClient } from "@mastra/client-js";
+import type { UIMessage } from "ai";
+import { useEffect, useMemo, useState } from "react";
 
 /** HTTP header the Mastra plugin reads for a per-request model override. */
 const MODEL_OVERRIDE_HEADER = "X-Mastra-Model";

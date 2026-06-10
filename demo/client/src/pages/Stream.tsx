@@ -1,7 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { nanoid } from "nanoid";
-import type { UIMessage } from "ai";
-import { commonUtils, logUtils } from "@dbx-tools/shared";
 import {
   ChatView,
   type ApprovalDecision,
@@ -17,6 +13,10 @@ import {
   useMastraConfig,
   useMastraModels,
 } from "@/lib/mastra-client";
+import { commonUtils, logUtils } from "@dbx-tools/shared";
+import type { UIMessage } from "ai";
+import { nanoid } from "nanoid";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const log = logUtils.logger("client/stream");
 

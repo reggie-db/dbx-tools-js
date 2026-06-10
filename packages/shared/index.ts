@@ -18,8 +18,8 @@
  * to keep this file as the thin server-only delta.
  */
 
-export * as appkitUtils from "./src/appkit.js";
 export * as apiUtils from "./src/api.js";
+export * as appkitUtils from "./src/appkit.js";
 export * as netUtils from "./src/net.js";
 export * as projectUtils from "./src/project.js";
 

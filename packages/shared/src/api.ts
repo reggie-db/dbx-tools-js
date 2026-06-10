@@ -1,6 +1,6 @@
+import { CacheManager, getExecutionContext } from "@databricks/appkit";
 import type { CancellationToken, WorkspaceClient } from "@databricks/sdk-experimental";
 import { Context } from "@databricks/sdk-experimental";
-import { CacheManager, getExecutionContext } from "@databricks/appkit";
 
 // Direct imports (not via the barrel). The package's NodeNext
 // module resolution wants explicit `.js` extensions on relative

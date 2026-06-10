@@ -1,6 +1,5 @@
 {
   "name": "dbx-tools-js",
-  "version": "0.1.13",
   "catalog": {
     "@databricks/appkit": "^0.35",
     "@databricks/appkit-ui": "^0.35",
@@ -36,6 +35,7 @@
     "ollama-ai-provider-v2": "^3.5.1",
     "p-memoize": "^8.0.0",
     "prettier": "^3.8.3",
+    "prettier-plugin-organize-imports": "^4.3.0",
     "semver": "^7.8.1",
     "ts-to-zod": "^5.1.0",
     "typescript": "^5.9.3",
@@ -56,16 +56,15 @@
     "codegen": "bun scripts/codegen.ts",
     "create": "bun scripts/create.ts",
     "dev": "bun run --cwd=demo dev",
-    "format": "bunx syncpack format",
+    "format": "bun scripts/format.ts",
     "prebuild": "bun scripts/codegen.ts && bun run format && bun run typecheck",
     "prerelease": "bun run build",
     "pretypecheck": "bun run scripts/pretypecheck.ts",
     "readme": "bun scripts/readme.ts",
     "release": "bun scripts/release.ts",
-    "sync-version": "bun scripts/sync-version.ts",
     "tag": "bun scripts/tag.ts",
     "typecheck": "bunx --bun tsc --noEmit",
-    "version": "bunx --bun changeset version && bun scripts/sync-version.ts"
+    "version": "bunx --bun changeset version"
   },
   "type": "module",
   "workspaces": [

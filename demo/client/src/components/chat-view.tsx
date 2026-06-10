@@ -1,27 +1,3 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { UIMessage } from "ai";
-import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
-import {
-  parseMarkers,
-  stripIncompleteMarkerTail,
-  type ParsedMarker,
-} from "@dbx-tools/appkit-mastra-shared";
-import { humanizeStatus } from "@dbx-tools/genie-shared";
-import { Streamdown } from "streamdown";
-import { useChartFetch, useStatementFetch } from "../lib/mastra-client.js";
-import {
-  ArrowDownIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  CopyIcon,
-  MessageSquareIcon,
-  RefreshCcwIcon,
-  SendIcon,
-  SparklesIcon,
-  Trash2Icon,
-  UserIcon,
-  XIcon,
-} from "lucide-react";
 import {
   Avatar,
   AvatarFallback,
@@ -29,6 +5,10 @@ import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -60,7 +40,48 @@ import {
   TooltipTrigger,
   cn,
 } from "@databricks/appkit-ui/react";
+import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
+import {
+  parseMarkers,
+  stripIncompleteMarkerTail,
+  type ParsedMarker,
+} from "@dbx-tools/appkit-mastra-shared";
+import { humanizeStatus } from "@dbx-tools/genie-shared";
+import { stringUtils, type TokenizeOptions } from "@dbx-tools/shared";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+  type VisibilityState,
+} from "@tanstack/react-table";
+import type { UIMessage } from "ai";
 import ReactECharts from "echarts-for-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronsUpDownIcon,
+  ClockIcon,
+  Columns3Icon,
+  CopyIcon,
+  DownloadIcon,
+  MessageSquareIcon,
+  RefreshCcwIcon,
+  SendIcon,
+  SparklesIcon,
+  Trash2Icon,
+  UserIcon,
+  XIcon,
+} from "lucide-react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { format as formatSql } from "sql-formatter";
+import { Streamdown } from "streamdown";
+import { createShikiPlugin, highlightToHtml } from "@/lib/shiki-plugin";
+import { useChartFetch, useStatementFetch } from "../lib/mastra-client.js";
 
 const DEFAULT_SUGGESTIONS = [
   "Tell me about Spirited Away",
@@ -642,26 +663,19 @@ const MessageGroupBody = ({
  * typical case under {@link ToolCallRow}, since the question
  * is the most useful thing to keep always-visible).
  *
- * When `isRunning` is true and there's at least some content, a
- * compact spinner row pinned at the bottom signals "more events
- * still arriving" so users don't think the partial state is the
- * final answer.
- *
  * Charts produced by `prepare_chart` / `render_data` render at
  * message scope (alongside suggested questions), not inside the
  * pill.
  */
 const ToolProgressDetails = ({
   summary,
-  isRunning,
   omitQuestion,
 }: {
   summary: ToolDetailSummary;
-  isRunning: boolean;
   omitQuestion?: boolean;
 }) => {
   const renderableGroups = summary.groups.filter(isGroupRenderable);
-  if (renderableGroups.length === 0 && !isRunning) return null;
+  if (renderableGroups.length === 0) return null;
   return (
     <div className="mt-2 flex flex-col gap-2">
       {renderableGroups.map((group, gi) => (
@@ -671,12 +685,6 @@ const ToolProgressDetails = ({
           omitQuestion={omitQuestion}
         />
       ))}
-      {isRunning && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Spinner className="size-3" />
-          <span>Streaming...</span>
-        </div>
-      )}
     </div>
   );
 };
@@ -779,7 +787,7 @@ const ToolCallRow = ({ event }: { event: ToolEvent }) => {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="px-2 pb-2">
-          <ToolProgressDetails summary={summary} isRunning={isRunning} omitQuestion />
+          <ToolProgressDetails summary={summary} omitQuestion />
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -888,17 +896,55 @@ const ToolSessionPill = ({ events }: { events: ToolEvent[] }) => {
 };
 
 /**
- * Flatten and de-duplicate the suggested follow-up questions emitted
- * across all tool events on an assistant message. Within each event,
- * the **last** `suggested` progress entry wins (Genie tends to publish
- * an evolving list and the final one is the refined version). Across
- * events we union and dedupe while preserving first-seen order so
- * earlier tools' suggestions still surface.
+ * Hard cap on how many suggested follow-ups surface under one
+ * assistant message - several Genie queries each emitting a handful
+ * would otherwise flood the bubble.
+ */
+const MAX_SUGGESTIONS = 4;
+
+/**
+ * Token-set Jaccard threshold above which two suggestions are treated
+ * as the same question and the later one is dropped. Tuned to fold
+ * trivial rewordings ("Show me revenue by region" vs "Show revenue by
+ * region") while keeping genuinely distinct questions that happen to
+ * share filler words.
+ */
+const SUGGESTION_SIMILARITY = 0.6;
+
+/** Lowercased, punctuation-stripped word set used for similarity comparison. */
+function suggestionTokens(question: string): Set<string> {
+  return new Set(
+    question
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter(Boolean),
+  );
+}
+
+/** Jaccard similarity (0..1) of two token sets; 0 when either is empty. */
+function tokenSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+/**
+ * Build the short, deduped list of suggested follow-up questions for
+ * an assistant message. Within each tool event the **last**
+ * `suggested` progress entry wins (Genie publishes an evolving list;
+ * the final one is the refined version). Across events we round-robin
+ * by position so every Genie query contributes its *top* question
+ * before any query contributes a second - favoring breadth over depth.
+ * Near-duplicates (see {@link SUGGESTION_SIMILARITY}) are skipped, and
+ * the result is capped at {@link MAX_SUGGESTIONS}.
  */
 const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
   if (!events || events.length === 0) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
+
+  // One ordered question list per event that emitted any.
+  const lists: string[][] = [];
   for (const event of events) {
     const last = [...(event.progress ?? [])]
       .reverse()
@@ -906,14 +952,31 @@ const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
         (p): p is Extract<ToolProgress, { type: "suggested_questions" }> =>
           p.type === "suggested_questions",
       );
-    if (!last) continue;
-    for (const q of last.questions) {
-      if (seen.has(q)) continue;
-      seen.add(q);
-      out.push(q);
+    if (last && last.questions.length > 0) lists.push(last.questions);
+  }
+
+  const accepted: string[] = [];
+  const acceptedTokens: Set<string>[] = [];
+  const consider = (question: string): void => {
+    if (accepted.length >= MAX_SUGGESTIONS) return;
+    const tokens = suggestionTokens(question);
+    if (tokens.size === 0) return;
+    const isDuplicate = acceptedTokens.some(
+      (t) => tokenSimilarity(t, tokens) >= SUGGESTION_SIMILARITY,
+    );
+    if (isDuplicate) return;
+    accepted.push(question);
+    acceptedTokens.push(tokens);
+  };
+
+  const maxLen = lists.reduce((m, l) => Math.max(m, l.length), 0);
+  for (let i = 0; i < maxLen && accepted.length < MAX_SUGGESTIONS; i++) {
+    for (const list of lists) {
+      const question = list[i];
+      if (question !== undefined) consider(question);
     }
   }
-  return out;
+  return accepted;
 };
 
 const RoleAvatar = ({ role }: { role: UIMessage["role"] }) => (
@@ -952,35 +1015,137 @@ function colorizeDelta(content: React.ReactNode): React.ReactNode {
 }
 
 /**
- * Wrapper class layered on every markdown table. AppKit's `Table`
- * family already owns borders, hover, and color tokens - we only add:
+ * Wrapper class layered on every chat table (markdown + statement
+ * results). It frames the table as a distinct card so it reads as a
+ * separate block in the conversation. AppKit's `Table` family already
+ * owns row borders, hover, and color tokens - on top of that we add:
  *   - `not-prose` to escape `@tailwindcss/typography`'s table styles
  *     (margins, font-weight, etc.) which fight the AppKit defaults
+ *   - a `rounded-lg` border + `bg-card` + `shadow-sm` card frame with
+ *     `overflow-hidden` so the rounded corners clip the scroll area
  *   - compact `text-xs` + `tabular-nums` so columns of numbers align
  *   - right-alignment for every column except the first label column
- *   - `max-w-full overflow-x-auto` so wide tables scroll *inside* the
- *     bubble instead of pushing the whole chat past its max width.
- *     Belt-and-suspenders with the `min-w-0` we set on `ItemContent`
- *     in the assistant bubble.
+ *   - a `max-h-[60vh]` vertical cap so tall tables scroll their body
+ *     instead of running off the viewport, plus `overflow-auto` so wide
+ *     tables scroll horizontally *inside* the card rather than pushing
+ *     the chat past its max width. AppKit's `Table` nests the `<table>`
+ *     in its own scroll container (`<div>` - the wrapper's only child),
+ *     so the cap + overflow land there, making it the scroll ancestor
+ *     the sticky header pins to.
+ *   - a prominent, sticky header: tinted (`bg-muted`), bold, opaque
+ *     (so rows don't bleed through while scrolling), and divided from
+ *     the body with a bottom border.
  */
 const TABLE_WRAPPER_CLASSES = cn(
-  "not-prose my-4 max-w-full overflow-x-auto text-xs tabular-nums",
+  // Card-like frame so each table reads as a distinct block in the
+  // chat rather than bleeding into the surrounding prose.
+  "not-prose my-4 max-w-full overflow-hidden rounded-lg border border-border bg-card shadow-sm",
+  "text-xs tabular-nums",
   "[&_th:not(:first-child)]:text-right [&_td:not(:first-child)]:text-right",
+  // The inner AppKit scroll container is the scroll surface for both
+  // axes; cap its height so tall tables scroll their body in place.
+  "[&>div]:max-h-[60vh] [&>div]:overflow-auto",
+  // Make the header read as a header: opaque, tinted, bold, and pinned
+  // to the top of the scroll container with a divider beneath it.
+  "[&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10",
+  "[&_thead_th]:bg-muted [&_thead_th]:font-semibold [&_thead_th]:text-foreground",
+  "[&_thead_th]:border-b [&_thead_th]:border-border",
 );
 
 /**
- * Map streamed markdown table elements onto AppKit's Table primitives
- * so chat tables match the rest of the app instead of inheriting
+ * Minimal hast node shape we walk to lift a GFM markdown table out of
+ * Streamdown's parsed tree (handed to component overrides as the
+ * `node` prop). Only the fields the extractor reads are modeled; the
+ * real node carries more.
+ */
+interface MarkdownNode {
+  type?: string;
+  tagName?: string;
+  value?: string;
+  children?: MarkdownNode[];
+}
+
+/** Concatenate all descendant text of a hast node (cell -> plain string). */
+function markdownNodeText(node: MarkdownNode): string {
+  if (node.type === "text") return node.value ?? "";
+  return (node.children ?? []).map(markdownNodeText).join("");
+}
+
+/**
+ * Lift a markdown `<table>` hast node into the column/row shape
+ * {@link DataGrid} consumes. Header cells become column keys; blank or
+ * duplicate headers are made unique (`Column N`, `Name (2)`) so each
+ * key can double as both the row-record key and the tanstack column
+ * id. Rich cell content (links, bold, code) is flattened to text - the
+ * grid sorts and exports on plain values. Returns `null` for anything
+ * that isn't a parseable table with at least one header cell.
+ */
+function markdownTableData(
+  node: MarkdownNode | undefined,
+): { columns: string[]; rows: DataRow[] } | null {
+  if (!node || node.tagName !== "table") return null;
+  const sections = node.children ?? [];
+  const sectionRows = (tag: string): MarkdownNode[] =>
+    sections
+      .find((s) => s.tagName === tag)
+      ?.children?.filter((r) => r.tagName === "tr") ?? [];
+
+  const headerCells = (sectionRows("thead")[0]?.children ?? []).filter(
+    (c) => c.tagName === "th" || c.tagName === "td",
+  );
+  if (headerCells.length === 0) return null;
+
+  const columns: string[] = [];
+  const seen = new Map<string, number>();
+  for (const [i, cell] of headerCells.entries()) {
+    let name = markdownNodeText(cell).trim() || `Column ${i + 1}`;
+    const count = seen.get(name) ?? 0;
+    seen.set(name, count + 1);
+    if (count > 0) name = `${name} (${count + 1})`;
+    columns.push(name);
+  }
+
+  const rows: DataRow[] = sectionRows("tbody").map((tr) => {
+    const cells = (tr.children ?? []).filter(
+      (c) => c.tagName === "td" || c.tagName === "th",
+    );
+    const row: DataRow = {};
+    columns.forEach((col, i) => {
+      const cell = cells[i];
+      row[col] = cell ? markdownNodeText(cell).trim() : "";
+    });
+    return row;
+  });
+
+  return { columns, rows };
+}
+
+/**
+ * Static AppKit-Table rendering of a markdown table - the fallback
+ * when a table can't be lifted into a {@link DataGrid}, and the
+ * renderer tool-detail copy uses unconditionally (a sort/column/export
+ * toolbar would dwarf the tiny inline pills it renders in).
+ */
+const plainMarkdownTable = ({
+  children,
+  ...rest
+}: React.HTMLAttributes<HTMLTableElement>) => (
+  <div className={TABLE_WRAPPER_CLASSES}>
+    <Table {...rest}>{children}</Table>
+  </div>
+);
+
+/**
+ * Cell/section overrides shared by every markdown table renderer: map
+ * the GFM table parts onto AppKit's Table primitives so chat tables
+ * match the rest of the app instead of inheriting
  * `@tailwindcss/typography`'s defaults. The `td` override also runs
  * each cell through `colorizeDelta` so signed numeric tokens (e.g.
- * `+1.8%`, `-3.1 pts`) render in green/red.
+ * `+1.8%`, `-3.1 pts`) render in green/red. These only take effect on
+ * the {@link plainMarkdownTable} path; the {@link DataGrid} path builds
+ * its own cells from the parsed data.
  */
-const MARKDOWN_COMPONENTS = {
-  table: ({ children, ...rest }: React.HTMLAttributes<HTMLTableElement>) => (
-    <div className={TABLE_WRAPPER_CLASSES}>
-      <Table {...rest}>{children}</Table>
-    </div>
-  ),
+const MARKDOWN_TABLE_PARTS = {
   thead: ({ children, ...rest }: React.HTMLAttributes<HTMLTableSectionElement>) => (
     <TableHeader {...rest}>{children}</TableHeader>
   ),
@@ -1007,18 +1172,68 @@ const MARKDOWN_COMPONENTS = {
 };
 
 /**
+ * Markdown component map for the main assistant reply. Tables are
+ * lifted out of the parsed `node` and rendered through the interactive
+ * {@link DataGrid} (sortable, column show/hide, CSV export) so they
+ * behave exactly like statement-result tables; anything that doesn't
+ * parse cleanly falls back to {@link plainMarkdownTable}.
+ */
+const MARKDOWN_COMPONENTS = {
+  ...MARKDOWN_TABLE_PARTS,
+  table: ({
+    node,
+    children,
+    ...rest
+  }: React.HTMLAttributes<HTMLTableElement> & { node?: MarkdownNode }) => {
+    const parsed = markdownTableData(node);
+    if (parsed && parsed.columns.length > 0) {
+      return (
+        <DataGrid
+          columns={parsed.columns}
+          rows={parsed.rows}
+          truncated={false}
+          rowCount={parsed.rows.length}
+        />
+      );
+    }
+    return plainMarkdownTable({ children, ...rest });
+  },
+};
+
+/**
+ * Markdown component map for tool-detail copy (Genie summaries, SQL
+ * descriptions). Same cell/section overrides, but tables stay static
+ * via {@link plainMarkdownTable} - these render inside tiny muted pills
+ * where a full {@link DataGrid} toolbar would be oversized.
+ */
+const TOOL_MARKDOWN_COMPONENTS = {
+  ...MARKDOWN_TABLE_PARTS,
+  table: plainMarkdownTable,
+};
+
+/**
+ * Shared shiki highlighter for every `Streamdown` instance in the chat.
+ * Streamdown 2.x ships highlighting as an opt-in plugin (no built-in
+ * shiki), so without this the SQL/code blocks render as uncolored
+ * plaintext. One instance keeps a single lazily-loaded highlighter.
+ */
+const SHIKI_PLUGIN = { code: createShikiPlugin() };
+
+/**
  * Streamdown ships GFM (tables, task lists, strikethrough, autolink),
- * shiki syntax highlighting, KaTeX math, Mermaid diagrams, copy/
- * download controls on code + tables, and incremental-parse handling
- * for partial markdown chunks - all out of the box. We layer on the
- * project's heading rhythm and route tables through AppKit's Table
- * primitives via {@link MARKDOWN_COMPONENTS}, then disable the noisy
- * in-block copy/download buttons since this UI lives inside a chat
- * bubble that already has its own copy button.
+ * KaTeX math, Mermaid diagrams, copy/download controls on code +
+ * tables, and incremental-parse handling for partial markdown chunks -
+ * all out of the box. Syntax highlighting is provided via the
+ * {@link SHIKI_PLUGIN} `code` plugin. We layer on the project's heading
+ * rhythm and route tables through AppKit's Table primitives via
+ * {@link MARKDOWN_COMPONENTS}, then disable the noisy in-block copy/
+ * download buttons since this UI lives inside a chat bubble that
+ * already has its own copy button.
  */
 const AssistantMarkdown = ({ children }: { children: string }) => (
   <Streamdown
     components={MARKDOWN_COMPONENTS}
+    plugins={SHIKI_PLUGIN}
     controls={false}
     className={cn(
       "prose prose-sm dark:prose-invert max-w-none break-words",
@@ -1047,7 +1262,8 @@ const AssistantMarkdown = ({ children }: { children: string }) => (
  */
 const ToolMarkdown = ({ children }: { children: string }) => (
   <Streamdown
-    components={MARKDOWN_COMPONENTS}
+    components={TOOL_MARKDOWN_COMPONENTS}
+    plugins={SHIKI_PLUGIN}
     controls={false}
     className={cn(
       "prose prose-sm dark:prose-invert max-w-none break-words",
@@ -1065,26 +1281,96 @@ const ToolMarkdown = ({ children }: { children: string }) => (
 );
 
 /**
- * Render a SQL string as a syntax-highlighted code block via shiki
- * (bundled with `Streamdown`). Building a fenced markdown string is
- * cheaper than reaching for shiki directly and keeps the rendering
- * consistent with the rest of the chat. We strip Streamdown's
- * default copy/download chrome since the surrounding Collapsible
- * already owns the affordances for this preview.
+ * Pretty-print a Genie SQL string for display. Genie often emits the
+ * query as one long line; `sql-formatter`'s Spark dialect (the closest
+ * fit to Databricks SQL) re-indents it with uppercased keywords. The
+ * formatter throws on syntax it can't parse (e.g. Databricks-specific
+ * constructs or a partial query), so we fall back to the raw string
+ * rather than dropping the preview.
  */
-const SqlBlock = ({ sql }: { sql: string }) => (
-  <Streamdown
-    controls={false}
-    className={cn(
-      "prose prose-sm dark:prose-invert max-w-none break-words",
-      "prose-pre:my-0 prose-pre:p-2 prose-pre:text-xs prose-pre:rounded-none",
-      "prose-pre:bg-transparent prose-code:text-xs",
-      "[&_pre]:max-w-full [&_pre]:overflow-x-auto",
-    )}
-  >
-    {`\`\`\`sql\n${sql}\n\`\`\``}
-  </Streamdown>
-);
+function prettySql(sql: string): string {
+  try {
+    return formatSql(sql, { language: "spark", keywordCase: "upper" });
+  } catch {
+    return sql;
+  }
+}
+
+/**
+ * Copy-to-clipboard button with a transient confirmation state: the
+ * icon flips to a check for ~1.5s after a successful copy. Shared by
+ * the SQL preview (and available to any block that needs a compact
+ * copy affordance).
+ */
+const CopyButton = ({ value, className }: { value: string; className?: string }) => {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => clearTimeout(timer.current ?? undefined), []);
+  const onCopy = () => {
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      clearTimeout(timer.current ?? undefined);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className={cn("size-6", className)}
+          onClick={onCopy}
+        >
+          {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{copied ? "Copied" : "Copy"}</TooltipContent>
+    </Tooltip>
+  );
+};
+
+/**
+ * Render a SQL string as a syntax-highlighted code block. The query is
+ * first run through {@link prettySql} so one-line Genie output reads as
+ * formatted SQL, then highlighted to minimal inline HTML via
+ * {@link highlightToHtml} (shiki). Unlike Streamdown's code renderer,
+ * this emits a plain `<pre><code>` with only per-token color spans - no
+ * line-number gutter or per-line wrappers - so the SQL selects and
+ * copies cleanly. A {@link CopyButton} copies the formatted source. The
+ * highlighter loads asynchronously, so we render uncolored text until
+ * the tokens are ready to avoid a flash of empty space.
+ */
+const SqlBlock = ({ sql }: { sql: string }) => {
+  const formatted = useMemo(() => prettySql(sql), [sql]);
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setHtml(null);
+    void highlightToHtml(formatted, "sql").then((result) => {
+      if (active) setHtml(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [formatted]);
+  return (
+    <div className="group relative">
+      <CopyButton
+        value={formatted}
+        className="absolute right-1.5 top-1.5 z-10 bg-background/70 opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+      />
+      <pre className="max-w-full overflow-x-auto rounded-md border border-border bg-background p-3 font-mono text-[11px] leading-relaxed">
+        {html === null ? (
+          <code>{formatted}</code>
+        ) : (
+          <code dangerouslySetInnerHTML={{ __html: html }} />
+        )}
+      </pre>
+    </div>
+  );
+};
 
 /**
  * Frame shared by every chart-slot state so the layout stays
@@ -1099,6 +1385,28 @@ const CHART_FRAME_CLASSES =
 const CHART_HEIGHT_PX = 320;
 
 /**
+ * Compact inline notice rendered in place of an embed - a chart, data
+ * table, or any future `[<type>:<id>]` marker - whose backing cache
+ * entry 404'd, i.e. the embed id expired (TTL elapsed) or was never
+ * minted. The displayed noun is the marker `type` run through
+ * {@link humanizeLabel}, keeping this slot agnostic to which kinds
+ * exist. Deliberately small so an expired artifact in a long
+ * transcript reads as a quiet footnote rather than a broken,
+ * full-height frame. Only the genuine "settled 404" case reaches here;
+ * in-flight fetches and hard errors still render nothing (see
+ * {@link ChartSlot} / {@link DataSlot}).
+ */
+const ExpiredSlot = ({ type }: { type: string }) => (
+  <div className="not-prose my-3 inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
+    <ClockIcon className="size-3.5 shrink-0" />
+    <span>
+      This {humanizeLabel(type, { capitalize: false })} has expired and is no longer
+      available.
+    </span>
+  </div>
+);
+
+/**
  * Inline chart slot. Each `[chart:<chartId>]` marker in the
  * assistant's reply resolves to one of these. The Mastra plugin
  * caches the resolved Echarts
@@ -1110,27 +1418,295 @@ const CHART_HEIGHT_PX = 320;
  *
  *   - Cache entry settled with `result` -> render the full
  *     Echarts spec.
- *   - Cache entry still processing (neither `result` nor `error`
- *     set) -> render NOTHING (the hook keeps polling; the slot
- *     stays empty so prose layout is unaffected).
- *   - Cache entry settled with `error`, or 404 (unknown /
- *     TTL-expired) -> render NOTHING. Markers that can't resolve
- *     to a real chart are silently dropped rather than left as
- *     "Unavailable" placeholder frames. The Echarts `option`
- *     already carries its own `title.text`, so no separate header
- *     is needed above the chart frame.
+ *   - Fetch / long-poll in flight -> render the chart frame at its
+ *     known fixed footprint (`CHART_HEIGHT_PX`) with a centered
+ *     spinner, so the slot reserves the chart's eventual space and
+ *     the prose below doesn't reflow when it lands.
+ *   - 404 (unknown / TTL-expired id) -> render a small
+ *     {@link ExpiredSlot} notice so the reader knows the chart
+ *     used to be here but has aged out, instead of a silent gap.
+ *   - Settled with `error`, or a non-terminal payload that has
+ *     neither `result` nor `error` -> render NOTHING. Genuine
+ *     planner failures are silently dropped rather than left as
+ *     placeholder frames. The Echarts `option` already carries its
+ *     own `title.text`, so no separate header is needed above the
+ *     chart frame.
  */
 const ChartSlot = ({ chartId }: { chartId: string }) => {
-  const { data: chart } = useChartFetch(chartId);
-  if (!chart?.result) return null;
+  const { data: chart, loading, error } = useChartFetch(chartId);
+  if (chart?.result) {
+    return (
+      <div className={CHART_FRAME_CLASSES}>
+        <ReactECharts
+          option={chart.result.option}
+          style={{ height: CHART_HEIGHT_PX, width: "100%" }}
+          notMerge
+          lazyUpdate
+        />
+      </div>
+    );
+  }
+  // In-flight fetch: the chart's footprint is known ahead of time, so
+  // reserve the same frame + height with a spinner instead of
+  // collapsing - the chart fades in without shifting the prose below.
+  if (loading) {
+    return (
+      <div className={CHART_FRAME_CLASSES}>
+        <div
+          className="flex items-center justify-center"
+          style={{ height: CHART_HEIGHT_PX, width: "100%" }}
+        >
+          <Spinner className="size-5 text-muted-foreground" />
+        </div>
+      </div>
+    );
+  }
+  // Settled 404 (unknown / TTL-expired id) -> small "expired" notice.
+  // Hard-error / non-terminal payloads render nothing.
+  if (!error && chart === undefined) return <ExpiredSlot type="chart" />;
+  return null;
+};
+
+/** A statement row: column name -> cell value, as `StatementData.rows` arrives. */
+type DataRow = Record<string, unknown>;
+
+/**
+ * Card frame for {@link DataGrid} - the same rounded/bordered/elevated
+ * treatment as {@link TABLE_WRAPPER_CLASSES} so interactive statement
+ * tables and static markdown tables read as the same kind of block.
+ */
+const DATA_GRID_CARD_CLASSES = cn(
+  "not-prose my-4 max-w-full overflow-hidden rounded-lg border border-border bg-card shadow-sm",
+  "text-xs tabular-nums",
+);
+
+/** Toolbar strip across the top of a {@link DataGrid} card. */
+const DATA_GRID_TOOLBAR_CLASSES = cn(
+  "flex items-center justify-between gap-2",
+  "border-b border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground",
+);
+
+/**
+ * Scroll surface wrapping the {@link DataGrid} table. AppKit's `Table`
+ * nests its `<table>` inside its own scroll container `<div>` (this
+ * wrapper's only child), so the height cap + `overflow` must land on
+ * THAT div (`[&>div]`) - not this wrapper - to make it the single
+ * scroll box. Otherwise the inner container becomes a nested scroll
+ * box the sticky header pins to, and the header rides up with the body
+ * as the outer wrapper scrolls. With the cap on the inner div the
+ * sticky header pins to it and stays put. Header cells are tinted,
+ * bold, and opaque so rows don't bleed through while scrolling.
+ */
+const DATA_GRID_SCROLL_CLASSES = cn(
+  "[&>div]:max-h-[60vh] [&>div]:overflow-auto",
+  "[&_th:not(:first-child)]:text-right [&_td:not(:first-child)]:text-right",
+  "[&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10",
+  "[&_thead_th]:bg-muted [&_thead_th]:font-semibold [&_thead_th]:text-foreground",
+  "[&_thead_th]:border-b [&_thead_th]:border-border",
+);
+
+/**
+ * Render a cell value: blank for nullish, otherwise the string form
+ * run through {@link colorizeDelta} so signed deltas keep their
+ * green/red treatment.
+ */
+function renderDataCell(value: unknown): React.ReactNode {
+  return colorizeDelta(value == null ? "" : String(value));
+}
+
+/**
+ * Turn a raw statement column name into a human-readable header by
+ * tokenizing it (camelCase / snake_case / kebab / etc. all split) and
+ * Title-Casing each token: `total_revenue` -> "Total Revenue",
+ * `aiScore` -> "AI Score" (the tokenizer special-cases `ai`). Falls
+ * back to the original string when tokenization yields nothing (e.g. a
+ * punctuation-only column name). The raw name is still used as the
+ * column id, accessor key, and CSV header, so only the on-screen label
+ * is prettified.
+ */
+function humanizeLabel(value: string, options?: TokenizeOptions): string {
+  const tokens = [
+    ...stringUtils.tokenizeWithOptions(
+      { lowerCase: true, capitalize: true, ...options },
+      value,
+    ),
+  ];
+  return tokens.length > 0 ? tokens.join(" ") : value;
+}
+
+/**
+ * Serialize already-ordered `rows` to a CSV over `columns` and trigger
+ * a browser download. Fields are quoted only when they contain a
+ * comma, double-quote, or newline (RFC-4180 minimal quoting); embedded
+ * quotes are doubled. The blob URL is revoked right after the click so
+ * we don't leak object URLs across repeated exports.
+ */
+function downloadCsv(columns: string[], rows: DataRow[], filename: string): void {
+  const escape = (value: unknown): string => {
+    const s = value == null ? "" : String(value);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = [
+    columns.map(escape).join(","),
+    ...rows.map((row) => columns.map((c) => escape(row[c])).join(",")),
+  ].join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Interactive table for a settled statement result, built on
+ * `@tanstack/react-table` over AppKit's `Table` primitives so it
+ * matches the rest of the chat. A toolbar in the card header carries
+ * the row count, a column show/hide menu, and a CSV export of the
+ * visible columns in the current sort order. Header cells are sort
+ * toggles (click to cycle asc -> desc -> none): the active column
+ * shows a direction arrow, idle columns a faded up/down glyph. All
+ * state is client-side - the rows arrive once from {@link DataSlot}.
+ */
+const DataGrid = ({
+  columns,
+  rows,
+  truncated,
+  rowCount,
+  humanizeHeaders = false,
+}: {
+  columns: string[];
+  rows: DataRow[];
+  truncated: boolean;
+  rowCount: number;
+  /**
+   * Title-Case raw identifier column names for display (statement
+   * results). Off for markdown tables, whose headers are already
+   * human-authored and would be mangled by the tokenizer.
+   */
+  humanizeHeaders?: boolean;
+}) => {
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+
+  const columnDefs = useMemo<ColumnDef<DataRow>[]>(
+    () =>
+      columns.map(
+        (col): ColumnDef<DataRow> => ({
+          id: col,
+          accessorFn: (row) => row[col],
+          header: humanizeHeaders ? humanizeLabel(col) : col,
+          cell: (info) => renderDataCell(info.getValue()),
+          sortUndefined: "last",
+        }),
+      ),
+    [columns, humanizeHeaders],
+  );
+
+  const table = useReactTable({
+    data: rows,
+    columns: columnDefs,
+    state: { sorting, columnVisibility },
+    onSortingChange: setSorting,
+    onColumnVisibilityChange: setColumnVisibility,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  const exportCsv = () =>
+    downloadCsv(
+      table.getVisibleLeafColumns().map((c) => c.id),
+      table.getSortedRowModel().rows.map((r) => r.original),
+      "statement.csv",
+    );
+
   return (
-    <div className={CHART_FRAME_CLASSES}>
-      <ReactECharts
-        option={chart.result.option}
-        style={{ height: CHART_HEIGHT_PX, width: "100%" }}
-        notMerge
-        lazyUpdate
-      />
+    <div className={DATA_GRID_CARD_CLASSES}>
+      <div className={DATA_GRID_TOOLBAR_CLASSES}>
+        <span>
+          {truncated
+            ? `Showing ${rows.length} of ${rowCount} rows`
+            : `${rows.length} ${rows.length === 1 ? "row" : "rows"}`}
+        </span>
+        <div className="flex items-center gap-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs">
+                <Columns3Icon className="size-3.5" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+              {table.getAllLeafColumns().map((column) => (
+                <DropdownMenuCheckboxItem
+                  key={column.id}
+                  className="text-xs"
+                  checked={column.getIsVisible()}
+                  // Keep the menu open while toggling several columns.
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={(value) => column.toggleVisibility(!!value)}
+                >
+                  {String(column.columnDef.header)}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            onClick={exportCsv}
+          >
+            <DownloadIcon className="size-3.5" />
+            Export
+          </Button>
+        </div>
+      </div>
+      <div className={DATA_GRID_SCROLL_CLASSES}>
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((group) => (
+              <TableRow key={group.id}>
+                {group.headers.map((header) => {
+                  const sorted = header.column.getIsSorted();
+                  return (
+                    <TableHead key={header.id}>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-foreground"
+                        onClick={header.column.getToggleSortingHandler()}
+                      >
+                        {flexRender(
+                          header.column.columnDef.header,
+                          header.getContext(),
+                        )}
+                        {sorted === "asc" ? (
+                          <ArrowUpIcon className="size-3" />
+                        ) : sorted === "desc" ? (
+                          <ArrowDownIcon className="size-3" />
+                        ) : (
+                          <ChevronsUpDownIcon className="size-3 opacity-40" />
+                        )}
+                      </button>
+                    </TableHead>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {table.getRowModel().rows.map((row) => (
+              <TableRow key={row.id}>
+                {row.getVisibleCells().map((cell) => (
+                  <TableCell key={cell.id}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 };
@@ -1139,57 +1715,36 @@ const ChartSlot = ({ chartId }: { chartId: string }) => {
  * Inline data-table slot. Each `[data:<statement_id>]` marker in
  * the assistant's reply resolves to one of these. A single
  * OBO-scoped fetch against `embedPathTemplate` (`/embed/data/:id`)
- * returns the columns + rows; the slot renders them through the same
- * `MARKDOWN_COMPONENTS` Table family used for markdown tables so
- * styling stays uniform across the bubble.
+ * returns the columns + rows; the slot hands them to {@link DataGrid}
+ * for an interactive (sortable, column-toggle, CSV-export) table.
  *
  * Render contract (matches {@link ChartSlot}):
  *
- *   - Fetch in flight, statement unknown / 404, or empty rows
- *     -> render NOTHING. Stale markers in persisted transcripts
- *     silently drop so a reload doesn't leave dead frames.
- *   - Data settled with rows -> render an inline table with a
- *     trailing "showing N of M" footer when the server-side cap
- *     truncated the result set.
+ *   - 404 (unknown / TTL-expired id) -> render a small
+ *     {@link ExpiredSlot} notice so the reader knows a table aged
+ *     out rather than seeing a silent gap.
+ *   - Fetch in flight, hard error, or empty rows -> render
+ *     NOTHING. Stale markers in persisted transcripts stay quiet
+ *     so a reload doesn't leave dead frames.
+ *   - Data settled with rows -> render the {@link DataGrid}, whose
+ *     toolbar surfaces the "showing N of M rows" affordance when the
+ *     server-side cap truncated the result set.
  */
 const DataSlot = ({ statementId }: { statementId: string }) => {
-  const { data } = useStatementFetch(statementId);
+  const { data, loading, error } = useStatementFetch(statementId);
+  // Settled 404 (unknown / TTL-expired id) -> small "expired" notice.
+  // In-flight fetches, hard errors, and empty result sets render
+  // nothing so stale markers in reloaded transcripts stay quiet.
+  if (!loading && !error && data === undefined) return <ExpiredSlot type="data" />;
   if (!data || data.rows.length === 0) return null;
   return (
-    <div className={TABLE_WRAPPER_CLASSES}>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {data.columns.map((c) => (
-              <TableHead key={c}>{c}</TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {data.rows.map((row, i) => (
-            <TableRow key={i}>
-              {data.columns.map((c) => {
-                const v = row[c];
-                const text = v == null ? "" : String(v);
-                return <TableCell key={c}>{colorizeDelta(text)}</TableCell>;
-              })}
-            </TableRow>
-          ))}
-        </TableBody>
-        {data.truncated && (
-          <TableFooter>
-            <TableRow>
-              <TableCell
-                colSpan={data.columns.length}
-                className="text-muted-foreground"
-              >
-                Showing {data.rows.length} of {data.rowCount} rows
-              </TableCell>
-            </TableRow>
-          </TableFooter>
-        )}
-      </Table>
-    </div>
+    <DataGrid
+      columns={data.columns}
+      rows={data.rows}
+      truncated={data.truncated}
+      rowCount={data.rowCount}
+      humanizeHeaders
+    />
   );
 };
 

@@ -31,10 +31,10 @@ import { describe, expect, it } from "bun:test";
 import pMemoize from "p-memoize";
 
 import {
-  foundationModelProfile,
-  type ServingEndpoint,
   foundationModelClass,
+  foundationModelProfile,
   foundationModelVersion,
+  type ServingEndpoint,
 } from "../src/models";
 
 const SERVING_ENDPOITNS_JSON = `

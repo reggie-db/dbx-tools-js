@@ -181,7 +181,9 @@ export const MastraClearHistoryResponseSchema = z.object({
   threadId: z.string(),
   cleared: z.number(),
 });
-export type MastraClearHistoryResponse = z.infer<typeof MastraClearHistoryResponseSchema>;
+export type MastraClearHistoryResponse = z.infer<
+  typeof MastraClearHistoryResponseSchema
+>;
 
 /* --------------------------------- charts --------------------------------- */
 

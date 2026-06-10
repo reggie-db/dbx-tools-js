@@ -11,10 +11,10 @@
 //
 // Run via `bun run prebuild`. Idempotent.
 
-import { isAbsolute } from "node:path";
 import { applyEdits, modify, parse } from "jsonc-parser";
-import { discoverTsconfigs, ROOT, toAbsolute, toRelative } from "./util.js";
 import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { discoverTsconfigs, ROOT, toAbsolute, toRelative } from "./util.js";
 
 const FORMAT = { insertSpaces: true, tabSize: 2 } as const;
 

@@ -1,3 +1,6 @@
+import Chat from "@/pages/Chat";
+import Stream from "@/pages/Stream";
+import { Button, Separator } from "@databricks/appkit-ui/react";
 import {
   BrowserRouter,
   Link,
@@ -6,9 +9,6 @@ import {
   Routes,
   useLocation,
 } from "react-router-dom";
-import { Button, Separator } from "@databricks/appkit-ui/react";
-import Chat from "@/pages/Chat";
-import Stream from "@/pages/Stream";
 
 // Real browser routes so deep links (and refreshing on `/stream`) land
 // on the right page. AppKit's dev and static servers already SPA-fallback

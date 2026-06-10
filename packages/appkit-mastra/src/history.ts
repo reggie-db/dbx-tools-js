@@ -16,6 +16,11 @@
  * session-cookie logic stays the single source of truth in `server.ts`.
  */
 
+import type {
+  MastraClearHistoryResponse,
+  MastraHistoryResponse,
+  MastraHistoryUIMessage,
+} from "@dbx-tools/appkit-mastra-shared";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { toAISdkV5Messages } from "@mastra/ai-sdk/ui";
 import type { Agent } from "@mastra/core/agent";
@@ -24,13 +29,8 @@ import {
   MASTRA_RESOURCE_ID_KEY,
   MASTRA_THREAD_ID_KEY,
 } from "@mastra/core/request-context";
-import { registerApiRoute } from "@mastra/core/server";
 import type { ContextWithMastra } from "@mastra/core/server";
-import type {
-  MastraClearHistoryResponse,
-  MastraHistoryResponse,
-  MastraHistoryUIMessage,
-} from "@dbx-tools/appkit-mastra-shared";
+import { registerApiRoute } from "@mastra/core/server";
 
 const log = logUtils.logger("mastra/history");
 
@@ -237,9 +237,7 @@ export function historyRoute(options: HistoryRouteOptions) {
         error: c.json({ error: "thread id missing from request context" }, 400),
       } as const;
     }
-    const resourceId = requestContext.get(MASTRA_RESOURCE_ID_KEY) as
-      | string
-      | undefined;
+    const resourceId = requestContext.get(MASTRA_RESOURCE_ID_KEY) as string | undefined;
     return { agentId, agent, threadId, resourceId } as const;
   };
 

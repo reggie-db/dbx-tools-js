@@ -6,10 +6,10 @@ import {
   toDescription,
   toIdentifier,
   toIdentifierWithOptions,
-  toSlug,
-  toSlugWithOptions,
   tokenize,
   tokenizeWithOptions,
+  toSlug,
+  toSlugWithOptions,
   toUniqueSlug,
   trimToNull,
 } from "../src/string.js";

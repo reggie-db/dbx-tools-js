@@ -18,6 +18,16 @@
 
 import { describe, expect, it } from "bun:test";
 
+import type {
+  AttachmentEvent,
+  GenieAttachment,
+  GenieChatEvent,
+  GenieChatEventFields,
+  GenieChatLocation,
+  GenieMessage,
+  GenieThought,
+  ThinkingEvent,
+} from "@dbx-tools/genie-shared";
 import {
   detectAttachmentAdded,
   detectQuery,
@@ -29,16 +39,6 @@ import {
   detectThinking,
   eventDetector,
   eventsFromMessage,
-} from "@dbx-tools/genie-shared";
-import type {
-  AttachmentEvent,
-  GenieAttachment,
-  GenieChatEvent,
-  GenieChatEventFields,
-  GenieChatLocation,
-  GenieMessage,
-  GenieThought,
-  ThinkingEvent,
 } from "@dbx-tools/genie-shared";
 
 /* ----------------------------- fixtures ---------------------------- */
@@ -354,12 +354,7 @@ describe("detectQuery", () => {
     };
     expect(detectQuery.detect(same, same, makeLoc(), 0)).toBeUndefined();
     expect(
-      detectQuery.detect(
-        { attachment_id: "q1", query: {} },
-        undefined,
-        makeLoc(),
-        0,
-      ),
+      detectQuery.detect({ attachment_id: "q1", query: {} }, undefined, makeLoc(), 0),
     ).toBeUndefined();
   });
 });
@@ -488,9 +483,7 @@ describe("detectSuggestedQuestions", () => {
       attachment_id: "sq1",
       suggested_questions: { questions: ["Foo?", "Bar?"] },
     };
-    expect(
-      detectSuggestedQuestions.detect(same, same, makeLoc(), 0),
-    ).toBeUndefined();
+    expect(detectSuggestedQuestions.detect(same, same, makeLoc(), 0)).toBeUndefined();
   });
 });
 
@@ -527,11 +520,7 @@ describe("eventsFromMessage", () => {
       attachments: [{ attachment_id: "q1", query: { query: "SELECT 1" } }],
     });
     const events = collect(curr, undefined);
-    expect(events.map((e) => e.type)).toEqual([
-      "status",
-      "attachment",
-      "query",
-    ]);
+    expect(events.map((e) => e.type)).toEqual(["status", "attachment", "query"]);
   });
 
   it("fans out per-attachment events with the correct index", () => {
@@ -649,9 +638,7 @@ describe("eventsFromMessage", () => {
       ],
     });
     const events = collect(curr, undefined);
-    const thinking = events.filter(
-      (e): e is ThinkingEvent => e.type === "thinking",
-    );
+    const thinking = events.filter((e): e is ThinkingEvent => e.type === "thinking");
     expect(thinking).toHaveLength(2);
     expect(thinking[0]!.thought_type).toBe("THOUGHT_TYPE_DESCRIPTION");
     expect(thinking[1]!.thought_type).toBe("THOUGHT_TYPE_STEPS");

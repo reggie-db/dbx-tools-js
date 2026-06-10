@@ -24,10 +24,7 @@
  */
 
 import { logUtils } from "@dbx-tools/shared";
-import type {
-  InputProcessor,
-  ProcessInputArgs,
-} from "@mastra/core/processors";
+import type { InputProcessor, ProcessInputArgs } from "@mastra/core/processors";
 
 const log = logUtils.logger("mastra/processor/strip-stale-charts");
 
@@ -76,13 +73,10 @@ export const stripStaleChartsProcessor: InputProcessor = {
         // the chartId there is the model's outgoing claim, not
         // anything it could re-reference; only `result` carries
         // ids that subsequent turns might copy.
-        if (
-          (part as { type?: unknown }).type !== "tool-invocation"
-        ) {
+        if ((part as { type?: unknown }).type !== "tool-invocation") {
           continue;
         }
-        const inv = (part as { toolInvocation?: { result?: unknown } })
-          .toolInvocation;
+        const inv = (part as { toolInvocation?: { result?: unknown } }).toolInvocation;
         if (!inv || inv.result === undefined) continue;
         const before = inv.result;
         const after = stripChartIds(before);

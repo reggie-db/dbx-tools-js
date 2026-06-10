@@ -51,14 +51,14 @@
 // publishes work with zero `npm login` / `bun login` and the user's
 // real `~/.npmrc` (with real registry tokens) is never touched.
 
+import { Command, Option } from "commander";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import { Command, Option } from "commander";
 import {
   discoverPackages,
+  exec,
   fail,
   ROOT,
-  exec,
   writeJson,
   type PackageJson,
   type WorkspacePackage,

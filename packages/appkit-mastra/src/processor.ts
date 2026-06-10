@@ -1,10 +1,4 @@
-import type {
-  Processor,
-  ProcessAPIErrorArgs,
-  ProcessAPIErrorResult,
-  ProcessOutputStreamArgs,
-} from "@mastra/core/processors";
-import type { ChunkType } from "@mastra/core/workflows";
+import type { Processor } from "@mastra/core/processors";
 
 export class ResultProcessor implements Processor {
   id = "result-processor";

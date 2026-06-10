@@ -15,13 +15,11 @@
 // or string literal needed at the call site.
 
 import {
-  CacheManager,
   createApp,
   getExecutionContext,
   InitializationError,
 } from "@databricks/appkit";
 import type { NameLike } from "./common.js";
-import { memoize } from "./common.js";
 
 // Minimal structural shape of `this.context`. We mirror only the method
 // we touch instead of depending on AppKit's `PluginContext` type, which

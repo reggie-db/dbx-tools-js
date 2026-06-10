@@ -14,19 +14,19 @@
  */
 
 import { appkitUtils, logUtils, stringUtils } from "@dbx-tools/shared";
-import { Agent } from "@mastra/core/agent";
 import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
-import { createTool } from "@mastra/core/tools";
+import { Agent } from "@mastra/core/agent";
 import type { Tool } from "@mastra/core/tools";
+import { createTool } from "@mastra/core/tools";
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
+import { buildRenderDataTool } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { buildGenieToolkitProvider, resolveGenieSpaces } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
 import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
-import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
-import { buildRenderDataTool } from "./chart.js";
 import { ResultProcessor } from "./processor.js";
+import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
 
 /**
  * Tool record accepted by every Mastra `Agent.tools` field and by the

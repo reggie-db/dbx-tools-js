@@ -38,11 +38,11 @@
  */
 
 import {
+  messageStatusSchema as MessageStatusSchema,
   genieAttachmentSchema as SDKGenieAttachmentSchema,
   genieMessageSchema as SDKGenieMessageSchema,
   genieQueryAttachmentSchema as SDKGenieQueryAttachmentSchema,
   genieSpaceSchema as SDKGenieSpaceSchema,
-  messageStatusSchema as MessageStatusSchema,
   type MessageStatus,
 } from "@dbx-tools/sdk-shared";
 import { stringUtils } from "@dbx-tools/shared";

@@ -22,16 +22,13 @@
  *   DATABRICKS_CONFIG_PROFILE       (or any other SDK auth env)
  */
 
-import readline from "node:readline/promises";
 import { WorkspaceClient } from "@databricks/sdk-experimental";
-import type {
-  GenieWriterEvent,
-  MinimalWriter,
-} from "@dbx-tools/appkit-mastra-shared";
+import type { GenieWriterEvent, MinimalWriter } from "@dbx-tools/appkit-mastra-shared";
 import { type GenieMessage, humanizeStatus } from "@dbx-tools/genie-shared";
 import { appkitUtils } from "@dbx-tools/shared";
 import { RequestContext } from "@mastra/core/request-context";
 import type { Tool } from "@mastra/core/tools";
+import readline from "node:readline/promises";
 
 import { MASTRA_USER_KEY, type MastraPluginConfig, type User } from "../src/config.js";
 import { buildGenieTools, DEFAULT_GENIE_ALIAS } from "../src/genie.js";
@@ -69,9 +66,7 @@ function renderWireEvent(event: GenieWriterEvent): void {
       process.stdout.write(`[text         ] ${event.text}\n`);
       break;
     case "suggested_questions":
-      process.stdout.write(
-        `[suggested    ] ${event.questions.length} question(s)\n`,
-      );
+      process.stdout.write(`[suggested    ] ${event.questions.length} question(s)\n`);
       for (const q of event.questions) {
         process.stdout.write(`                  - ${q}\n`);
       }
@@ -93,9 +88,7 @@ function renderWireEvent(event: GenieWriterEvent): void {
       // Unknown variant (newer wire events, etc.) - log the
       // discriminator so the CLI tells us when the vocabulary
       // grew under us, without crashing the loop.
-      process.stdout.write(
-        `[${(event as { type?: string }).type ?? "unknown"}]\n`,
-      );
+      process.stdout.write(`[${(event as { type?: string }).type ?? "unknown"}]\n`);
       break;
   }
 }
@@ -252,7 +245,9 @@ async function main(): Promise<void> {
   });
   const askGenie = tools.ask_genie as Tool | undefined;
   if (!askGenie) {
-    throw new Error("buildGenieTools did not register ask_genie (expected for default alias)");
+    throw new Error(
+      "buildGenieTools did not register ask_genie (expected for default alias)",
+    );
   }
   // One RequestContext per CLI invocation: the Genie tools
   // re-read `MASTRA_USER_KEY` on every execute, so a single

@@ -33,41 +33,55 @@ import { z } from "zod";
 const log = logUtils.logger("mastra/tool/send-email");
 
 const emailInputSchema = z.object({
-  to: z.string().describe(stringUtils.toDescription(`
+  to: z.string().describe(
+    stringUtils.toDescription(`
     Single recipient email address (e.g. "alice@example.com"). For
     multiple recipients, comma-separate them yourself.
-  `)),
-  subject: z.string().describe(stringUtils.toDescription(`
+  `),
+  ),
+  subject: z.string().describe(
+    stringUtils.toDescription(`
     Subject line.
-  `)),
-  body: z.string().describe(stringUtils.toDescription(`
+  `),
+  ),
+  body: z.string().describe(
+    stringUtils.toDescription(`
     Email body. Plain text or markdown; the renderer downstream decides
     which to honour. Be specific - the recipient may not have any
     context the model has from prior chat turns.
-  `)),
+  `),
+  ),
   cc: z
     .array(z.string())
     .optional()
-    .describe(stringUtils.toDescription(`
+    .describe(
+      stringUtils.toDescription(`
       Optional CC recipients.
-    `)),
+    `),
+    ),
   bcc: z
     .array(z.string())
     .optional()
-    .describe(stringUtils.toDescription(`
+    .describe(
+      stringUtils.toDescription(`
       Optional BCC recipients.
-    `)),
+    `),
+    ),
 });
 
 const emailOutputSchema = z.object({
-  sent: z.boolean().describe(stringUtils.toDescription(`
+  sent: z.boolean().describe(
+    stringUtils.toDescription(`
     True when the email was dispatched. The current implementation
     always returns true after console-logging the would-be email; swap
     in a real provider to make this meaningful.
-  `)),
-  recipient: z.string().describe(stringUtils.toDescription(`
+  `),
+  ),
+  recipient: z.string().describe(
+    stringUtils.toDescription(`
     Echo of the \`to\` field for confirmation.
-  `)),
+  `),
+  ),
 });
 
 /** Options accepted by {@link buildEmailTool}. */
@@ -123,9 +137,7 @@ export function buildEmailTool(opts: BuildEmailToolOptions = {}) {
     outputSchema: emailOutputSchema,
     requireApproval: true,
     execute: async (input) => {
-      const { to, subject, body, cc, bcc } = input as z.infer<
-        typeof emailInputSchema
-      >;
+      const { to, subject, body, cc, bcc } = input as z.infer<typeof emailInputSchema>;
       // Default behaviour: dump the email to the server console so
       // demos can see the gate fire end-to-end without a real
       // provider. Replace by passing `opts.send`.

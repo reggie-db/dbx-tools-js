@@ -39,13 +39,13 @@
  *   DATABRICKS_CONFIG_PROFILE   (or any other SDK auth env)
  */
 
+import { WorkspaceClient } from "@databricks/sdk-experimental";
+import type { GenieChatEvent, GenieChatEventType } from "@dbx-tools/genie-shared";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import yaml from "yaml";
-import { WorkspaceClient } from "@databricks/sdk-experimental";
-import type { GenieChatEvent, GenieChatEventType } from "@dbx-tools/genie-shared";
 import { genieEventChat } from "../src/chat.js";
 
 // All event files for one process invocation live under this dir.
@@ -113,22 +113,16 @@ function renderEvent(event: GenieChatEvent): void {
       );
       break;
     case "thinking":
-      process.stdout.write(
-        `[thinking     ] ${file}  ${event.thought_type}\n`,
-      );
+      process.stdout.write(`[thinking     ] ${file}  ${event.thought_type}\n`);
       break;
     case "text":
       process.stdout.write(`[text         ] ${file}\n`);
       break;
     case "query":
-      process.stdout.write(
-        `[query        ] ${file}  ${event.sql.length} chars\n`,
-      );
+      process.stdout.write(`[query        ] ${file}  ${event.sql.length} chars\n`);
       break;
     case "statement":
-      process.stdout.write(
-        `[statement    ] ${file}  ${event.statement_id}\n`,
-      );
+      process.stdout.write(`[statement    ] ${file}  ${event.statement_id}\n`);
       break;
     case "rows":
       process.stdout.write(
@@ -141,9 +135,7 @@ function renderEvent(event: GenieChatEvent): void {
       );
       break;
     case "result":
-      process.stdout.write(
-        `[result       ] ${file}  status=${event.status}\n`,
-      );
+      process.stdout.write(`[result       ] ${file}  status=${event.status}\n`);
       break;
   }
 }
@@ -200,9 +192,7 @@ async function main(): Promise<void> {
   }
 
   mkdirSync(RUN_DIR, { recursive: true });
-  process.stdout.write(
-    `writing events to ${path.relative(process.cwd(), RUN_DIR)}\n`,
-  );
+  process.stdout.write(`writing events to ${path.relative(process.cwd(), RUN_DIR)}\n`);
 
   const client = new WorkspaceClient({});
   // Caller-threaded multi-turn: every question reuses the
@@ -245,9 +235,7 @@ async function fetchAndWriteQuery(
     statement_id: statementId,
   });
   const file = writeEvent("rows-data", { statement_id: statementId, response });
-  process.stdout.write(
-    `[rows-data    ] ${file}  for statement ${statementId}\n`,
-  );
+  process.stdout.write(`[rows-data    ] ${file}  for statement ${statementId}\n`);
 }
 
 main().catch((err) => {

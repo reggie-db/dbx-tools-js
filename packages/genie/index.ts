@@ -12,5 +12,5 @@
  * (types + sync functions) and safe for any runtime.
  */
 
-export * from "./src/chat.js";
 export * from "@dbx-tools/genie-shared";
+export * from "./src/chat.js";
