@@ -1,0 +1,41 @@
+{
+  "name": "@dbx-tools/appkit-mastra-ui",
+  "version": "0.1.31",
+  "dependencies": {
+    "@dbx-tools/appkit-mastra-shared": "workspace:*",
+    "@dbx-tools/genie-shared": "workspace:*",
+    "@dbx-tools/shared": "workspace:*",
+    "@mastra/client-js": "catalog:",
+    "@tanstack/react-table": "^8.21.3",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "lucide-react": "^0.554.0",
+    "nanoid": "^5.1.11",
+    "shiki": "^4.2.0",
+    "sql-formatter": "^15.8.0",
+    "streamdown": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  },
+  "exports": {
+    "./react": {
+      "source": "./src/react/index.ts",
+      "types": "./dist/react/index.d.ts",
+      "default": "./dist/react/index.js"
+    },
+    "./styles.css": "./src/styles.css",
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/react/index.js",
+  "module": "./src/react/index.ts",
+  "peerDependencies": {
+    "@databricks/appkit-ui": "catalog:",
+    "ai": "^5.0.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "type": "module",
+  "types": "./dist/react/index.d.ts"
+}

@@ -1,0 +1,35 @@
+/*
+ * @dbx-tools/appkit-mastra-ui stylesheet.
+ *
+ * Import once from the host app's Tailwind entry, after Tailwind and
+ * your AppKit-UI theme:
+ *
+ *   @import "tailwindcss";
+ *   @import "@databricks/appkit-ui/styles.css";
+ *   @import "@dbx-tools/appkit-mastra-ui/styles.css";
+ *
+ * This file deliberately defines NO core design tokens (`--background`,
+ * `--primary`, `--success`, ...). The chat UI styles exclusively with
+ * AppKit semantic tokens, so it inherits whatever theme the host app
+ * provides and restyles to match the surrounding brand for free.
+ *
+ * What it does provide:
+ *   1. Streamdown's base stylesheet (the markdown/code-block layout the
+ *      chat bubbles render through).
+ *   2. `@source` so the consumer's Tailwind scans this package's class
+ *      strings and generates the utilities the components rely on. The
+ *      path is relative to this file and resolves against the published
+ *      `src/` tree (shipped in `files`), so it works both in-repo (dev,
+ *      source condition) and for installed consumers.
+ *   3. A token-paint shim that pulls the per-token color shiki sets on
+ *      each highlighted code span out of the `--sdm-c` custom property
+ *      so syntax highlighting actually paints.
+ */
+
+@import "streamdown/styles.css";
+
+@source "./react";
+
+[data-streamdown="code-block-body"] code span {
+  color: var(--sdm-c, inherit);
+}

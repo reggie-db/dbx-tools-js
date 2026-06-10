@@ -7,7 +7,7 @@ rules under `.cursor/rules/`.
 ## Repo at a glance
 
 Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
-Databricks Apps. Eight publishable packages plus a runnable demo. See
+Databricks Apps. Nine publishable packages plus a runnable demo. See
 the root [`README.md`](README.md) for the full package table.
 
 ```bash

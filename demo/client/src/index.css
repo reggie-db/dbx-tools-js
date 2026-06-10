@@ -1,19 +1,10 @@
 @import "@databricks/appkit-ui/styles.css";
-@import "streamdown/styles.css";
 @import "tailwindcss";
-
-/* Streamdown syntax-highlights code (shiki) by writing each token's
-   color to an inline `--sdm-c` custom property and leaning on a
-   Tailwind arbitrary utility (`text-[var(--sdm-c,inherit)]`) to paint
-   it. That utility only gets generated if Tailwind scans streamdown's
-   compiled JS in node_modules - brittle under Bun's hoisted/symlinked
-   layout (a relative `@source` has to guess the directory depth and
-   Tailwind won't follow the package symlink). Paint the tokens
-   directly from the variable instead, so colors don't depend on where
-   or how streamdown is installed. */
-[data-streamdown="code-block-body"] code span {
-  color: var(--sdm-c, inherit);
-}
+/* Chat UI styles: pulls in Streamdown's base CSS, registers the
+   package source with Tailwind (`@source`), and paints shiki's
+   per-token colors. Defines no design tokens - the chat inherits this
+   app's AppKit theme. */
+@import "@dbx-tools/appkit-mastra-ui/styles.css";
 
 html,
 body,

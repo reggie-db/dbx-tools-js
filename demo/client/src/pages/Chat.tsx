@@ -1,10 +1,11 @@
-import { ChatView, type ApprovalDecision } from "@/components/chat-view";
 import {
+  ChatView,
   clearMastraHistory,
   useChatUrl,
   useMastraConfig,
   useMastraModels,
-} from "@/lib/mastra-client";
+  type ApprovalDecision,
+} from "@dbx-tools/appkit-mastra-ui/react";
 import { useChat } from "@ai-sdk/react";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { DefaultChatTransport } from "ai";

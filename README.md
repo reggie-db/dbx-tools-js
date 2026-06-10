@@ -14,6 +14,7 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 | [`@dbx-tools/appkit-serving`](packages/appkit-serving)                     | `packages/appkit-serving`       | yes                  |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra)                       | `packages/appkit-mastra`        | yes                  |
 | [`@dbx-tools/appkit-mastra-shared`](packages/appkit-mastra-shared)         | `packages/appkit-mastra-shared` | yes                  |
+| [`@dbx-tools/appkit-mastra-ui`](packages/appkit-mastra-ui)                 | `packages/appkit-mastra-ui`     | yes                  |
 | [`@dbx-tools/appkit-demo`](demo)                                           | `demo`                          | no (`private: true`) |
 
 `shared` provides small utilities (typed plugin lookup, cookie parsing,
@@ -49,6 +50,13 @@ chart specs.
 `appkit-mastra-shared` is the dependency-free wire-format contract (types +
 `chatUrl` / `historyUrl` helpers + Genie writer-event vocabulary) that the
 React client imports without dragging in `pg`, `fastembed`, or Mastra itself.
+`appkit-mastra-ui` is the React surface for the Mastra plugin, packaged like
+`@databricks/appkit-ui`: a `./react` subpath plus a `./styles.css` entry,
+styled entirely with AppKit semantic tokens so it inherits the host theme. It
+ships a self-contained `MastraChat` drop-in (streaming, tool-session pills,
+approvals, model picker, history pagination, chart/data embeds, and SQL
+highlighting) that wires itself from the Mastra plugin config, plus the
+controlled `ChatView` shell for callers that own message state themselves.
 
 ### Memory in action
 

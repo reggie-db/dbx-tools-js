@@ -27,14 +27,16 @@ Generated from the AppKit `app init` template, then adapted to:
   place. Unknown or TTL-expired ids resolve as nothing so the
   prose flows undisturbed. See `packages/appkit-mastra/README.md`
   for the full contract.
-- Render the chat UI exclusively with `@databricks/appkit-ui`
-  primitives (no `ai-elements`, no vendored shadcn) plus
-  `streamdown` for GitHub-flavored markdown rendering (tables, task
-  lists, strikethrough) with Shiki syntax highlighting and KaTeX
-  math.
-- Ship two pages backed by one shared `ChatView` component: a
-  vanilla AI SDK `useChat` flow (`/chat`) and a Mastra `MastraClient`
-  streaming flow (`/stream`). Both include a model-picker dropdown
+- Render the chat UI with the publishable `@dbx-tools/appkit-mastra-ui`
+  package (built on `@databricks/appkit-ui` primitives plus
+  `streamdown` for GitHub-flavored markdown with Shiki syntax
+  highlighting and KaTeX math). The demo is a consumer of that
+  package, not the home of the chat code.
+- Ship two pages that exercise both entry points of the package: a
+  vanilla AI SDK `useChat` flow (`/chat`) that drives the controlled
+  `ChatView`, and the self-contained `MastraChat` drop-in (`/stream`)
+  that wires itself from the Mastra plugin config. Both include a
+  model-picker dropdown
   driven by `GET /api/mastra/models` (the live serving-endpoint
   catalogue) and pass the selection through an `X-Mastra-Model`
   header. Lazy-loads older history on scroll-up via
@@ -63,16 +65,10 @@ demo/
       main.tsx            # TanStack Router shell + ErrorBoundary
       App.tsx             # router root
       ErrorBoundary.tsx
-      index.css           # @import "@databricks/appkit-ui/styles.css" + tailwindcss + tw-animate-css
-      lib/
-        mastra-client.ts  # useMastraClient + useMastraModels + fetchMastraHistory + useChartFetch
-        utils.ts          # cn() helper
-      components/
-        chat-view.tsx     # shared chat surface: appkit-ui primitives + streamdown +
-                          # ChartSlot (Echarts) long-polling the chart cache at [chart:<id>] markers
+      index.css           # @import appkit-ui/styles.css + tailwindcss + @dbx-tools/appkit-mastra-ui/styles.css
       pages/
-        Chat.tsx          # /chat - @ai-sdk/react useChat against /api/mastra/route/chat
-        Stream.tsx        # /stream - MastraClient.stream() with live tool-output events
+        Chat.tsx          # /chat - @ai-sdk/react useChat -> controlled <ChatView> from @dbx-tools/appkit-mastra-ui
+        Stream.tsx        # /stream - <MastraChat> drop-in from @dbx-tools/appkit-mastra-ui
 ```
 
 All sibling deps (`@dbx-tools/appkit-*`) are wired through `workspace:*`, so

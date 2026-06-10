@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "${configDir}/src",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    // This browser/React package is consumed through a bundler, and its
+    // dependency graph only type-checks cleanly under bundler-style
+    // resolution: `echarts-for-react` ships an ESM `export default` in a
+    // CJS package (resolvable as a JSX component only with synthetic
+    // defaults, which `bundler` enables), and `@mastra/client-js`
+    // resolves transitive deps like `eventsource-parser` to raw `.ts`
+    // source via the workspace `source` condition. So we override the
+    // root build's NodeNext settings for this one package: `bundler`
+    // resolution + `allowImportingTsExtensions` to read that `.ts`
+    // source, with `rewriteRelativeImportExtensions` keeping emit legal
+    // (our own imports use `.js` and are left untouched).
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["${configDir}/src"],
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "**/build",
+    "**/tmp",
+    "${configDir}/dist",
+    "${configDir}/**/*.test.ts",
+    "${configDir}/**/*.test.tsx"
+  ]
+}
