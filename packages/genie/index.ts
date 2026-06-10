@@ -1,8 +1,9 @@
 /**
  * `@dbx-tools/genie` public surface.
  *
- * Bundles the package's Node-side chat driver with a re-export of
- * the pure `@dbx-tools/genie-shared` wire vocabulary so a single
+ * Bundles the package's Node-side drivers (live chat plus space
+ * metadata / curated-question lookup) with a re-export of the pure
+ * `@dbx-tools/genie-shared` wire vocabulary so a single
  * `from "@dbx-tools/genie"` import serves server-side consumers
  * that need both the live driver and the protocol types.
  *
@@ -14,3 +15,4 @@
 
 export * from "@dbx-tools/genie-shared";
 export * from "./src/chat.js";
+export * from "./src/space.js";

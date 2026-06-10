@@ -68,6 +68,14 @@ import { z } from "zod";
  *         unknown / expired upstream.
  *     Clients should call {@link embedUrl} rather than substituting
  *     the placeholders by hand.
+ *   - `suggestionsPath`: starter-question endpoint for the **default**
+ *     agent: `${basePath}/suggestions`. Returns the agent's Genie
+ *     space curated sample questions (`{ questions }`); an empty list
+ *     when the agent has no Genie space. See {@link suggestionsUrl}.
+ *   - `suggestionsPathTemplate`: templated form of `suggestionsPath`:
+ *     `${basePath}/suggestions/:agentId`. Use this to reach a
+ *     non-default agent's suggestions; clients should normally call
+ *     {@link suggestionsUrl} instead.
  *   - `defaultAgent`: agent id `chatRoute` binds to when the client
  *     doesn't name one.
  *   - `agents`: every registered agent id in registration order.
@@ -80,6 +88,8 @@ export const MastraClientConfigSchema = z.object({
   historyPath: z.string(),
   historyPathTemplate: z.string(),
   embedPathTemplate: z.string(),
+  suggestionsPath: z.string(),
+  suggestionsPathTemplate: z.string(),
   defaultAgent: z.string(),
   agents: z.array(z.string()),
 });
@@ -184,6 +194,23 @@ export const MastraClearHistoryResponseSchema = z.object({
 export type MastraClearHistoryResponse = z.infer<
   typeof MastraClearHistoryResponseSchema
 >;
+
+/* ------------------------------ suggestions ------------------------------ */
+
+/**
+ * JSON payload returned by `GET ${basePath}/suggestions`.
+ *
+ * Carries the curated starter questions for an agent's Genie space -
+ * the `sample_questions` an author configured on the space, surfaced
+ * as one-tap prompts on the chat's empty state. `questions` is empty
+ * when the agent has no Genie space (or the space defines none), so
+ * the client renders nothing in that case rather than falling back to
+ * built-in example prompts.
+ */
+export const MastraSuggestionsResponseSchema = z.object({
+  questions: z.array(z.string()),
+});
+export type MastraSuggestionsResponse = z.infer<typeof MastraSuggestionsResponseSchema>;
 
 /* --------------------------------- charts --------------------------------- */
 

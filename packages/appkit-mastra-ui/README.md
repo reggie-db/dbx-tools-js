@@ -55,6 +55,19 @@ serving endpoint per turn:
 <MastraChat showModelPicker />
 ```
 
+### Starter suggestions
+
+The empty state carries **no built-in example prompts**. When the agent
+has a Genie space wired up, `MastraChat` auto-fills the starter
+questions from that space's curated `sample_questions` (fetched from the
+plugin's `/suggestions` endpoint); when it has no Genie space, the empty
+state stays bare. Pass an explicit `suggestions` list to override that
+lookup, or `[]` to force none:
+
+```tsx
+<MastraChat suggestions={["What were last quarter's top stores?"]} />
+```
+
 ## Controlled: `ChatView`
 
 For full control over message state and transport, render the
@@ -63,13 +76,20 @@ presentational `ChatView` and feed it your own `messages` / `status` /
 naturally with the AI SDK's `useChat`:
 
 ```tsx
-import { ChatView, useChatUrl, useMastraModels } from "@dbx-tools/appkit-mastra-ui/react";
+import {
+  ChatView,
+  useChatUrl,
+  useMastraModels,
+  useMastraSuggestions,
+} from "@dbx-tools/appkit-mastra-ui/react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 
 function Chat() {
   const api = useChatUrl();
   const { models } = useMastraModels();
+  // Optional: surface the agent's Genie space starter questions.
+  const { questions: suggestions } = useMastraSuggestions();
   const { messages, status, sendMessage, regenerate } = useChat({
     transport: new DefaultChatTransport({ api }),
   });
@@ -79,11 +99,16 @@ function Chat() {
       status={status}
       sendMessage={sendMessage}
       regenerate={regenerate}
+      suggestions={suggestions}
       models={models}
     />
   );
 }
 ```
+
+`ChatView` itself shows no suggestions unless you pass them (it has no
+built-in defaults); `useMastraSuggestions()` resolves the agent's Genie
+space starter questions, or an empty list when none are configured.
 
 ## Features
 
@@ -94,6 +119,9 @@ function Chat() {
   `[data:<id>]` markers in the model's prose.
 - Consolidated tool-session pills with per-call Genie progress detail.
 - Suggested follow-up question pills.
+- Starter-question prompts on the empty state, auto-sourced from the
+  agent's Genie space `sample_questions` (or a caller-supplied list);
+  nothing shown when neither is available.
 - Inline approval cards for `requireApproval` tools.
 - Stop button to abort an in-flight response (Send is disabled while
   streaming; `ChatView` takes an `onStop` callback).

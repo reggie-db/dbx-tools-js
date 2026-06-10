@@ -316,10 +316,7 @@ const program = new Command()
     "sync package READMEs with source before the release commit (off by default)",
     false,
   )
-  .option(
-    "--no-publish",
-    "skip publishing the tagged versions to the local registry",
-  )
+  .option("--no-publish", "skip publishing the tagged versions to the local registry")
   .addOption(
     new Option(
       "-r, --registry <url>",

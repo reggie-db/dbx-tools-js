@@ -56,6 +56,13 @@ export type ChatViewProps = {
   onStop?: () => void;
   /** Extra classes merged onto the root layout container. */
   className?: string;
+  /**
+   * Starter questions shown as one-tap buttons on the empty state.
+   * Defaults to none - nothing renders when omitted or empty, so the
+   * component carries no built-in example prompts. The drop-in
+   * `MastraChat` fills this from the agent's Genie space sample
+   * questions when the caller doesn't pass an explicit list.
+   */
   suggestions?: string[];
   toolEventsByMessage?: Record<string, ToolEvent[]>;
   /** Available model endpoints. Pass an empty array (or omit) to hide the picker. */

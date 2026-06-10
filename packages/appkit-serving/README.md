@@ -6,9 +6,10 @@ introspect Foundation Model serving endpoints in a Databricks App
 without re-implementing the response parsing yourself.
 
 The wrapper is intentionally minimal: a `servingEndpoints()` listing
-that goes through `apiUtils.fetchApi` (so OBO auth from the AppKit
-execution context is respected automatically) plus a handful of
-generators that pull the fields the SDK types don't currently expose
+that goes through the workspace client's `apiClient.request` (so OBO
+auth from the AppKit execution context is respected automatically)
+plus a handful of generators that pull the fields the SDK types don't
+currently expose
 (`model_class`, `ai_gateway_model_profile.{speed,quality,cost}`,
 plus a derived semver from the endpoint name).
 
@@ -34,11 +35,11 @@ for (const e of endpoints) {
 
 ## `servingEndpoints()`
 
-Calls `/api/2.0/serving-endpoints` via
-`apiUtils.fetchApi<{ endpoints?: ServingEndpoint[] }>("serving-endpoints")`
-and returns the list (or `[]`).
+Calls `/api/2.0/serving-endpoints` through
+`getExecutionContext().client.apiClient.request(...)` and returns the
+list (or `[]`).
 
-`apiUtils.fetchApi` resolves the workspace client off the active
+`getExecutionContext()` resolves the workspace client off the active
 AppKit execution context, so this **must be called inside an
 initialized AppKit app** (i.e. after `await createApp(...)`). Tests
 that don't want to bootstrap AppKit should mock the function or feed
@@ -47,8 +48,7 @@ fixture JSON directly into the consumer; see
 inline-JSON pattern.
 
 The call is uncached today; wrap it on the caller side with
-`apiUtils.fetchApi`'s cache hook (`{ userKey, options: { ttl } }`)
-when you want TTL'd results.
+`CacheManager.getOrExecute` when you want TTL'd results.
 
 ## `ServingEndpoint`
 

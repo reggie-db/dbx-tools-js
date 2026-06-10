@@ -5,6 +5,7 @@ import {
   useChatUrl,
   useMastraConfig,
   useMastraModels,
+  useMastraSuggestions,
   type ApprovalDecision,
 } from "@dbx-tools/appkit-mastra-ui/react";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
@@ -17,6 +18,11 @@ const Chat = () => {
   const api = useChatUrl();
   const { historyPath, defaultAgent } = useMastraConfig();
   const { models } = useMastraModels();
+  // Starter prompts on the empty state: the agent's Genie space
+  // sample questions, or none when no space is wired. The drop-in
+  // `MastraChat` does this automatically; the controlled path wires
+  // it explicitly.
+  const { questions: suggestions } = useMastraSuggestions();
   const [model, setModel] = useState("");
 
   // `useChat` snapshots `transport` on first render, so swapping
@@ -123,6 +129,7 @@ const Chat = () => {
       sendMessage={(message) => sendMessage(message)}
       regenerate={regenerate}
       onStop={stop}
+      suggestions={suggestions}
       models={models}
       model={model}
       onModelChange={setModel}

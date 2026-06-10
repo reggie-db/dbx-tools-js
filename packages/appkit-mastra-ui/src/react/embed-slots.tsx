@@ -209,15 +209,30 @@ const splitTextWithEmbeds = (text: string): RenderSegment[] => {
  *
  * Stale markers in persisted transcript text are silently
  * dropped on reload so the prose around them stays clean.
+ *
+ * `streaming` flags the bubble as still receiving tokens; it opts the
+ * prose segments into Streamdown's word-by-word fade-in so the reply
+ * eases in rather than snapping in whole chunks. Settled bubbles pass
+ * `false` and render plain markdown.
  */
-export const MarkdownWithEmbeds = ({ text }: { text: string }) => {
+export const MarkdownWithEmbeds = ({
+  text,
+  streaming = false,
+}: {
+  text: string;
+  streaming?: boolean;
+}) => {
   const segments = splitTextWithEmbeds(stripIncompleteMarkerTail(text));
   return (
     <>
       {segments.map((seg, i) => {
         if (seg.kind === "text") {
           if (seg.text.trim().length === 0) return null;
-          return <AssistantMarkdown key={`t-${i}`}>{seg.text}</AssistantMarkdown>;
+          return (
+            <AssistantMarkdown key={`t-${i}`} animate={streaming}>
+              {seg.text}
+            </AssistantMarkdown>
+          );
         }
         if (seg.kind === "chart") {
           return <ChartSlot key={`c-${i}-${seg.chartId}`} chartId={seg.chartId} />;

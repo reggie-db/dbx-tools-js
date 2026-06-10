@@ -44,12 +44,6 @@ import type { ChatViewProps } from "./types.js";
 // fed in through props - this component renders it and reports user
 // intent back out (send, regenerate, load-more, clear, approve).
 
-const DEFAULT_SUGGESTIONS = [
-  "Tell me about Spirited Away",
-  "Who are the main characters in Princess Mononoke?",
-  "Summarize the plot of Howl's Moving Castle",
-];
-
 const BOTTOM_THRESHOLD_PX = 24;
 /**
  * Distance from the top of the scroll container at which we trigger
@@ -73,7 +67,7 @@ export const ChatView = ({
   regenerate,
   onStop,
   className,
-  suggestions = DEFAULT_SUGGESTIONS,
+  suggestions = [],
   toolEventsByMessage = {},
   models,
   model,
@@ -220,11 +214,17 @@ export const ChatView = ({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div
-        className={cn("mx-auto flex h-full max-w-4xl flex-col p-0 md:p-6", className)}
-      >
+      {/*
+       * Full-width column owns the vertical layout and the scroll. The
+       * centered `max-w-4xl` framing lives on each section (header,
+       * transcript, suggestions, composer) instead of the outer shell,
+       * so the scroll area's scrollbar sits at the far right - outside
+       * the centered column - and the composer lines up with the
+       * message column regardless of whether a scrollbar is showing.
+       */}
+      <div className={cn("flex h-full flex-col py-0 md:py-6", className)}>
         {showHeader && (
-          <div className="flex items-center justify-end gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground">
+          <div className="mx-auto flex w-full max-w-4xl items-center justify-end gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground md:px-6">
             {showModelPicker && (
               <div className="flex items-center gap-2">
                 <span>Model</span>
@@ -290,22 +290,24 @@ export const ChatView = ({
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="flex-1 overflow-y-auto"
+            className="flex-1 overflow-y-auto [scrollbar-gutter:stable]"
           >
             {messages.length === 0 && !isLoadingHistory ? (
-              <Empty className="h-full">
+              <Empty className="mx-auto h-full w-full max-w-4xl px-4 md:px-6">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <MessageSquareIcon className="size-5" />
                   </EmptyMedia>
                   <EmptyTitle>Start a conversation</EmptyTitle>
                   <EmptyDescription>
-                    Ask anything, or pick a suggestion below.
+                    {suggestions.length > 0
+                      ? "Ask anything, or pick a suggestion below."
+                      : "Ask anything to get started."}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
-              <div className="flex flex-col gap-4 p-4">
+              <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4 md:px-6">
                 {(isLoadingMore || isLoadingHistory) && (
                   <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
                     <Spinner className="size-3" />
@@ -370,20 +372,22 @@ export const ChatView = ({
             )}
           </div>
           {!isAtBottom && (
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={scrollToBottom}
-              className="absolute bottom-4 right-4 rounded-full shadow"
-            >
-              <ArrowDownIcon className="size-4" />
-            </Button>
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 mx-auto flex w-full max-w-4xl justify-end px-4 md:px-6">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={scrollToBottom}
+                className="pointer-events-auto rounded-full shadow"
+              >
+                <ArrowDownIcon className="size-4" />
+              </Button>
+            </div>
           )}
         </div>
 
         {messages.length === 0 && suggestions.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-4 pb-2">
+          <div className="mx-auto flex w-full max-w-4xl flex-wrap gap-2 px-4 pb-2 md:px-6">
             {suggestions.map((s) => (
               <Button
                 key={s}
@@ -398,7 +402,10 @@ export const ChatView = ({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="px-4 pb-4 pt-2">
+        <form
+          onSubmit={handleSubmit}
+          className="mx-auto w-full max-w-4xl px-4 pb-4 pt-2 md:px-6"
+        >
           <InputGroup>
             <InputGroupTextarea
               value={input}

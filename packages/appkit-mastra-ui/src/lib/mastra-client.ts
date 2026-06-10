@@ -3,10 +3,12 @@ import {
   chatUrl,
   embedUrl,
   historyUrl,
+  suggestionsUrl,
   type Chart,
   type MastraClearHistoryResponse,
   type MastraClientConfig,
   type MastraHistoryResponse,
+  type MastraSuggestionsResponse,
   type ServingEndpointSummary,
   type ServingEndpointsResponse,
   type StatementData,
@@ -111,6 +113,64 @@ export const useMastraModels = (
   }, [modelsPath, enabled]);
 
   return { models, loading, error };
+};
+
+/**
+ * Fetch the curated starter questions for an agent's Genie space
+ * from the Mastra plugin's `GET ${basePath}/suggestions` endpoint.
+ * These are the `sample_questions` an author configured on the
+ * space, surfaced as one-tap prompts on the chat empty state. The
+ * server returns an empty list when the agent has no Genie space, so
+ * `questions` stays empty in that case and the UI shows a bare empty
+ * state rather than built-in example prompts.
+ *
+ * Pass `enabled: false` to skip the fetch (e.g. when the caller
+ * supplies its own explicit suggestion list), in which case
+ * `questions` stays empty. Any fetch error degrades silently to no
+ * suggestions - they're a non-critical enhancement.
+ */
+export const useMastraSuggestions = (
+  agentId?: string,
+  enabled = true,
+): { questions: string[]; loading: boolean } => {
+  const { suggestionsPath, defaultAgent } = useMastraConfig();
+  const url = useMemo(
+    () => suggestionsUrl({ suggestionsPath, defaultAgent }, agentId),
+    [suggestionsPath, defaultAgent, agentId],
+  );
+  const [questions, setQuestions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(enabled);
+
+  useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      setQuestions([]);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    fetch(url, { credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) as MastraSuggestionsResponse;
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        setQuestions(Array.isArray(payload.questions) ? payload.questions : []);
+      })
+      .catch(() => {
+        // Non-critical: a failed lookup just means no starter prompts.
+        if (!cancelled) setQuestions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url, enabled]);
+
+  return { questions, loading };
 };
 
 /**

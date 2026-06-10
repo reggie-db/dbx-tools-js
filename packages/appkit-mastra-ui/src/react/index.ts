@@ -18,6 +18,7 @@ export {
   useMastraClient,
   useMastraConfig,
   useMastraModels,
+  useMastraSuggestions,
   useStatementFetch,
 } from "../lib/mastra-client.js";
 export type { ByIdFetchState, MastraHistoryPage } from "../lib/mastra-client.js";

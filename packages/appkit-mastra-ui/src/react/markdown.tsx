@@ -196,6 +196,21 @@ const TOOL_MARKDOWN_COMPONENTS = {
 const SHIKI_PLUGIN = { code: createShikiPlugin() };
 
 /**
+ * Per-word fade-in applied while a reply is still streaming. Streamdown
+ * wraps each newly arrived token in a `[data-sd-animate]` span and only
+ * animates the delta since the previous render (tokens already on screen
+ * get `duration: 0`), so the text eases in word-by-word instead of
+ * snapping in whole SSE chunks. The keyframes ship in
+ * `streamdown/styles.css`, imported by this package's `styles.css`.
+ */
+const ANIMATE_OPTIONS = {
+  animation: "fadeIn",
+  sep: "word",
+  duration: 220,
+  stagger: 25,
+} as const;
+
+/**
  * Streamdown ships GFM (tables, task lists, strikethrough, autolink),
  * KaTeX math, Mermaid diagrams, copy/download controls on code +
  * tables, and incremental-parse handling for partial markdown chunks -
@@ -204,13 +219,23 @@ const SHIKI_PLUGIN = { code: createShikiPlugin() };
  * rhythm and route tables through AppKit's Table primitives via
  * {@link MARKDOWN_COMPONENTS}, then disable the noisy in-block copy/
  * download buttons since this UI lives inside a chat bubble that
- * already has its own copy button.
+ * already has its own copy button. `animate` opts the block into the
+ * {@link ANIMATE_OPTIONS} word-by-word fade-in; callers pass it only
+ * for the actively streaming bubble so settled history renders plain.
  */
-export const AssistantMarkdown = ({ children }: { children: string }) => (
+export const AssistantMarkdown = ({
+  children,
+  animate = false,
+}: {
+  children: string;
+  animate?: boolean;
+}) => (
   <Streamdown
     components={MARKDOWN_COMPONENTS}
     plugins={SHIKI_PLUGIN}
     controls={false}
+    animated={animate ? ANIMATE_OPTIONS : false}
+    isAnimating={animate}
     className={cn(
       "prose prose-sm dark:prose-invert max-w-none break-words",
       "prose-headings:font-semibold prose-headings:tracking-tight",

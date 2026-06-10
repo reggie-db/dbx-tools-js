@@ -340,7 +340,11 @@ export const AssistantBubble = ({
          */}
         {textParts.map((part, i) =>
           part.text.trim().length > 0 ? (
-            <MarkdownWithEmbeds key={`text-${i}`} text={part.text} />
+            <MarkdownWithEmbeds
+              key={`text-${i}`}
+              text={part.text}
+              streaming={isStreamingThisBubble}
+            />
           ) : null,
         )}
         {isLast && hasText && (

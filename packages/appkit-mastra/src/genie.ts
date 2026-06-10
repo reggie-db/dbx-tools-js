@@ -41,10 +41,9 @@ import {
   type MinimalWriter,
   type StartedEvent,
 } from "@dbx-tools/appkit-mastra-shared";
-import { genieEventChat } from "@dbx-tools/genie";
+import { genieEventChat, genieSampleQuestions, getGenieSpace } from "@dbx-tools/genie";
 import { type GenieMessage } from "@dbx-tools/genie-shared";
 import {
-  apiUtils,
   appkitUtils,
   commonUtils,
   logUtils,
@@ -565,8 +564,15 @@ function buildSpaceDescriptionTool(opts: { spaceId: string; alias: string }) {
       const ctx = ctxRaw as ToolExecuteCtx;
       const { client } = requireClient(ctx, toolId);
       const signal = ctx?.abortSignal;
-      const apiCtx = signal ? apiUtils.toContext(signal) : undefined;
-      const space = await client.genie.getSpace({ space_id: spaceId }, apiCtx);
+      // Route through the package's central Genie space fetch. The
+      // description surface (title / description / warehouse id) lives
+      // on the directory-listing shape, so skip the larger
+      // `serialized_space` payload here.
+      const space = await getGenieSpace(spaceId, {
+        workspaceClient: client,
+        serialized: false,
+        ...(signal ? { context: signal } : {}),
+      });
       return {
         spaceId,
         ...(space.title ? { title: space.title } : {}),
@@ -594,8 +600,13 @@ function buildSpaceSerializedTool(opts: { spaceId: string; alias: string }) {
       const ctx = ctxRaw as ToolExecuteCtx;
       const { client } = requireClient(ctx, toolId);
       const signal = ctx?.abortSignal;
-      const apiCtx = signal ? apiUtils.toContext(signal) : undefined;
-      const space = await client.genie.getSpace({ space_id: spaceId }, apiCtx);
+      // Central Genie space fetch with the opt-in `serialized_space`
+      // blob (catalogs, tables, sample questions, prompts) that the
+      // typed SDK `getSpace` omits - the whole point of this tool.
+      const space = await getGenieSpace(spaceId, {
+        workspaceClient: client,
+        ...(signal ? { context: signal } : {}),
+      });
       return { space };
     },
   });
@@ -1043,4 +1054,93 @@ export function hasAnyGenieSpaces(
   context: appkitUtils.PluginContextLike | undefined,
 ): boolean {
   return Object.keys(resolveGenieSpaces(config, context)).length > 0;
+}
+
+/* --------------------------- starter suggestions --------------------------- */
+
+/**
+ * Default cap on starter suggestions surfaced to the chat empty
+ * state. Sample-question lists can run long (10+ on a curated
+ * space); a handful of one-tap prompts reads better than a wall of
+ * buttons.
+ */
+const SUGGESTION_LIMIT = 6;
+
+/**
+ * How long a space's parsed sample questions stay cached. They're
+ * authored config that changes rarely, and the lookup is an extra
+ * REST round-trip per chat mount, so a few minutes of caching keeps
+ * the empty state instant on reload without going stale for long.
+ */
+const SUGGESTION_CACHE_TTL_MS = 10 * 60_000;
+
+/** Space-id -> cached sample questions with an absolute expiry. */
+const _suggestionCache = new Map<string, { questions: string[]; expires: number }>();
+
+/** Read a space's cached questions, or `undefined` on miss / expiry. */
+function readSuggestionCache(spaceId: string): string[] | undefined {
+  const entry = _suggestionCache.get(spaceId);
+  if (!entry) return undefined;
+  if (entry.expires <= Date.now()) {
+    _suggestionCache.delete(spaceId);
+    return undefined;
+  }
+  return entry.questions;
+}
+
+/** Cache a space's parsed questions for {@link SUGGESTION_CACHE_TTL_MS}. */
+function writeSuggestionCache(spaceId: string, questions: string[]): void {
+  _suggestionCache.set(spaceId, {
+    questions,
+    expires: Date.now() + SUGGESTION_CACHE_TTL_MS,
+  });
+}
+
+/**
+ * Collect the curated starter questions across every resolved Genie
+ * space, deduped and capped. Each space's `sample_questions` are
+ * fetched once (cached for {@link SUGGESTION_CACHE_TTL_MS}) via
+ * {@link getGenieSpace} + {@link genieSampleQuestions}, then merged in
+ * alias-iteration order so a single-space app surfaces that space's
+ * questions and a multi-space app round-trips breadth-first up to the
+ * cap. A per-space fetch failure degrades to "no questions for that
+ * space" (logged, not thrown) so one unreachable space never blanks
+ * the whole list. Returns `[]` when no spaces are configured.
+ */
+export async function collectSpaceSuggestions(opts: {
+  spaces: Record<string, GenieSpaceConfig>;
+  client: WorkspaceClient;
+  signal?: AbortSignal;
+  limit?: number;
+}): Promise<string[]> {
+  const limit = opts.limit ?? SUGGESTION_LIMIT;
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { spaceId } of Object.values(opts.spaces)) {
+    let questions = readSuggestionCache(spaceId);
+    if (!questions) {
+      try {
+        const space = await getGenieSpace(spaceId, {
+          workspaceClient: opts.client,
+          ...(opts.signal ? { context: opts.signal } : {}),
+        });
+        questions = genieSampleQuestions(space);
+        writeSuggestionCache(spaceId, questions);
+      } catch (err) {
+        log.warn("suggestions:fetch-error", {
+          spaceId,
+          error: commonUtils.errorMessage(err),
+        });
+        questions = [];
+      }
+    }
+    for (const question of questions) {
+      if (seen.has(question)) continue;
+      seen.add(question);
+      merged.push(question);
+      if (merged.length >= limit) return merged;
+    }
+  }
+  return merged;
 }

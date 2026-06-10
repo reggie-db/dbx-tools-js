@@ -107,42 +107,36 @@ netUtils.pathMatch("/api/cool?q=1", "/api"); // true
 const port = await netUtils.getRandomPort();
 ```
 
-## `apiUtils` - authenticated Databricks REST calls (server only)
+## `apiUtils` - Databricks REST cancellation helpers (server only)
 
-Wraps `fetch` against `https://<workspace-host>/api/2.0/<path>` with the
-auth header your AppKit execution context already carries, plus an
-optional `cache` field on the init object so per-user TTL'd reads are a
-single property:
+Network calls go through the workspace client's own
+`apiClient.request` (it stamps the auth header and parses JSON), so
+there's no bespoke `fetch` wrapper here. `apiUtils` just supplies the
+cancellation glue around it: `toContext` adapts an `AbortSignal` (or
+`AbortController`) into the SDK `Context` the request methods expect.
 
 ```ts
 import { apiUtils } from "@dbx-tools/shared";
+import { getExecutionContext } from "@databricks/appkit";
 
-// Bare GET against the workspace /api/2.0 namespace - leading /api/2.0
-// is auto-stripped so you can pass either form.
-const data = await apiUtils.fetchApi<{ endpoints?: unknown[] }>(
-  "serving-endpoints",
-);
+const { client } = getExecutionContext();
 
-// With a per-user cache (useful for "list everything" calls):
-const cached = await apiUtils.fetchApi<{ endpoints?: unknown[] }>(
-  "serving-endpoints",
-  { cache: { options: { ttl: 300 } } },
-);
+// Issue the call straight through the workspace client's apiClient -
+// leading /api/2.0 is added for you by the SDK.
+const data = (await client.apiClient.request({
+  path: "/api/2.0/serving-endpoints",
+  method: "GET",
+  headers: new Headers(),
+  raw: false,
+})) as { endpoints?: unknown[] };
 
-// POST + custom client (e.g. service-account script outside a request).
-await apiUtils.fetchApi<{ id: string }>(
-  ["serving-endpoints", endpointName, "invocations"],
-  {
-    body: JSON.stringify({ inputs }),
-    headers: { "Content-Type": "application/json" },
-    workspaceClient: serviceClient,
-  },
-);
+// Adapt an AbortSignal into the SDK Context the request accepts.
+const context = apiUtils.toContext(abortSignal);
 ```
 
-Defaults to `POST` when `init.body` is set, `GET` otherwise. The wrapper
-needs an active `getExecutionContext()` to resolve the workspace client
-unless a `WorkspaceClient` is passed in explicitly, so it's server-only.
+`toContext` returns a `Context` whose `cancellationToken` is backed by
+the supplied signal, so aborting it tears down the in-flight SDK call.
+Want TTL'd results? Wrap the call in `CacheManager.getOrExecute`.
 
 ## `stringUtils` - identifier + slug helpers
 

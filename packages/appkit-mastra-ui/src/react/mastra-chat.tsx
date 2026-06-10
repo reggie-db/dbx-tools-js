@@ -8,6 +8,7 @@ import {
   useMastraClient,
   useMastraConfig,
   useMastraModels,
+  useMastraSuggestions,
 } from "../lib/mastra-client.js";
 import { ChatView } from "./chat-view.js";
 import type {
@@ -72,6 +73,15 @@ export interface UseMastraChatOptions {
    * when `false` the model catalogue isn't even fetched.
    */
   showModelPicker?: boolean;
+  /**
+   * Starter questions shown as one-tap buttons on the empty state.
+   * When omitted, the drop-in auto-sources them from the agent's
+   * Genie space sample questions (via the plugin's `/suggestions`
+   * endpoint); when the agent has no Genie space the empty state
+   * stays bare. Pass an explicit list to override that lookup, or
+   * `[]` to force no suggestions.
+   */
+  suggestions?: string[];
 }
 
 /**
@@ -91,7 +101,7 @@ class StreamAborted extends Error {}
  */
 export const useMastraChat = (
   options: UseMastraChatOptions = {},
-): Omit<ChatViewProps, "className" | "suggestions"> => {
+): Omit<ChatViewProps, "className"> => {
   const [model, setModel] = useState("");
   // `useMastraClient(model)` rebuilds the client with
   // `X-Mastra-Model` attached as a default header whenever the
@@ -112,6 +122,17 @@ export const useMastraChat = (
   // hidden and skips the catalogue fetch entirely.
   const showModelPicker = Boolean(options.showModelPicker);
   const { models } = useMastraModels(showModelPicker);
+  // Starter suggestions: an explicit `options.suggestions` always
+  // wins (including `[]` to force none); otherwise auto-source the
+  // agent's Genie space sample questions. The fetch is skipped when
+  // the caller passed an explicit list so we never round-trip for a
+  // value we won't use.
+  const explicitSuggestions = options.suggestions;
+  const { questions: genieSuggestions } = useMastraSuggestions(
+    options.agentId,
+    explicitSuggestions === undefined,
+  );
+  const suggestions = explicitSuggestions ?? genieSuggestions;
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("ready");
   // The error from the last failed turn, surfaced by ChatView as a
@@ -733,6 +754,7 @@ export const useMastraChat = (
     sendMessage,
     regenerate,
     onStop: stop,
+    suggestions,
     toolEventsByMessage,
     pendingApprovalsByMessage,
     onResolveToolApproval: handleApproval,

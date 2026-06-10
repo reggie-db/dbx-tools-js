@@ -53,6 +53,23 @@ export function historyUrl(
 }
 
 /**
+ * Build the suggestions URL for a given agent. Mirrors
+ * {@link chatUrl}: the default agent uses the bare
+ * `suggestionsPath`, any other agent appends `/<encoded id>` to it.
+ * The endpoint returns the agent's Genie space curated sample
+ * questions (`{ questions }`), or an empty list when the agent has
+ * no Genie space.
+ */
+export function suggestionsUrl(
+  config: Pick<MastraClientConfig, "suggestionsPath" | "defaultAgent">,
+  agentId?: string,
+): string {
+  const id = agentId ?? config.defaultAgent;
+  if (!id || id === config.defaultAgent) return config.suggestionsPath;
+  return `${config.suggestionsPath}/${encodeURIComponent(id)}`;
+}
+
+/**
  * Build the generic embed fetch URL for a marker of kind `type`
  * and the given `id`. Substitutes the `:type` and `:id`
  * placeholders in {@link MastraClientConfig.embedPathTemplate}

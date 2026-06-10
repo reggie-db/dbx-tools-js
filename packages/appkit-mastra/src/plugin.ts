@@ -50,6 +50,7 @@ import type {
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
+import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { buildObservability } from "./observability.js";
@@ -209,6 +210,8 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       historyPath: `${basePath}/route/history`,
       historyPathTemplate: `${basePath}/route/history/:agentId`,
       embedPathTemplate: `${basePath}/embed/:type/:id`,
+      suggestionsPath: `${basePath}/suggestions`,
+      suggestionsPathTemplate: `${basePath}/suggestions/:agentId`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
     };
@@ -305,9 +308,57 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         .catch(next);
     });
 
+    // `GET /suggestions` (and `/suggestions/:agentId`) returns the
+    // curated starter questions for the agent's Genie space(s) - the
+    // author-configured `sample_questions`, surfaced as one-tap
+    // prompts on the chat empty state. Returns `{ questions: [] }`
+    // when no Genie space is wired so the client renders a bare
+    // empty state (no built-in example prompts). The `:agentId`
+    // segment is accepted for URL symmetry with the chat / history
+    // routes; Genie spaces are resolved per-plugin, not per-agent,
+    // so it doesn't change the result. OBO-scoped like the other
+    // data routes so the space lookup runs as the calling user.
+    const handleSuggestions = (req: express.Request, res: express.Response): void => {
+      const controller = new AbortController();
+      req.on("close", () => controller.abort());
+      this.userScopedSelf(req)
+        .fetchSuggestions(controller.signal)
+        .then((questions) => res.json({ questions }))
+        .catch((err: unknown) => {
+          // Suggestions are a non-critical enhancement; a lookup
+          // failure should leave the chat usable with a bare empty
+          // state rather than surfacing a 500. Log and degrade.
+          this.log.warn("suggestions:error", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          res.json({ questions: [] });
+        });
+    };
+    router.get("/suggestions", handleSuggestions);
+    router.get("/suggestions/:agentId", handleSuggestions);
+
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       return this.userScopedSelf(req).mastraApp!(req, res, next);
+    });
+  }
+
+  /**
+   * Implementation backing the `/suggestions` route. Runs inside the
+   * AppKit user-context proxy so `getExecutionContext()` returns the
+   * OBO-scoped client. Resolves the plugin's Genie spaces and merges
+   * their curated `sample_questions` (see {@link collectSpaceSuggestions}).
+   * Returns `[]` when no Genie space is configured so the client
+   * shows a bare empty state instead of built-in example prompts.
+   */
+  private async fetchSuggestions(signal?: AbortSignal): Promise<string[]> {
+    const spaces = resolveGenieSpaces(this.config, this.context);
+    if (Object.keys(spaces).length === 0) return [];
+    const client = getExecutionContext().client;
+    return collectSpaceSuggestions({
+      spaces,
+      client,
+      ...(signal ? { signal } : {}),
     });
   }
 
