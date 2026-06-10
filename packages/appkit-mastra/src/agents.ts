@@ -26,6 +26,7 @@ import type { MemoryBuilder } from "./memory.js";
 import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
 import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
 import { buildRenderDataTool } from "./chart.js";
+import { ResultProcessor } from "./processor.js";
 
 /**
  * Tool record accepted by every Mastra `Agent.tools` field and by the
@@ -433,6 +434,7 @@ export async function buildAgents(opts: {
   // chartIds from prior assistant tool results into the new
   // turn's `[chart:<id>]` markers. Opt out per-plugin via
   // `config.stripStaleCharts: false`.
+  const outputProcessors = [new ResultProcessor()];
   const inputProcessors =
     config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor];
   const agents: Record<string, Agent> = {};
@@ -451,7 +453,8 @@ export async function buildAgents(opts: {
       },
       tools,
       ...(memory ? { memory } : {}),
-      ...(inputProcessors.length > 0 ? { inputProcessors } : {}),
+      inputProcessors,
+      outputProcessors,
     });
     // Surface the effective default model per agent so operators can
     // see at a glance which endpoint each agent points at without

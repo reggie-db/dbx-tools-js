@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra-shared",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "dependencies": {
     "@dbx-tools/genie-shared": "workspace:*",
     "zod": "catalog:"
@@ -10,7 +10,7 @@
   },
   "module": "index.ts",
   "peerDependencies": {
-    "@databricks/appkit": "*"
+    "@databricks/appkit": "catalog:"
   },
   "type": "module"
 }

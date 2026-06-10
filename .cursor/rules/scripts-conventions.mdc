@@ -57,12 +57,15 @@ Use `discoverPackageJsons(includeRoot?)` when you only need paths
 preventing churn against `prettier --write`. Use it instead of
 `Bun.write(path, JSON.stringify(value, null, 2))`.
 
-## AI calls via `aiQuery`
+## AI calls via `agentQuery`
 
-`aiQuery(prompt, ctx?, model?)` wraps a Databricks model-serving
-call and returns `null` on any failure (no profile, no client,
-empty response). Designed so callers can do
-`await aiQuery(...) ?? fallback` without try/catch boilerplate.
+`agentQuery(prompt, ctx?, overrides?)` runs the prompt through a
+Mastra agent (with `read_files` / git / sandbox tools) and returns
+`null` on any failure (no resolvable model, empty response, exhausted
+retries). The model comes from the `SCRIPT_MODEL_PROVIDER` env var as
+a `provider/model` spec (`databricks/...`, `ollama/...`, or any
+Mastra-routed provider). Designed so callers can do
+`await agentQuery(...) ?? fallback` without try/catch boilerplate.
 
 ## File ops via `Bun.file` / `Bun.write`
 

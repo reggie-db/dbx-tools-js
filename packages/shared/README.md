@@ -78,9 +78,9 @@ app.use((req, res, next) => {
 });
 ```
 
-## `netUtils` - URL parsing + free-port helpers
+## `netUtils` - URL builder + path matching + free-port helpers
 
-Public surface: `joinUrl`, `parseUrl`, plus the server-only
+Public surface: `urlBuilder`, `pathMatch`, plus the server-only
 `getRandomPort`. The URL helpers are pure JS and ship in the
 browser bundle too; `getRandomPort` binds a transient `node:net`
 listener and is therefore server-only (importing `netUtils` from
@@ -89,14 +89,19 @@ the browser entry simply omits it).
 ```ts
 import { netUtils } from "@dbx-tools/shared";
 
-// Tolerant URL coercion - bare hostnames, partial inputs, or
-// objects with a `.url` field all round-trip through. Returns
-// `null` on failure (matches WHATWG `URL.parse(...)` semantics).
-const url = netUtils.parseUrl("example.com");  // https://example.com/
+// Tolerant URL coercion into a chainable builder - bare hostnames,
+// path-only strings, or objects with a `.url` field all round-trip
+// through. Returns `null` on failure (matches WHATWG `URL.parse(...)`).
+const url = netUtils.urlBuilder("example.com");  // https://example.com/
 
-// Path-segment join: nullish/blank inputs are skipped, leading /
-// trailing slashes are normalized, nested arrays recurse.
-netUtils.joinUrl("/api/", ["v2", "items"], null); // "/api/v2/items"
+// Copy-on-write path joins: segments are trimmed of boundary slashes,
+// blanks dropped, arrays flattened.
+netUtils
+  .urlBuilder("https://host")!
+  .withPathAppend("/api/", ["v2", "items"]); // https://host/api/v2/items
+
+// Segment-boundary prefix test (accepts any UrlLike, incl. a Request).
+netUtils.pathMatch("/api/cool?q=1", "/api"); // true
 
 // Grab a free local port (server only).
 const port = await netUtils.getRandomPort();

@@ -36,9 +36,9 @@ bun run tag --dry-run       # preview without writing or pushing
 
 The release-notes context (commits in `prevTag..HEAD` + working-tree
 dirty files + `git diff --stat <prevTag>`) is handed to
-`releaseNotes()` which calls a Databricks model-serving endpoint via
-`aiQuery()`. Returns `null` on failure; the tag falls back to a bare
-`Release v<version>` message.
+`releaseNotes()` which runs a Mastra agent via `agentQuery()` (model
+chosen by `SCRIPT_MODEL_PROVIDER`). Returns `null` on failure; the tag
+falls back to a bare `Release v<version>` message.
 
 ## Local publish (debugging / one-off)
 

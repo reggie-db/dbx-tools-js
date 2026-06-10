@@ -1,10 +1,12 @@
 /**
- * Framework-agnostic readers for HTTP headers and cookies, shared
- * across AppKit plugins. Works uniformly across Express, Node
- * `IncomingMessage`, WHATWG `Request` / `Response` / `Headers`, Hono,
- * and any object that exposes a `headers` field of one of those
- * shapes. Dependency-free and browser-safe so it can run in either a
- * server or a client bundle.
+ * Framework-agnostic readers for HTTP requests, shared across AppKit
+ * plugins: header and cookie extraction. Works uniformly across
+ * Express, Node `IncomingMessage`, WHATWG `Request` / `Response` /
+ * `Headers`, Hono, and any object that exposes a `headers` field of one
+ * of those shapes. Dependency-free and browser-safe so it can run in
+ * either a server or a client bundle.
+ *
+ * URL path matching lives in `./net.browser.ts` (`pathMatch`).
  */
 
 // ────────────────────────────────────────────────────────────────

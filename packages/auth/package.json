@@ -1,0 +1,18 @@
+{
+  "name": "@dbx-tools/auth",
+  "version": "0.1.28",
+  "private": true,
+  "dependencies": {
+    "@dbx-tools/shared": "workspace:*",
+    "jose": "^6"
+  },
+  "devDependencies": {
+    "@types/express": "catalog:",
+    "express": "catalog:"
+  },
+  "module": "index.ts",
+  "peerDependencies": {
+    "express": "catalog:"
+  },
+  "type": "module"
+}

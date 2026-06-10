@@ -1,196 +1,177 @@
 import { describe, expect, it } from "bun:test";
 
-import { joinUrl, parseUrl } from "../src/net.browser.js";
+import { pathMatch, urlBuilder } from "../src/net.browser.js";
 
-describe("joinUrl", () => {
-  describe("empty / nullish input", () => {
-    it("returns '' for no arguments", () => {
-      expect(joinUrl()).toBe("");
-    });
-
-    it("returns '' for a single null/undefined arg", () => {
-      expect(joinUrl(null)).toBe("");
-      expect(joinUrl(undefined)).toBe("");
-    });
-
-    it("returns '' for blank strings (after trim)", () => {
-      expect(joinUrl("")).toBe("");
-      expect(joinUrl("   ")).toBe("");
-      expect(joinUrl("", null, "  ", undefined)).toBe("");
-    });
-
-    it("returns '' for an empty array", () => {
-      expect(joinUrl([])).toBe("");
-    });
-  });
-
-  describe("string segments", () => {
-    it("path-absolute prefixes the join", () => {
-      expect(joinUrl("a", "b")).toBe("/a/b");
-    });
-
-    it("strips a single leading and trailing slash per segment", () => {
-      expect(joinUrl("/a/", "/b/", "c")).toBe("/a/b/c");
-    });
-
-    it("trims whitespace before stripping slashes", () => {
-      expect(joinUrl("  /api/  ", "  v2  ")).toBe("/api/v2");
-    });
-
-    it("drops nullish and blank segments mid-list", () => {
-      expect(joinUrl("", "a", null, "b", undefined)).toBe("/a/b");
-    });
-
-    it("preserves a `://` scheme on the first segment", () => {
-      expect(joinUrl("https://example.com", "/api/x")).toBe(
-        "https://example.com/api/x",
-      );
-    });
-
-    it("strips a trailing slash from a host segment", () => {
-      expect(joinUrl("https://example.com/", "x")).toBe("https://example.com/x");
-    });
-  });
-
-  describe("array segments", () => {
-    it("flattens a single array argument", () => {
-      // Regression: previously returned "" because `else if (!!urlSegment)`
-      // treated a truthy non-string single arg as empty.
-      expect(joinUrl(["a", "b"])).toBe("/a/b");
-    });
-
-    it("inlines an array between string segments without doubling slashes", () => {
-      // Regression: previously returned "//a/b/c" because the inner result
-      // kept its leading `/` and the outer prepend added another.
-      expect(joinUrl(["a", "b"], "c")).toBe("/a/b/c");
-      expect(joinUrl("a", ["b", "c"])).toBe("/a/b/c");
-    });
-
-    it("recurses into nested arrays", () => {
-      expect(joinUrl(["a", ["b", "c"]], "d")).toBe("/a/b/c/d");
-    });
-
-    it("drops empty arrays", () => {
-      expect(joinUrl("a", [], "b")).toBe("/a/b");
-      expect(joinUrl([null, "", undefined])).toBe("");
-    });
-  });
-});
-
-describe("parseUrl", () => {
+describe("urlBuilder", () => {
   describe("string input", () => {
     it("auto-prefixes https:// for bare hostnames", () => {
-      expect(parseUrl("example.com")?.toString()).toBe("https://example.com/");
+      expect(urlBuilder("example.com")?.toString()).toBe("https://example.com/");
+    });
+
+    it("keeps a host plus path", () => {
+      expect(urlBuilder("example.com/foo")?.toString()).toBe("https://example.com/foo");
     });
 
     it("preserves an explicit scheme", () => {
-      expect(parseUrl("http://example.com/path")?.toString()).toBe(
+      expect(urlBuilder("http://example.com/path")?.toString()).toBe(
         "http://example.com/path",
       );
     });
 
+    it("preserves a full https URL", () => {
+      expect(urlBuilder("https://host.example.com")?.toString()).toBe(
+        "https://host.example.com/",
+      );
+    });
+
     it("trims surrounding whitespace", () => {
-      expect(parseUrl("  example.com  ")?.toString()).toBe("https://example.com/");
+      expect(urlBuilder("  example.com  ")?.toString()).toBe("https://example.com/");
     });
 
-    it("returns null for empty / blank strings", () => {
-      expect(parseUrl("")).toBeNull();
-      expect(parseUrl("   ")).toBeNull();
+    it("resolves an empty / blank string to the base origin", () => {
+      expect(urlBuilder("")?.toString()).toBe("http://localhost/");
+      expect(urlBuilder("   ")?.toString()).toBe("http://localhost/");
     });
 
-    it("returns null for malformed input with no path fallback", () => {
-      // `://` alone has no host - URL constructor rejects.
-      expect(parseUrl("://")).toBeNull();
-    });
-
-    it("treats a bare '/' as 'no host' and returns null when no path", () => {
-      expect(parseUrl("/")).toBeNull();
-    });
-
-    it("treats a bare '/' as 'no host' and falls back to localhost when given a path", () => {
-      expect(parseUrl("/", "/api/x")?.toString()).toBe("http://localhost/api/x");
+    it("prefixes the default scheme onto a '://'-leading string", () => {
+      expect(urlBuilder("://example.com")?.toString()).toBe("https://example.com/");
     });
   });
 
-  describe("nullish input", () => {
-    it("returns null without a path", () => {
-      expect(parseUrl(null)).toBeNull();
-      expect(parseUrl(undefined)).toBeNull();
+  describe("path / query / hash input", () => {
+    it("resolves a bare '/' to the base origin root", () => {
+      expect(urlBuilder("/")?.toString()).toBe("http://localhost/");
     });
 
-    it("falls back to http://localhost when a path is supplied", () => {
-      expect(parseUrl(null, "/api/x")?.toString()).toBe("http://localhost/api/x");
-      expect(parseUrl(undefined, "api", "v2")?.toString()).toBe(
-        "http://localhost/api/v2",
+    it("treats a leading-slash string as a path, not a host", () => {
+      expect(urlBuilder("/api/v2/items")?.pathname).toBe("/api/v2/items");
+      expect(urlBuilder("/api/v2/items")?.toString()).toBe(
+        "http://localhost/api/v2/items",
       );
     });
+
+    it("preserves query and hash on a leading-slash path", () => {
+      const url = urlBuilder("/api/cool?q=1#frag");
+      expect(url?.pathname).toBe("/api/cool");
+      expect(url?.search).toBe("?q=1");
+      expect(url?.hash).toBe("#frag");
+    });
+
+    it("resolves path-only input against window.location.origin in a browser", () => {
+      const original = (globalThis as { window?: unknown }).window;
+      (globalThis as { window?: unknown }).window = {
+        location: { origin: "https://app.example.com" },
+      };
+      try {
+        expect(urlBuilder("/api/v2/items")?.toString()).toBe(
+          "https://app.example.com/api/v2/items",
+        );
+      } finally {
+        if (original === undefined) delete (globalThis as { window?: unknown }).window;
+        else (globalThis as { window?: unknown }).window = original;
+      }
+    });
   });
 
-  describe("URL instance input", () => {
-    it("returns the same URL when no path is appended", () => {
+  describe("non-string input", () => {
+    it("adopts a URL instance", () => {
       const u = new URL("https://example.com/x");
-      expect(parseUrl(u)?.toString()).toBe("https://example.com/x");
+      expect(urlBuilder(u)?.toString()).toBe("https://example.com/x");
     });
 
-    it("appends a path to a URL instance", () => {
-      const u = new URL("https://example.com/y");
-      expect(parseUrl(u, "/x")?.toString()).toBe("https://example.com/y/x");
-    });
-  });
-
-  describe("{ url } input", () => {
     it("unwraps a `url` field", () => {
-      expect(parseUrl({ url: "http://y" })?.toString()).toBe("http://y/");
+      expect(urlBuilder({ url: "http://y" })?.toString()).toBe("http://y/");
     });
 
-    it("appends a path through a `url` field", () => {
-      expect(parseUrl({ url: "https://api.example" }, "/v1/items")?.toString()).toBe(
-        "https://api.example/v1/items",
+    it("resolves the base origin when called with no argument", () => {
+      expect(urlBuilder().toString()).toBe("http://localhost/");
+    });
+  });
+
+  describe("scheme accessor", () => {
+    it("reads the scheme without the trailing colon", () => {
+      expect(urlBuilder("https://x")?.scheme).toBe("https");
+    });
+
+    it("rewrites the scheme via with('scheme', ...)", () => {
+      expect(urlBuilder("https://host/p")?.with("scheme", "http").toString()).toBe(
+        "http://host/p",
       );
     });
   });
 
-  describe("path varargs", () => {
-    it("joins multiple string path args", () => {
-      expect(parseUrl("example.com", "/api", "v2", "items")?.toString()).toBe(
-        "https://example.com/api/v2/items",
+  describe("withPathAppend / withPathReplace", () => {
+    it("appends segments onto the existing pathname", () => {
+      expect(urlBuilder("https://host/base")?.withPathAppend("a", "b").toString()).toBe(
+        "https://host/base/a/b",
       );
     });
 
-    it("flattens an array path arg", () => {
-      // Regression: previously dropped the array silently, returning just `https://example.com/`.
-      expect(parseUrl("example.com", ["api", "v2"])?.toString()).toBe(
-        "https://example.com/api/v2",
+    it("replaces the pathname wholesale", () => {
+      expect(urlBuilder("https://host/base")?.withPathReplace("a", "b").toString()).toBe(
+        "https://host/a/b",
       );
     });
 
-    it("flattens an array mixed with strings without doubling slashes", () => {
-      expect(parseUrl("example.com", ["a", "b"], "c")?.toString()).toBe(
-        "https://example.com/a/b/c",
+    it("flattens arrays and trims boundary slashes on each segment", () => {
+      expect(
+        urlBuilder("https://host")?.withPathReplace(["x", "/y/", "z"]).toString(),
+      ).toBe("https://host/x/y/z");
+    });
+
+    it("drops blank segments", () => {
+      expect(urlBuilder("https://host")?.withPathReplace("", "a", "").toString()).toBe(
+        "https://host/a",
       );
     });
 
-    it("normalizes leading/trailing slashes on each segment", () => {
-      expect(parseUrl("example.com", "/api", "/v2/", "/x/")?.toString()).toBe(
-        "https://example.com/api/v2/x",
-      );
+    it("leaves the source builder unchanged (copy-on-write)", () => {
+      const base = urlBuilder("https://host/base")!;
+      base.withPathAppend("extra");
+      expect(base.pathname).toBe("/base");
     });
+  });
+});
 
-    it("strips a trailing slash on the host before joining the path", () => {
-      // Regression: `cool/` + `/api` should produce one boundary slash,
-      // not `https://cool//api`.
-      expect(parseUrl("cool/", "/api")?.toString()).toBe("https://cool/api");
-      expect(parseUrl("cool/", "api")?.toString()).toBe("https://cool/api");
-      expect(parseUrl("example.com/", "/api/v2")?.toString()).toBe(
-        "https://example.com/api/v2",
-      );
-      expect(parseUrl("https://x/", "/api")?.toString()).toBe("https://x/api");
-    });
+describe("pathMatch", () => {
+  it("matches an exact path", () => {
+    expect(pathMatch("/api", "/api")).toBe(true);
+  });
 
-    it("ignores nullish path segments", () => {
-      expect(parseUrl("example.com", null, "x", undefined)?.toString()).toBe(
-        "https://example.com/x",
-      );
-    });
+  it("matches a path nested beneath the prefix", () => {
+    expect(pathMatch("/api/cool", "/api")).toBe(true);
+    expect(pathMatch("/api/cool/deeper", "/api")).toBe(true);
+  });
+
+  it("does not match a sibling that only shares a string prefix", () => {
+    expect(pathMatch("/apicool", "/api")).toBe(false);
+  });
+
+  it("ignores query and hash", () => {
+    expect(pathMatch("/api/cool?q=1#frag", "/api")).toBe(true);
+  });
+
+  it("tolerates a missing leading slash on the target", () => {
+    expect(pathMatch("/api/cool", "api")).toBe(true);
+  });
+
+  it("matches '/' only against the root", () => {
+    expect(pathMatch("/", "/")).toBe(true);
+    expect(pathMatch("/api/cool", "/")).toBe(false);
+  });
+
+  it("extracts the path from an absolute URL", () => {
+    expect(pathMatch("https://host/api/cool", "/api")).toBe(true);
+    expect(pathMatch("https://host/apicool", "/api")).toBe(false);
+  });
+
+  it("accepts a fetch Request (UrlLike via .url)", () => {
+    const req = new Request("https://host/api/v2/items");
+    expect(pathMatch(req, "/api/v2")).toBe(true);
+    expect(pathMatch(req, "/api/v3")).toBe(false);
+  });
+
+  it("treats a blank string as the base origin root", () => {
+    expect(pathMatch("", "/api")).toBe(false);
   });
 });

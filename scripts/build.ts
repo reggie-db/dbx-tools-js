@@ -30,7 +30,11 @@ for (const pkg of packages) {
   // files can't slip into the published tarball.
   rmSync(resolve(pkg.dir, "dist"), { recursive: true, force: true });
   try {
-    await bunx(["tsc", "-p", "tsconfig.build.json"], { cwd: pkg.dir });
+    await bunx(["tsc", "-p", "tsconfig.build.json"], {
+      cwd: pkg.dir,
+      stdout: "inherit",
+      stderr: "inherit",
+    });
     console.log(`Built: ${pkg.slug}\n`);
   } catch {
     fail(`Build failed: ${pkg.slug}`);

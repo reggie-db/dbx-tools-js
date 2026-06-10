@@ -5,6 +5,10 @@ export interface NameLike {
   name?: string;
 }
 
+export type NonFunctionKeys<T> = {
+  [K in keyof T]: T[K] extends (...args: any[]) => any ? never : K;
+}[keyof T];
+
 type MemoizeKeyFn<TArgs extends readonly unknown[]> = (...args: TArgs) => string;
 
 export interface MemoizeOptions<TArgs extends readonly unknown[]> {

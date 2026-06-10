@@ -46,6 +46,9 @@
       "path": "./packages/appkit-serving/tsconfig.build.json"
     },
     {
+      "path": "./packages/auth/tsconfig.build.json"
+    },
+    {
       "path": "./packages/genie-shared/tsconfig.build.json"
     },
     {

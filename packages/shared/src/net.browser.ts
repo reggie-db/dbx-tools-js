@@ -1,170 +1,218 @@
 /**
- * Browser-safe networking helpers: URL parsing and path joining that
- * gracefully handle partial inputs. No node-only imports, so this
- * module is the canonical home for anything URL-shaped that also has
- * to run in a Vite / Webpack / esbuild client bundle.
+ * Browser-safe networking helpers built around {@link urlBuilder}: a
+ * tolerant `URL` coercion + chainable builder that gracefully handles
+ * partial inputs (bare hosts, path-only strings, `{ url }` wrappers).
+ * No node-only imports, so this module is the canonical home for
+ * anything URL-shaped that also has to run in a Vite / Webpack /
+ * esbuild client bundle.
  *
  * The server-side `./net.ts` re-exports everything here verbatim and
  * tacks on its own node-only helpers, so the `netUtils` namespace
  * looks identical from both entry points.
  */
 
+import type { NonFunctionKeys } from "./common.js";
+
+const LOCAL_HOST_URL = new URL("http://localhost");
+const URL_SCHEME_DEFAULT = "https";
+const URL_SCHEME_PREFIX = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)/;
+const URL_PATH_SEGMENT_TRIM = /^\/+|\/+$/g;
+const URL_SCHEME_SEPARATOR = "://";
+
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
 
 /**
- * One input to {@link joinUrl}: a string, a (recursively nested)
- * array of segments, or `null` / `undefined` (skipped).
+ * Anything {@link urlBuilder} (and {@link pathMatch}) know how to coerce
+ * into a URL:
  *
- * The recursive shape lets callers compose path fragments without
- * pre-flattening: `joinUrl("a", ["b", ["c", "d"]])` is valid.
- *
- * The array variant uses an interface (rather than a self-referential
- * type alias) because Bun's TS parser bails on `type X = ... | X[] | ...`
- * but accepts the equivalent `interface XArr extends Array<X>`.
+ * - A string: a host, a full URL, or a path / query / hash fragment.
+ * - A WHATWG `URL` instance.
+ * - Any object with a `url` field (e.g. a fetch `Request`, a Databricks
+ *   `WorkspaceClient` config).
  */
-export type UrlSegmentLike = string | UrlSegmentArray | null | undefined;
-export interface UrlSegmentArray extends ReadonlyArray<UrlSegmentLike> {}
+export type UrlLike = string | URL | { url: string };
+
+/** Settable, non-method `URL` properties - the keys {@link UrlBuilder.with} accepts. */
+type UrlPropertyKey = NonFunctionKeys<UrlBuilderImpl>;
 
 /**
- * Anything {@link parseUrl} knows how to coerce into a `URL`:
- *
- * - A WHATWG `URL` instance: returned as-is when no extra path is
- *   supplied; otherwise re-parsed with the path appended.
- * - A string: parsed by the `URL` constructor; `https://` is
- *   auto-prefixed when no scheme is present, so bare hostnames like
- *   `"example.com"` round-trip into a usable URL.
- * - Any object with a `url` field of the above shapes (e.g. a fetch
- *   `Request`, a Databricks `WorkspaceClient` config, etc.).
+ * A `URL` subclass with chainable, copy-on-write helpers. Every mutating
+ * method returns a fresh builder rather than editing in place, so a base
+ * builder can be safely reused. Construct one via {@link urlBuilder}.
  */
-export type UrlLike = URL | string | { url: string };
-
-// ────────────────────────────────────────────────────────────────
-// URL helpers
-// ────────────────────────────────────────────────────────────────
-
-/**
- * Join URL path segments with `/`, with three pragmatic conveniences
- * for building URLs piecemeal:
- *
- *   1. Nullish or blank segments are dropped, so callers don't have
- *      to guard around optional path components.
- *   2. Each string segment has any leading or trailing `/` stripped
- *      before joining, so `"/api"` + `"v2/"` round-trips to `/api/v2`
- *      regardless of how the caller terminated each part.
- *   3. Array segments recurse, with their joined form inlined into
- *      the outer result.
- *
- * The result is prefixed with `/` to make it path-absolute, except
- * when any segment carries an explicit `://` scheme (e.g.
- * `"https://x.com"`), in which case the scheme is preserved verbatim.
- *
- * Returns `""` when every input was nullish or blank.
- *
- * @example
- * joinUrl("a", "b");                    // "/a/b"
- * joinUrl("/api/", "/v2/", "x");        // "/api/v2/x"
- * joinUrl(["a", "b"], "c");             // "/a/b/c"
- * joinUrl("https://ex.com", "/api/x");  // "https://ex.com/api/x"
- * joinUrl(null, "", "x", undefined);    // "/x"
- * joinUrl();                            // ""
- * joinUrl(null);                        // ""
- */
-export function joinUrl(...urlSegments: UrlSegmentLike[]): string {
-  const parts: string[] = [];
-  for (const segment of urlSegments) {
-    if (segment == null) continue;
-    if (Array.isArray(segment)) {
-      // Recurse, then strip the inner result's leading `/` so the
-      // outer path-absolute prepend doesn't double up to `//a/b/c`.
-      const inner = joinUrl(...segment);
-      if (inner) parts.push(stripBoundarySlashes(inner));
-      continue;
-    }
-    // `Array.isArray` narrows away the UrlSegmentArray branch but
-    // leaves TS believing `segment` could still be a `string` only,
-    // which it now is - the type cast is just to silence a known
-    // TS limitation around recursive interface narrowing.
-    const trimmed = (segment as string).trim();
-    if (!trimmed) continue;
-    parts.push(stripBoundarySlashes(trimmed));
+class UrlBuilderImpl extends URL {
+  constructor(url: URL) {
+    super(url);
   }
-  const joined = parts.filter(Boolean).join("/");
-  if (!joined) return "";
-  return joined.includes("://") ? joined : "/" + joined;
+
+  /** The scheme without the trailing colon (`https`, not `https:`). */
+  get scheme(): string {
+    return this.protocol.slice(0, -1);
+  }
+
+  set scheme(value: string) {
+    this.protocol = value + ":";
+  }
+
+  /**
+   * Return a copy with a single `URL` property (`pathname`, `search`,
+   * `hostname`, `scheme`, ...) set to `value`, leaving this builder
+   * untouched.
+   */
+  with<K extends UrlPropertyKey>(key: K, value: UrlBuilderImpl[K]): UrlBuilder {
+    const next = new UrlBuilderImpl(this);
+    (next as any)[key] = value;
+    return new UrlBuilderImpl(next);
+  }
+
+  /**
+   * Return a copy with `pathSegments` appended to the current pathname.
+   * Segments may be strings or string arrays; each is trimmed of
+   * boundary slashes and blanks are dropped before joining with `/`.
+   */
+  withPathAppend(...pathSegments: (string | string[])[]): UrlBuilder {
+    return this.withPathReplace(this.pathname, ...pathSegments);
+  }
+
+  /**
+   * Return a copy whose pathname is `pathSegments` joined with `/`,
+   * replacing any existing path. Segments may be strings or string
+   * arrays; each is trimmed of boundary slashes and blanks are dropped.
+   */
+  withPathReplace(...pathSegments: (string | string[])[]): UrlBuilder {
+    const pathnameParts: string[] = [...pathSegments].flatMap((p) =>
+      Array.isArray(p) ? p : [p],
+    );
+    const pathname = pathnameParts
+      .map((p) => p.replace(URL_PATH_SEGMENT_TRIM, ""))
+      .filter(Boolean)
+      .join("/");
+    return this.with("pathname", "/" + pathname);
+  }
+
+  /**
+   * Test whether this URL's pathname is `path` or lives beneath it,
+   * matching on segment boundaries so `/api` matches `/api` and
+   * `/api/cool` but not `/apicool`. A missing leading slash on `path`
+   * is tolerated; query and hash are ignored (they aren't part of
+   * `pathname`). Matching is exact otherwise - trailing slashes are
+   * not normalized and `/` matches only the root.
+   */
+  pathMatches(path: string): boolean {
+    const pathname = this.pathname;
+    if (pathname == path) return true;
+    if (!path.startsWith("/")) path = "/" + path;
+    if (pathname == path) return true;
+    return pathname.startsWith(path + "/");
+  }
 }
 
+/** Public type for the {@link urlBuilder} return value. */
+export type UrlBuilder = UrlBuilderImpl;
+
+/** With no argument, resolves to the base origin (never `null`). */
+export function urlBuilder(): UrlBuilder;
+
 /**
- * Coerce a {@link UrlLike} input into a parsed `URL`, returning `null`
- * for anything that cannot be coerced (null/undefined, empty string,
- * malformed URL, an object whose `url` field doesn't parse).
+ * Coerce a {@link UrlLike} into a chainable {@link UrlBuilder}, or `null`
+ * when the input cannot be parsed into a URL. Never throws.
  *
- * Mirrors WHATWG `URL.parse(...)` semantics: parse on success, `null`
- * on failure - never throws.
- *
- * Bare hostnames are upgraded to `https://` before parsing, so callers
- * can hand in user-provided values like `"workspace.cloud.databricks.com"`
- * without an explicit scheme.
- *
- * Optional trailing `path` arguments are appended via {@link joinUrl}.
- * When `input` is nullish (or just `"/"` / blank) but a `path` is
- * provided, the URL is built against `http://localhost`, which is
- * convenient for tests and for callers that resolve the host later.
+ * - A `URL` instance or `{ url }` wrapper is adopted as-is.
+ * - A bare hostname (`"example.com"`) is upgraded to `https://`; an
+ *   explicit scheme is preserved.
+ * - A path / query / hash fragment (`"/api"`, `"?q=1"`, `"#x"`) is
+ *   resolved against {@link defaultUrl} (the browser origin, else
+ *   `http://localhost`).
+ * - An empty / blank string or omitted input resolves to the base
+ *   origin.
  *
  * @example
- * parseUrl("example.com");                        // URL { https://example.com/ }
- * parseUrl("http://example.com/path");            // URL { http://example.com/path }
- * parseUrl({ url: "https://api.example" });       // URL { https://api.example/ }
- * parseUrl("example.com", "/api", "v2", "items"); // URL { https://example.com/api/v2/items }
- * parseUrl("example.com", ["api", "v2"]);         // URL { https://example.com/api/v2 }
- * parseUrl(null, "/api/x");                       // URL { http://localhost/api/x }
- * parseUrl("");                                   // null
- * parseUrl(null);                                 // null
+ * urlBuilder("example.com");          // https://example.com/
+ * urlBuilder("http://x/path");        // http://x/path
+ * urlBuilder("/api/v2");              // http://localhost/api/v2
+ * urlBuilder({ url: "http://y" });    // http://y/
+ * urlBuilder();                       // http://localhost/
  */
-export function parseUrl(
-  input: UrlLike | null | undefined,
-  ...path: UrlSegmentLike[]
-): URL | null {
+export function urlBuilder(input?: UrlLike): UrlBuilder | null;
+
+export function urlBuilder(input?: UrlLike): UrlBuilder | null {
+  if (input instanceof URL) {
+    return new UrlBuilderImpl(input);
+  }
+  if (input !== null && typeof input === "object" && "url" in input) {
+    input = input.url;
+  }
   if (typeof input === "string") {
     input = input.trim();
-    const match = input.match(/^([a-z][a-z0-9+.-]*):\/\/(.*)$/i);
-    const rest = match?.[2] ?? input;
-    if (!rest || rest === "/") return parseUrl(null, ...path);
-    const scheme = match?.[1];
-    if (!scheme) input = `https://${input}`;
   }
-  const joinedPath = joinUrl(...path);
-  if (input == null) {
-    if (joinedPath) return parseUrl("http://localhost", joinedPath);
-    return null;
-  }
-  if (input instanceof URL) {
-    if (joinedPath) return parseUrl(input.toString(), joinedPath);
-    return input;
-  }
-  if (typeof input === "string") {
-    const candidate = joinUrl(input, joinedPath);
-    if (candidate) {
-      try {
-        return new URL(candidate);
-      } catch {
-        // Fall through to `null`.
+  if (input) {
+    if (input.startsWith("/") || input.startsWith("?") || input.startsWith("#")) {
+      const joinedUrl = defaultUrl().toString().slice(0, -1) + input;
+      return urlBuilder(joinedUrl);
+    } else if (input.startsWith(URL_SCHEME_SEPARATOR)) {
+      input = `${URL_SCHEME_DEFAULT}${input}`;
+    } else {
+      const match = input.match(URL_SCHEME_PREFIX);
+      const schemePrefix = match?.[1];
+      if (schemePrefix) {
+        const rest = input.slice(schemePrefix.length);
+        input = `${schemePrefix}${rest || defaultUrl().hostname}`;
+      } else {
+        input = `${URL_SCHEME_DEFAULT}://${input}`;
       }
     }
-    return null;
+  } else {
+    return urlBuilder(defaultUrl());
   }
-  return parseUrl(input.url, joinedPath);
+  const url = parseUrl(input);
+  return url ? urlBuilder(url) : null;
 }
 
-// ────────────────────────────────────────────────────────────────
-// Private helpers
-// ────────────────────────────────────────────────────────────────
+/**
+ * Convenience wrapper over {@link UrlBuilder.pathMatches}: coerce
+ * `input` via {@link urlBuilder} and test its pathname against `path`.
+ * Returns `false` for input that can't be parsed into a URL.
+ *
+ * @example
+ * pathMatch("/api/cool?q=1", "/api");      // true
+ * pathMatch("/apicool", "/api");           // false
+ * pathMatch("https://host/api", "/api");   // true
+ * pathMatch(request, "/api/v2");           // fetch Request
+ */
+export function pathMatch(input: UrlLike, path: string): boolean {
+  const urlb = urlBuilder(input);
+  if (!urlb) return false;
+  return urlb.pathMatches(path);
+}
 
-/** Strip a single leading `/` and a single trailing `/`, if present. */
-function stripBoundarySlashes(s: string): string {
-  let out = s;
-  if (out.startsWith("/")) out = out.slice(1);
-  if (out.endsWith("/")) out = out.slice(0, -1);
-  return out;
+/**
+ * Base origin for resolving path-only inputs. In a browser this is the
+ * current page's origin (`window.location.origin`), so `urlBuilder("/api")`
+ * reflects where the app is actually served from; on the server / in
+ * tests (no `window`, or an opaque `"null"` origin) it falls back to
+ * `http://localhost`.
+ */
+function defaultUrl(): URL {
+  // Reach `window` via `globalThis` so this compiles without the DOM
+  // lib (it's `undefined` on the server / in workers without one).
+  const origin = (globalThis as { window?: { location?: { origin?: string } } }).window
+    ?.location?.origin;
+  if (origin && origin !== "null") {
+    const originUrl = parseUrl(origin);
+    if (originUrl) {
+      return originUrl;
+    }
+  }
+  return new URL(LOCAL_HOST_URL);
+}
+
+function parseUrl(input: string): URL | null {
+  if (input && input.includes(URL_SCHEME_SEPARATOR)) {
+    try {
+      return new URL(input);
+    } catch {}
+  }
+  return null;
 }

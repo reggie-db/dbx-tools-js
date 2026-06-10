@@ -55,10 +55,6 @@ import { createMemoryBuilder, needsLakebase } from "./memory.js";
 import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import {
-  installStreamEventInterceptor,
-  type StreamFrameInterceptor,
-} from "./intercept.js";
-import {
   clearServingEndpointsCache,
   listServingEndpoints,
   resolveServingConfig,
@@ -69,6 +65,7 @@ import {
   isStatementNotFoundError,
   STATEMENT_ROW_CAP,
 } from "./statement.js";
+import { ResultProcessor } from "./processor.js";
 
 const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;
@@ -311,11 +308,6 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
     router.use("", (req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
-      // Run each Mastra `/stream` SSE frame through the interceptor
-      // (keep / rewrite / drop). Only engages on a
-      // `200 text/event-stream` body, so the JSON routes above and any
-      // error response are untouched.
-      installStreamEventInterceptor(res, interceptStreamFrame);
       return this.userScopedSelf(req).mastraApp!(req, res, next);
     });
   }
@@ -501,37 +493,5 @@ function parseStatementLimit(raw: unknown): number | undefined {
   if (!Number.isFinite(n) || n < 0) return undefined;
   return Math.floor(n);
 }
-
-/**
- * {@link StreamFrameInterceptor} for Mastra `/stream` responses.
- *
- * Removes large, redundant payloads from terminal `step-finish`,
- * `finish`, and `tool-result` frames before they reach the browser.
- * These frames often repeat information already delivered incrementally
- * via streamed text and tool events, including full tool outputs,
- * accumulated responses, message history, SQL results, chart data, and
- * other large result payloads.
- *
- * The interceptor deletes heavyweight payload properties
- * (`output`, `messages`, `response`, and `result`) while preserving the
- * event envelope and lifecycle metadata required by the client.
- *
- * Deletion is key based, so streams that do not contain these
- * fields are passed through unchanged.
- */
-const interceptStreamFrame: StreamFrameInterceptor = (chunk) => {
-  if (!commonUtils.isRecord(chunk)) return true;
-  if (!["step-finish", "finish", "tool-result"].find((type) => type === chunk.type))
-    return true;
-  const payload = chunk.payload;
-  if (!commonUtils.isRecord(payload)) return true;
-  const trimmedPayload = commonUtils.deleteKeys(payload, [
-    "output",
-    "messages",
-    "response",
-    "result",
-  ]);
-  return trimmedPayload ? { replace: chunk } : true;
-};
 
 export const mastra = toPlugin(MastraPlugin);

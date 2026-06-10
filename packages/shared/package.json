@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/shared",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "dependencies": {
     "fast-deep-equal": "catalog:",
     "lru-cache": "catalog:",
@@ -31,7 +31,7 @@
   },
   "module": "index.ts",
   "peerDependencies": {
-    "@databricks/appkit": "*"
+    "@databricks/appkit": "catalog:"
   },
   "type": "module"
 }

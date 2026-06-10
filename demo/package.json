@@ -12,7 +12,7 @@
     "@dbx-tools/sdk-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
     "@mastra/client-js": "catalog:",
-    "ai": "^5.0.0",
+    "ai": "5.0.193",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "lucide-react": "^0.554.0",

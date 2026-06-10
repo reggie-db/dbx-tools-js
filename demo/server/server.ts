@@ -133,5 +133,3 @@ await createApp({
     enabled: true,
   },
 });
-
-console.log(await CacheManager.getInstanceSync().isStorageHealthy());

@@ -2,8 +2,8 @@
 // duplicated across more than one script lives here.
 
 import { FileSink, which } from "bun";
-import { serving, WorkspaceClient } from "@databricks/sdk-experimental";
-import { Agent } from "@mastra/core/agent";
+import { WorkspaceClient } from "@databricks/sdk-experimental";
+import { Agent, AgentInstructions } from "@mastra/core/agent";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import { createTool } from "@mastra/core/tools";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -243,10 +243,11 @@ export async function bunx(
 }
 
 /**
- * Lazy WorkspaceClient singleton. Memoized so multiple `aiQuery()`
- * calls in one script share the same auth handshake. Returns `null`
- * when no Databricks profile is available (so callers can degrade
- * gracefully instead of throwing in scripts where AI is optional).
+ * Lazy WorkspaceClient singleton. Memoized so everything that needs
+ * Databricks auth in one script (e.g. the `databricks/...` model
+ * flow) shares the same handshake. Returns `null` when no Databricks
+ * profile is available (so callers can degrade gracefully instead of
+ * throwing in scripts where it's optional).
  */
 export const getWorkspaceClient = pMemoize(
   async (): Promise<WorkspaceClient | null> => {
@@ -259,43 +260,14 @@ export const getWorkspaceClient = pMemoize(
   },
 );
 
-const DEFAULT_AI_MODEL = "databricks-claude-opus-4-6";
-
 /**
- * Send `prompt` plus an optional structured `ctx` to a Databricks
- * model-serving endpoint and return the assistant's text reply.
- *
- * Returns `null` when:
- *   - the combined content is empty
- *   - no Databricks workspace client can be built (no profile, etc.)
- *   - the response has no content
- *
- * Designed so the caller can do `await aiQuery(...) ?? fallback` and
- * never has to handle errors explicitly.
+ * Env var holding the script agent's model spec as `provider/model`
+ * (e.g. `openai/gpt-4o`, `anthropic/claude-sonnet-4`,
+ * `google/gemini-2.5-pro`, `ollama/qwen3-coder:30b`,
+ * `groq/llama-3.3-70b`, `databricks/<endpoint>`). Unset means no
+ * script agent.
  */
-export async function aiQuery(
-  prompt: string,
-  ctx?: unknown,
-  model: string = DEFAULT_AI_MODEL,
-): Promise<string | null> {
-  const parts = [prompt];
-  if (ctx !== undefined && ctx !== null) parts.push("Context:", JSON.stringify(ctx));
-  const content = parts
-    .map((part) => part?.trim?.() ?? part)
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  if (!content) return null;
-
-  const client = await getWorkspaceClient();
-  if (!client) return null;
-
-  const response: serving.QueryEndpointResponse = await client.servingEndpoints.query({
-    name: model,
-    messages: [{ role: "user", content }],
-  });
-  return response?.choices?.[0]?.message?.content || null;
-}
+const MODEL_PROVIDER_ENV = "SCRIPT_MODEL_PROVIDER";
 
 /**
  * Build a `execute_typescript` tool backed by a sandboxed container
@@ -638,7 +610,12 @@ em dashes.`.trim();
 export interface ScriptAgentOverrides {
   /** Override the system instructions. Defaults to {@link DEFAULT_AGENT_INSTRUCTIONS}. */
   instructions?: string;
-  /** Model serving endpoint name. Defaults to {@link DEFAULT_AI_MODEL}. */
+  /**
+   * Model spec as `provider/model` (e.g. `openai/gpt-4o`,
+   * `anthropic/claude-sonnet-4`, `ollama/qwen3-coder:30b`,
+   * `databricks/<endpoint>`). Defaults to the `SCRIPT_MODEL_PROVIDER`
+   * env var; the agent is unavailable (null) when neither is set.
+   */
   model?: string;
   /**
    * Base directory for the filesystem tools (`list_files` / `read_files`).
@@ -650,10 +627,17 @@ export interface ScriptAgentOverrides {
   cwd?: string;
 }
 
-/** Build a Databricks Model Serving config Mastra can drive directly. */
-async function buildScriptModel(modelId: string): Promise<MastraModelConfig | null> {
+/**
+ * Build an OpenAI-compatible config that drives a Databricks Model
+ * Serving `endpoint` through the OAuth'd {@link getWorkspaceClient}.
+ * Returns `undefined` when no workspace client is available (no
+ * profile, etc.) so the agent degrades gracefully.
+ */
+async function buildDatabricksModel(
+  endpoint: string,
+): Promise<MastraModelConfig | undefined> {
   const client = await getWorkspaceClient();
-  if (!client) return null;
+  if (!client) return undefined;
   const host = (await client.config.getHost()).toString();
   const headers = new Headers();
   await client.config.authenticate(headers);
@@ -663,10 +647,83 @@ async function buildScriptModel(modelId: string): Promise<MastraModelConfig | nu
   const url = new URL("/serving-endpoints", host).toString().replace(/\/$/, "");
   return {
     providerId: "databricks",
-    modelId,
+    modelId: endpoint,
     url,
     headers: Object.fromEntries(headers.entries()),
   };
+}
+
+/**
+ * Pull `model` with the local Ollama CLI, then return a provider model
+ * pointed at the local daemon. Returns `undefined` when the `ollama`
+ * binary isn't on `PATH`, so the agent degrades instead of erroring.
+ *
+ * ollama-ai-provider-v2 (3.5.1) never sends keep_alive on the
+ * chat/generate path, so Ollama keeps the model resident for its
+ * default 5m idle after the script exits. A keep-alive fetch shim
+ * splices keep_alive into the request body so the model unloads
+ * shortly after the run.
+ */
+async function buildOllamaModel(
+  model: string,
+): Promise<MastraModelConfig | undefined> {
+  const ollamaFilePath = Bun.which("ollama");
+  if (!ollamaFilePath) return undefined;
+  await exec(ollamaFilePath, ["pull", model], {
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const { createOllama } = await import("ollama-ai-provider-v2");
+  // The cast is needed because `OllamaProviderSettings.fetch` is the
+  // global `fetch` type, which also carries a static `preconnect` the
+  // provider never calls.
+  const keepAliveFetch = ((
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) => {
+    if (typeof init?.body === "string") {
+      try {
+        init = {
+          ...init,
+          body: JSON.stringify({ ...JSON.parse(init.body), keep_alive: "30s" }),
+        };
+      } catch {
+        // non-JSON body (shouldn't happen for chat): leave untouched
+      }
+    }
+    return fetch(input, init);
+  }) as typeof fetch;
+  return createOllama({ fetch: keepAliveFetch })(model);
+}
+
+/**
+ * Resolve a `provider/model` spec into a Mastra model config. Split on
+ * the first `/` only, so model ids that carry their own separators
+ * stay intact (`ollama/qwen3-coder:30b` -> provider `ollama`, model
+ * `qwen3-coder:30b`).
+ *
+ *   - `databricks/<endpoint>`: Databricks Model Serving via the OAuth'd
+ *     {@link buildDatabricksModel} flow.
+ *   - `ollama/<model>`: pull and serve from the local Ollama daemon via
+ *     {@link buildOllamaModel}.
+ *   - anything else (`openai/...`, `anthropic/...`, `google/...`,
+ *     `groq/...`): hand the spec to Mastra's model router, which
+ *     resolves it from that provider's own env credentials.
+ *
+ * Returns `undefined` when `spec` is empty (no env configured).
+ */
+async function buildScriptModel(
+  spec: string | undefined,
+): Promise<MastraModelConfig | undefined> {
+  if (!spec) return undefined;
+  const slash = spec.indexOf("/");
+  const provider = slash === -1 ? "" : spec.slice(0, slash);
+  const model = slash === -1 ? spec : spec.slice(slash + 1);
+  if (!model) return undefined;
+  if (provider === "databricks") return buildDatabricksModel(model);
+  if (provider === "ollama") return buildOllamaModel(model);
+  // openai / anthropic / google / groq / ... -> Mastra provider defaults.
+  return spec;
 }
 
 /**
@@ -675,13 +732,14 @@ async function buildScriptModel(modelId: string): Promise<MastraModelConfig | nu
  * pair so repeated `agentQuery()` calls in one script reuse the
  * same agent and the auth handshake from {@link getWorkspaceClient}.
  *
- * Returns `null` when no Databricks workspace client is available,
- * matching the degrade-gracefully behavior of {@link aiQuery}.
+ * Returns `null` when no model spec resolves (no `overrides.model`
+ * and no `SCRIPT_MODEL_PROVIDER`, or the chosen provider is
+ * unavailable) so callers can degrade gracefully.
  */
 export const getScriptAgent = pMemoize(
   async (overrides: ScriptAgentOverrides = {}): Promise<Agent | null> => {
-    const modelId = overrides.model ?? DEFAULT_AI_MODEL;
-    const model = await buildScriptModel(modelId);
+    const spec = overrides.model ?? process.env[MODEL_PROVIDER_ENV];
+    const model = await buildScriptModel(spec);
     if (!model) return null;
     const base = overrides.cwd ?? ROOT;
     const gitTools = createGitTools();
@@ -697,7 +755,7 @@ export const getScriptAgent = pMemoize(
       id: "dbx-tools-script-agent",
       name: "dbx-tools-script-agent",
       instructions,
-      model,
+      model: model,
       tools: {
         list_files: createListFilesTool(base),
         read_files: createReadFilesTool(base),
@@ -712,13 +770,12 @@ export const getScriptAgent = pMemoize(
 );
 
 /**
- * Agent-driven counterpart of {@link aiQuery}. Runs the same `prompt`
- * + optional structured `ctx` through a Mastra agent that can call
- * the `read_files` tool to inspect repo files on demand. Use when the
- * LLM needs to cite or summarize specific source files; reach for
- * `aiQuery` when you only need a one-shot completion.
+ * Run `prompt` + optional structured `ctx` through a Mastra agent that
+ * can call the `read_files` tool to inspect repo files on demand. Use
+ * when the LLM needs to cite or summarize specific source files.
  *
- * Same null-on-failure contract as `aiQuery` so callers can keep the
+ * Returns `null` on any failure (empty content, no resolvable model,
+ * exhausted retries) so callers can keep the
  * `await agentQuery(...) ?? fallback` pattern.
  */
 export async function agentQuery(

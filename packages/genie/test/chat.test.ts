@@ -352,13 +352,15 @@ describe("genieEventChat", () => {
       events.push(event);
     }
 
-    // Per snapshot: `message` first, then derived events. Status
-    // emits on every transition; attachment + query fire only on
-    // snapshot 2 (their first appearance); `result` fires once on
-    // the terminal snapshot.
+    // Per snapshot: `message` first, then derived events. `question`
+    // fires once, right after the first `message`. Status emits on
+    // every transition; attachment + query fire only on snapshot 2
+    // (their first appearance); `result` fires once on the terminal
+    // snapshot.
     expect(events.map((e) => e.type)).toEqual([
       // snapshot 1: SUBMITTED, no attachments
       "message",
+      "question",
       "status",
       // snapshot 2: ASKING_AI, attachment + query appear
       "message",

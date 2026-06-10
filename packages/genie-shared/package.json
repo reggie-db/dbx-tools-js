@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/genie-shared",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "dependencies": {
     "@dbx-tools/sdk-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
@@ -8,7 +8,7 @@
   },
   "module": "index.ts",
   "peerDependencies": {
-    "@databricks/appkit": "*"
+    "@databricks/appkit": "catalog:"
   },
   "type": "module"
 }

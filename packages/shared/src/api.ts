@@ -9,14 +9,16 @@ import { CacheManager, getExecutionContext } from "@databricks/appkit";
 // missing-extension error. Direct sibling imports stay typed and
 // don't risk a future cycle.
 import { fnvHash, tieAbortSignal } from "./common.js";
-import { joinUrl, parseUrl } from "./net.browser.js";
+import { urlBuilder } from "./net.browser.js";
 
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
 
-const API_PREFIX = "/api/2.0";
+const API_PATH = "/api/2.0";
+
 type GetOrExecuteParams = Parameters<CacheManager["getOrExecute"]>;
+
 type ApiRequestInit = RequestInit & {
   cache?: {
     key?: GetOrExecuteParams[0];
@@ -36,21 +38,17 @@ type ApiRequestInit = RequestInit & {
  * `getExecutionContext().client`.
  */
 export async function apiUrl(
-  path: string[] | string,
+  path: string | string[],
   workspaceClient?: WorkspaceClient,
 ): Promise<URL> {
-  let joinedPath = joinUrl(path);
-  if (joinedPath === API_PREFIX || joinedPath.startsWith(API_PREFIX + "/")) {
-    joinedPath = joinedPath.slice(API_PREFIX.length);
-  }
-  if (!joinedPath) {
-    throw new Error(`Invalid path: ${path}`);
-  }
   const client = workspaceClient ?? getExecutionContext().client;
   const config = client.config;
   const host = await config.getHost();
-  const url = parseUrl(host, API_PREFIX, joinedPath)!;
-  return url;
+  let urlb = urlBuilder(host)!.withPathReplace(...path);
+  if (!urlb.pathMatches(API_PATH)) {
+    urlb = urlb.withPathReplace(API_PATH, ...path);
+  }
+  return urlb;
 }
 
 /**

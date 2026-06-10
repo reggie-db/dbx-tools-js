@@ -25,12 +25,7 @@
  * the input verbatim and let Databricks return the canonical error.
  */
 
-import {
-  commonUtils,
-  logUtils,
-  netUtils,
-  stringUtils,
-} from "@dbx-tools/shared";
+import { commonUtils, logUtils, netUtils, stringUtils } from "@dbx-tools/shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
 
@@ -390,7 +385,7 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
   const log = logUtils.logger("mastra/llm");
   const original = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input, init) => {
-    const url = netUtils.parseUrl(input);
+    const url = netUtils.urlBuilder(input);
     if (
       !url ||
       !url.pathname.startsWith(SERVING_ENDPOINTS_PATH_PREFIX) ||
