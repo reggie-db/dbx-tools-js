@@ -1,5 +1,5 @@
-import { createApp, genie, lakebase, server } from "@databricks/appkit";
-import { autopg } from "@dbx-tools/appkit-autopg";
+import { genie, lakebase, server } from "@databricks/appkit";
+import { createApp } from "@dbx-tools/appkit-config";
 import {
   buildEmailTool,
   createAgent,
@@ -11,12 +11,15 @@ import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
 //
-// `autopg()` runs BEFORE `createApp(...)` because AppKit's plugin
-// phases only order `setup()` invocation, not async completion - if
-// autopg were a plugin it would race lakebase's sync env validation.
-// As a top-level helper it resolves LAKEBASE_ENDPOINT / PGHOST /
-// PGDATABASE via the Databricks Postgres REST API and writes them to
-// `process.env` so the lakebase plugin sees a fully-populated env.
+// `createApp` here is the auto-configuring wrapper from
+// `@dbx-tools/appkit-config`, not AppKit's own. Because a `lakebase()`
+// plugin is in the list, it runs `autopg()` BEFORE delegating to
+// AppKit's `createApp` - resolving LAKEBASE_ENDPOINT / PGHOST /
+// PGDATABASE via the Databricks Postgres REST API and writing them to
+// `process.env` so the lakebase plugin sees a fully-populated env. This
+// runs up front (not as a plugin) because AppKit's plugin phases only
+// order `setup()` invocation, not async completion, so a plugin would
+// race lakebase's synchronous env validation.
 //
 // Plugin order:
 // 1. `server()` and `lakebase()` register before `mastra()` so the
@@ -44,8 +47,6 @@ import { z } from "zod";
 // - LAKEBASE_PROJECT (or LAKEBASE_ENDPOINT) - autopg fills in the rest
 // - DATABRICKS_GENIE_SPACE_ID - picked up by `genie()` as the
 //   `default` space when `spaces` is omitted.
-
-await autopg();
 
 // Agents are declared the same way as AppKit's `agents` plugin:
 // build each definition with `createAgent({...})` (a no-op identity

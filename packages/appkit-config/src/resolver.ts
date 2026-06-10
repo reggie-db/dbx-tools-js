@@ -37,7 +37,7 @@ import { getWorkspaceClient } from "@databricks/appkit";
 import { projectUtils, stringUtils, type logUtils } from "@dbx-tools/shared";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { parseAddress } from "./address.js";
+import { parseAddress } from "./pgaddress.js";
 
 const API_BASE = "/api/2.0/postgres";
 const DEFAULT_PORT = 5432;

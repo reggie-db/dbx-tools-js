@@ -6,7 +6,8 @@ Runnable Databricks App that wires up the AppKit plugins in this repo plus
 Generated from the AppKit `app init` template, then adapted to:
 
 - Mount the Mastra plugin alongside `server`, `genie`, and `lakebase`,
-  with `autopg()` discovery for Lakebase env vars.
+  booting through `@dbx-tools/appkit-config`'s `createApp` so Lakebase
+  env vars are auto-discovered (`autopg()`) before delegating to AppKit.
 - Hand the central Mastra agent the flat Genie toolset
   (`ask_genie`, `get_statement`, `prepare_chart`, plus per-space
   description / serialization tools) and the canonical
@@ -57,7 +58,7 @@ demo/
   tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # autopg() then createApp({ plugins: [server(), genie(), lakebase(), mastra()] })
+    server.ts             # createApp (appkit-config) -> autopg() then AppKit createApp({ plugins: [server(), genie(), lakebase(), mastra()] })
   client/
     index.html
     vite.config.ts        # React + Tailwind v4 + workspace `source` condition

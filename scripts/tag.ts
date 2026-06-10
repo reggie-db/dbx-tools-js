@@ -5,12 +5,21 @@
 // `.github/workflows/release.yml`, which builds every publishable
 // workspace and runs `bunx changeset publish`.
 //
+// After pushing, the script also publishes the tagged versions to the
+// local registry (Verdaccio by default) via `release()`. The public-npm
+// path runs in CI and can be gated for days (e.g. a corp proxy that
+// quarantines new versions), so the local copy is what other projects
+// on this machine install in the meantime. It's the same staged
+// manifest a real npm publish produces. Best-effort and opt-out with
+// `--no-publish`; point elsewhere with `--registry`/`NPM_REGISTRY`.
+//
 // Usage:
 //   bun run tag                # patch bump (default)
 //   bun run tag patch          # patch bump
 //   bun run tag minor          # minor bump
 //   bun run tag major          # major bump
 //   bun run tag --readme       # also sync package READMEs (off by default)
+//   bun run tag --no-publish   # skip the local registry publish
 //   bun run tag --dry-run      # print everything, write nothing
 //
 // All `@dbx-tools/*` packages are version-fixed via
@@ -56,9 +65,10 @@
 //   commit, so the shipped READMEs match the tagged code.
 
 import { which } from "bun";
-import { Command, InvalidArgumentError } from "commander";
+import { Command, InvalidArgumentError, Option } from "commander";
 import semver from "semver";
 import { syncReadmes } from "./readme.js";
+import { DEFAULT_REGISTRY, release } from "./release.js";
 import { agentQuery, discoverPackages, fail, git, writeJson } from "./util.js";
 
 type Bump = "major" | "minor" | "patch";
@@ -306,12 +316,26 @@ const program = new Command()
     "sync package READMEs with source before the release commit (off by default)",
     false,
   )
+  .option(
+    "--no-publish",
+    "skip publishing the tagged versions to the local registry",
+  )
+  .addOption(
+    new Option(
+      "-r, --registry <url>",
+      "local registry to publish the tagged versions to",
+    )
+      .env("NPM_REGISTRY")
+      .default(DEFAULT_REGISTRY),
+  )
   .parse(process.argv);
 
 const [bump] = program.processedArgs as [Bump];
-const { dryRun, readme } = program.opts<{
+const { dryRun, readme, publish, registry } = program.opts<{
   dryRun: boolean;
   readme: boolean;
+  publish: boolean;
+  registry: string;
 }>();
 
 const { version: currentVersion, pkgs } = await findPublishables();
@@ -397,6 +421,11 @@ console.log();
 
 if (dryRun) {
   console.log("--dry-run: skipping write, commit, tag, and push.");
+  if (publish) {
+    console.log();
+    console.log(`--dry-run: previewing local publish to ${registry}...`);
+    await release({ registry, dryRun: true });
+  }
   process.exit(0);
 }
 
@@ -419,6 +448,31 @@ await gitPush(tag);
 // The annotated tag message shows up as plaintext on GitHub's tag
 // page. The Release object renders the same body as markdown.
 await publishGithubRelease(tag, aiSummary ?? `Release ${tag}`);
+
+// Publish the freshly-tagged versions to the local registry (Verdaccio
+// by default) so other projects on this machine can consume them right
+// away. The public-npm path goes through CI on the tag push and can be
+// gated for days (e.g. a corp proxy that quarantines new versions), so
+// the local copy is what local consumers actually install in the
+// meantime. Best-effort: the tag is already pushed, so an unreachable
+// local registry is a warning, not a failure - rerun `bun run release`
+// once it's back.
+if (publish) {
+  console.log();
+  console.log(`Publishing ${tag} to local registry ${registry}...`);
+  try {
+    const result = await release({ registry });
+    if (result.failed > 0) {
+      console.warn(
+        `  ${result.failed} package(s) failed to publish to ${registry}; rerun \`bun run release\` once it's reachable.`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `  local publish to ${registry} failed: ${(err as Error).message}; rerun \`bun run release\`.`,
+    );
+  }
+}
 
 console.log();
 console.log(`✓ Released ${tag}.`);

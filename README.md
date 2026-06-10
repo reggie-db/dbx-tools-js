@@ -10,7 +10,7 @@ for the Mastra plugin, plus a runnable Databricks App demo.
 | [`@dbx-tools/sdk-shared`](packages/sdk-shared)                             | `packages/sdk-shared`           | yes                  |
 | [`@dbx-tools/genie-shared`](packages/genie-shared)                         | `packages/genie-shared`         | yes                  |
 | [`@dbx-tools/genie`](packages/genie)                                       | `packages/genie`                | yes                  |
-| [`@dbx-tools/appkit-autopg`](packages/appkit-autopg)                       | `packages/appkit-autopg`        | yes                  |
+| [`@dbx-tools/appkit-config`](packages/appkit-config)                       | `packages/appkit-config`        | yes                  |
 | [`@dbx-tools/appkit-serving`](packages/appkit-serving)                     | `packages/appkit-serving`       | yes                  |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra)                       | `packages/appkit-mastra`        | yes                  |
 | [`@dbx-tools/appkit-mastra-shared`](packages/appkit-mastra-shared)         | `packages/appkit-mastra-shared` | yes                  |
@@ -29,9 +29,14 @@ a discriminated `GenieChatEvent` union for live streaming. `genie` is the
 client-side driver: `genieChat` (raw poll-observed snapshots) and
 `genieEventChat` (semantic deduplicated events), built on the workspace
 client with cancellation, conversation seeding, and stale-id recovery.
-`appkit-autopg` is a one-line `autopg()` helper that fills in every Lakebase
-Postgres env var the AppKit `lakebase` plugin needs from whatever fragments
-your deployment carries (resource paths, bare hostnames, Postgres URIs).
+`appkit-config` provides auto-configuration for AppKit apps: its `createApp`
+is a drop-in for AppKit's own that resolves and applies each enabled
+capability's environment before delegating. Today that means Lakebase
+Postgres discovery (the `autopg()` helper, also callable standalone) - which
+fills in every env var the AppKit `lakebase` plugin needs from whatever
+fragments your deployment carries (resource paths, bare hostnames, Postgres
+URIs) - gated on the `lakebase` plugin being present, with room to grow to
+other capabilities.
 `appkit-serving` is a tiny set of typed accessors over the
 `/api/2.0/serving-endpoints` listing - `servingEndpoints()` plus
 `foundationModel{Class,Profile,Version}` helpers that pull `model_class`,

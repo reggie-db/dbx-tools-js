@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseAddress } from "../src/address.js";
+import { parseAddress } from "../src/pgaddress.js";
 
 describe("parseAddress", () => {
   describe("empty / invalid", () => {

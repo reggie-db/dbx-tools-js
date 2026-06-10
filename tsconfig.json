@@ -34,7 +34,7 @@
       "path": "./demo/tsconfig.json"
     },
     {
-      "path": "./packages/appkit-autopg/tsconfig.build.json"
+      "path": "./packages/appkit-config/tsconfig.build.json"
     },
     {
       "path": "./packages/appkit-mastra-shared/tsconfig.build.json"

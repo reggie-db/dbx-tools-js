@@ -1,6 +1,6 @@
 {
-  "name": "@dbx-tools/appkit-autopg",
-  "version": "0.1.33",
+  "name": "@dbx-tools/appkit-config",
+  "version": "0.1.34",
   "dependencies": {
     "@dbx-tools/shared": "workspace:*"
   },

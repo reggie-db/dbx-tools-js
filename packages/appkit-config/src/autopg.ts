@@ -1,12 +1,16 @@
 /**
  * Top-level Lakebase auto-discovery helper.
  *
- * Read this once at process startup BEFORE `createApp(...)` so the
- * `lakebase` plugin (and anyone else who reads `process.env` during
- * `setup()`) sees a fully-populated environment:
+ * Most apps don't call this directly - `createApp` from
+ * `@dbx-tools/appkit-config` runs it automatically when a `lakebase`
+ * plugin is present. Reach for it standalone only when you want the
+ * resolution without the `createApp` wrapper; call it once at process
+ * startup BEFORE `createApp(...)` so the `lakebase` plugin (and anyone
+ * else who reads `process.env` during `setup()`) sees a fully-populated
+ * environment:
  *
  * ```ts
- * import { autopg } from "@dbx-tools/appkit-autopg";
+ * import { autopg } from "@dbx-tools/appkit-config";
  * import { createApp, lakebase, server } from "@databricks/appkit";
  *
  * await autopg();              // resolves + writes process.env

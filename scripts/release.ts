@@ -1,6 +1,17 @@
 #!/usr/bin/env bun
 // Publish every non-private workspace package to npm.
 //
+// Exposed two ways:
+//   - CLI:      `bun run release` (this file run directly).
+//   - Library:  `import { release } from "./release.js"` - `tag.ts`
+//               calls it after the version bump so every `bun run tag`
+//               also lands the freshly-tagged versions on the local
+//               Verdaccio registry. That matters when the public-npm
+//               path is gated (e.g. a corp proxy that quarantines new
+//               versions for some days): local consumers pull the same
+//               package shape from Verdaccio immediately instead of
+//               waiting for the public copy to clear.
+//
 // On-disk `packages/*/package.json` files are kept to the absolute
 // minimum needed for dev tooling (name / version / type / module /
 // deps, plus per-package custom fields like `@dbx-tools/shared`'s
@@ -73,7 +84,7 @@ import {
  * CI enforced via the `NPM_REGISTRY` env var (see
  * `.github/workflows/release.yml`).
  */
-const DEFAULT_REGISTRY = "http://localhost:4873";
+export const DEFAULT_REGISTRY = "http://localhost:4873";
 
 /**
  * Per-package directory we stage into. Sibling of `package.json`,
@@ -105,6 +116,28 @@ const DEP_KEYS = [
   "optionalDependencies",
 ] as const;
 
+/** Options accepted by {@link release}. */
+export interface ReleaseOptions {
+  /** Registry to publish to. Defaults to {@link DEFAULT_REGISTRY}. */
+  registry?: string;
+  /** Pack each package without uploading. */
+  dryRun?: boolean;
+  /** One-time password for 2FA-protected registries. */
+  otp?: string;
+}
+
+/** Per-run tally returned by {@link release}. */
+export interface ReleaseResult {
+  /** Packages uploaded (or packed, in dry-run) this run. */
+  published: number;
+  /** Packages skipped because the version already exists on the registry. */
+  skipped: number;
+  /** Packages whose publish threw. */
+  failed: number;
+  /** Total publishable packages considered. */
+  total: number;
+}
+
 /**
  * Hostnames we treat as "the developer's machine" for the purposes
  * of skipping the `npm login` requirement. Matches loopback addresses
@@ -123,132 +156,6 @@ function isLocalRegistry(registry: string): boolean {
   } catch {
     return false;
   }
-}
-
-const program = new Command()
-  .name("publish")
-  .description("Publish every public workspace package to npm via `npm publish`.")
-  .addOption(
-    new Option("-r, --registry <url>", "registry to publish to")
-      .env("NPM_REGISTRY")
-      .default(DEFAULT_REGISTRY),
-  )
-  .option("--dry-run", "pack each package without uploading", false)
-  .option("--otp <code>", "one-time password for 2FA-protected registries")
-  .parse(process.argv);
-
-const { dryRun, registry, otp } = program.opts<{
-  dryRun: boolean;
-  registry: string;
-  otp?: string;
-}>();
-
-const rootMeta = (await Bun.file(
-  resolve(ROOT, "package.json"),
-).json()) as PackageJson & {
-  catalog?: Record<string, string>;
-  catalogs?: Record<string, Record<string, string>>;
-};
-const defaultData = (await Bun.file(
-  resolve(ROOT, "package.default.json"),
-).json()) as PackageJson;
-const enforcedData = (await Bun.file(
-  resolve(ROOT, "package.enforced.json"),
-).json()) as PackageJson;
-const enforcedRepo = (enforcedData.repository ?? {}) as Record<string, unknown>;
-
-const DEFAULT_CATALOG = rootMeta.catalog ?? {};
-const NAMED_CATALOGS = rootMeta.catalogs ?? {};
-
-const packages = await discoverPackages();
-const workspaceVersions = new Map<string, string>();
-for (const pkg of packages) {
-  if (pkg.meta.name && pkg.meta.version) {
-    workspaceVersions.set(pkg.meta.name, pkg.meta.version);
-  }
-}
-
-/**
- * Resolve a `workspace:` specifier (e.g. `workspace:*`,
- * `workspace:^`, `workspace:1.2.3`) using the in-monorepo version of
- * `name`. Mirrors what bun does internally when run from a workspace
- * member; we replicate it here because the stage dir is outside the
- * workspace tree (and `npm publish`, which we use for the actual
- * upload, doesn't understand `workspace:` specifiers at all).
- */
-function resolveWorkspaceDep(name: string, spec: string): string {
-  const target = workspaceVersions.get(name);
-  if (!target) {
-    fail(`${name} uses ${spec} but isn't a workspace package`);
-  }
-  const rest = spec.slice("workspace:".length);
-  if (rest === "" || rest === "*") return target;
-  if (rest === "^") return `^${target}`;
-  if (rest === "~") return `~${target}`;
-  return rest;
-}
-
-/**
- * Resolve a `catalog:` or `catalog:<name>:` specifier against the
- * root manifest's `catalog`/`catalogs` fields. Default catalog when
- * the spec is bare `catalog:`, named catalog otherwise.
- */
-function resolveCatalogDep(name: string, spec: string): string {
-  const catalogName = spec.slice("catalog:".length);
-  const catalog =
-    catalogName === "" ? DEFAULT_CATALOG : (NAMED_CATALOGS[catalogName] ?? null);
-  if (!catalog) {
-    fail(`${name} references unknown catalog "${catalogName || "(default)"}"`);
-  }
-  const range = catalog[name];
-  if (!range) {
-    fail(`${name} not present in catalog "${catalogName || "(default)"}"`);
-  }
-  return range;
-}
-
-/**
- * Walk every dep map on `meta` and rewrite `workspace:`/`catalog:`
- * specifiers in place into the real version range that consumers
- * outside the monorepo can install.
- */
-function rewriteSpecialDeps(meta: PackageJson): void {
-  for (const key of DEP_KEYS) {
-    const deps = meta[key];
-    if (!deps || typeof deps !== "object") continue;
-    const depsMap = deps as Record<string, string>;
-    for (const [name, spec] of Object.entries(depsMap)) {
-      if (typeof spec !== "string") continue;
-      if (spec.startsWith("workspace:")) {
-        depsMap[name] = resolveWorkspaceDep(name, spec);
-      } else if (spec.startsWith("catalog:")) {
-        depsMap[name] = resolveCatalogDep(name, spec);
-      }
-    }
-  }
-}
-
-/**
- * Merge default < own < enforced for one package, stamp in the
- * package-specific `repository.directory`, and rewrite all special
- * dep specifiers. Shallow merge is on purpose: when a package
- * defines its own multi-condition `exports` map (e.g.
- * `@dbx-tools/shared`'s dual server/browser entry), the
- * default single-entry map is replaced wholesale instead of
- * deep-merged into it.
- */
-function mergeForRelease(pkg: WorkspacePackage): PackageJson {
-  const merged: PackageJson = {
-    ...defaultData,
-    ...pkg.meta,
-    ...enforcedData,
-    repository: {
-      ...enforcedRepo,
-      directory: relative(ROOT, pkg.dir).replace(/\\/g, "/"),
-    },
-  };
-  rewriteSpecialDeps(merged);
-  return merged;
 }
 
 /**
@@ -308,64 +215,220 @@ async function copyPublishableFiles(
 }
 
 /**
- * Stage `pkg` into a gitignored `<pkg>/.publish/` directory and run
- * `npm publish` (or `bun pm pack --dry-run` for dry-runs) from
- * there. The stage gets recreated from scratch on every call and
- * always wiped by the `finally` block, so a failed publish never
- * leaves a stale directory behind. We use `npm publish` rather than
- * `bun publish` because bun (1.3.13) doesn't embed the README into
- * the registry manifest payload, which leaves the npm web UI
- * showing an empty package page.
+ * Publish (or, with `dryRun`, pack) every public workspace package to
+ * `registry`. Produces the same staged manifest a real npm publish
+ * would (default < own < enforced, with `workspace:*`/`catalog:`
+ * specifiers resolved to concrete ranges), so a local Verdaccio copy
+ * is byte-for-byte what an npm consumer would install.
+ *
+ * Idempotent: versions already present on the registry are skipped
+ * rather than re-uploaded. Per-package failures are tallied (not
+ * thrown) so one bad package doesn't abort the rest; callers inspect
+ * `result.failed` and decide whether that's fatal.
  */
-async function publishOne(pkg: WorkspacePackage): Promise<void> {
-  const stageDir = resolve(pkg.dir, STAGE_DIRNAME);
-  rmSync(stageDir, { recursive: true, force: true });
-  mkdirSync(stageDir, { recursive: true });
-  try {
-    const merged = mergeForRelease(pkg);
-    const filesList = Array.isArray(merged.files) ? (merged.files as string[]) : [];
-    await copyPublishableFiles(pkg, filesList, stageDir);
-    await writeJson(resolve(stageDir, "package.json"), merged);
+export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult> {
+  const { registry = DEFAULT_REGISTRY, dryRun = false, otp } = opts;
 
-    if (isLocalRegistry(registry)) {
-      const { host } = new URL(registry);
-      await Bun.write(resolve(stageDir, ".npmrc"), `//${host}/:_authToken=anonymous\n`);
-    }
+  const rootMeta = (await Bun.file(
+    resolve(ROOT, "package.json"),
+  ).json()) as PackageJson & {
+    catalog?: Record<string, string>;
+    catalogs?: Record<string, Record<string, string>>;
+  };
+  const defaultData = (await Bun.file(
+    resolve(ROOT, "package.default.json"),
+  ).json()) as PackageJson;
+  const enforcedData = (await Bun.file(
+    resolve(ROOT, "package.enforced.json"),
+  ).json()) as PackageJson;
+  const enforcedRepo = (enforcedData.repository ?? {}) as Record<string, unknown>;
 
-    if (dryRun) {
-      await exec("bun", ["pm", "pack", "--dry-run"], { cwd: stageDir });
-      console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
-      return;
+  const DEFAULT_CATALOG = rootMeta.catalog ?? {};
+  const NAMED_CATALOGS = rootMeta.catalogs ?? {};
+
+  const packages = await discoverPackages();
+  const workspaceVersions = new Map<string, string>();
+  for (const pkg of packages) {
+    if (pkg.meta.name && pkg.meta.version) {
+      workspaceVersions.set(pkg.meta.name, pkg.meta.version);
     }
-    const args = ["publish", "--access=public", `--registry=${registry}`];
-    if (otp) args.push(`--otp=${otp}`);
-    await exec("npm", args, { cwd: stageDir });
-    console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
-  } finally {
+  }
+
+  /**
+   * Resolve a `workspace:` specifier (e.g. `workspace:*`,
+   * `workspace:^`, `workspace:1.2.3`) using the in-monorepo version of
+   * `name`. Mirrors what bun does internally when run from a workspace
+   * member; we replicate it here because the stage dir is outside the
+   * workspace tree (and `npm publish`, which we use for the actual
+   * upload, doesn't understand `workspace:` specifiers at all).
+   */
+  function resolveWorkspaceDep(name: string, spec: string): string {
+    const target = workspaceVersions.get(name);
+    if (!target) {
+      fail(`${name} uses ${spec} but isn't a workspace package`);
+    }
+    const rest = spec.slice("workspace:".length);
+    if (rest === "" || rest === "*") return target;
+    if (rest === "^") return `^${target}`;
+    if (rest === "~") return `~${target}`;
+    return rest;
+  }
+
+  /**
+   * Resolve a `catalog:` or `catalog:<name>:` specifier against the
+   * root manifest's `catalog`/`catalogs` fields. Default catalog when
+   * the spec is bare `catalog:`, named catalog otherwise.
+   */
+  function resolveCatalogDep(name: string, spec: string): string {
+    const catalogName = spec.slice("catalog:".length);
+    const catalog =
+      catalogName === "" ? DEFAULT_CATALOG : (NAMED_CATALOGS[catalogName] ?? null);
+    if (!catalog) {
+      fail(`${name} references unknown catalog "${catalogName || "(default)"}"`);
+    }
+    const range = catalog[name];
+    if (!range) {
+      fail(`${name} not present in catalog "${catalogName || "(default)"}"`);
+    }
+    return range;
+  }
+
+  /**
+   * Walk every dep map on `meta` and rewrite `workspace:`/`catalog:`
+   * specifiers in place into the real version range that consumers
+   * outside the monorepo can install.
+   */
+  function rewriteSpecialDeps(meta: PackageJson): void {
+    for (const key of DEP_KEYS) {
+      const deps = meta[key];
+      if (!deps || typeof deps !== "object") continue;
+      const depsMap = deps as Record<string, string>;
+      for (const [name, spec] of Object.entries(depsMap)) {
+        if (typeof spec !== "string") continue;
+        if (spec.startsWith("workspace:")) {
+          depsMap[name] = resolveWorkspaceDep(name, spec);
+        } else if (spec.startsWith("catalog:")) {
+          depsMap[name] = resolveCatalogDep(name, spec);
+        }
+      }
+    }
+  }
+
+  /**
+   * Merge default < own < enforced for one package, stamp in the
+   * package-specific `repository.directory`, and rewrite all special
+   * dep specifiers. Shallow merge is on purpose: when a package
+   * defines its own multi-condition `exports` map (e.g.
+   * `@dbx-tools/shared`'s dual server/browser entry), the
+   * default single-entry map is replaced wholesale instead of
+   * deep-merged into it.
+   */
+  function mergeForRelease(pkg: WorkspacePackage): PackageJson {
+    const merged: PackageJson = {
+      ...defaultData,
+      ...pkg.meta,
+      ...enforcedData,
+      repository: {
+        ...enforcedRepo,
+        directory: relative(ROOT, pkg.dir).replace(/\\/g, "/"),
+      },
+    };
+    rewriteSpecialDeps(merged);
+    return merged;
+  }
+
+  /**
+   * Stage `pkg` into a gitignored `<pkg>/.publish/` directory and run
+   * `npm publish` (or `bun pm pack --dry-run` for dry-runs) from
+   * there. The stage gets recreated from scratch on every call and
+   * always wiped by the `finally` block, so a failed publish never
+   * leaves a stale directory behind. We use `npm publish` rather than
+   * `bun publish` because bun (1.3.13) doesn't embed the README into
+   * the registry manifest payload, which leaves the npm web UI
+   * showing an empty package page.
+   */
+  async function publishOne(pkg: WorkspacePackage): Promise<void> {
+    const stageDir = resolve(pkg.dir, STAGE_DIRNAME);
     rmSync(stageDir, { recursive: true, force: true });
+    mkdirSync(stageDir, { recursive: true });
+    try {
+      const merged = mergeForRelease(pkg);
+      const filesList = Array.isArray(merged.files) ? (merged.files as string[]) : [];
+      await copyPublishableFiles(pkg, filesList, stageDir);
+      await writeJson(resolve(stageDir, "package.json"), merged);
+
+      if (isLocalRegistry(registry)) {
+        const { host } = new URL(registry);
+        await Bun.write(
+          resolve(stageDir, ".npmrc"),
+          `//${host}/:_authToken=anonymous\n`,
+        );
+      }
+
+      if (dryRun) {
+        await exec("bun", ["pm", "pack", "--dry-run"], { cwd: stageDir });
+        console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
+        return;
+      }
+      const args = ["publish", "--access=public", `--registry=${registry}`];
+      if (otp) args.push(`--otp=${otp}`);
+      await exec("npm", args, { cwd: stageDir });
+      console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
+    } finally {
+      rmSync(stageDir, { recursive: true, force: true });
+    }
   }
+
+  console.log(
+    `${dryRun ? "Dry-run packing" : "Publishing"} ${packages.length} package(s) to ${registry}:`,
+  );
+  for (const pkg of packages) console.log(`  - ${pkg.slug}`);
+  console.log();
+
+  let published = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const pkg of packages) {
+    if (!dryRun && (await isAlreadyPublished(pkg, registry))) {
+      console.log(
+        `- skipping ${pkg.meta.name}@${pkg.meta.version}: already on registry`,
+      );
+      skipped++;
+      continue;
+    }
+    try {
+      await publishOne(pkg);
+      published++;
+    } catch (err) {
+      failed++;
+      console.error(
+        `✗ publish failed for ${pkg.meta.name}@${pkg.meta.version}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  return { published, skipped, failed, total: packages.length };
 }
 
-console.log(
-  `${dryRun ? "Dry-run packing" : "Publishing"} ${packages.length} package(s) to ${registry}:`,
-);
-for (const pkg of packages) console.log(`  - ${pkg.slug}`);
-console.log();
+if (import.meta.main) {
+  const program = new Command()
+    .name("publish")
+    .description("Publish every public workspace package to npm via `npm publish`.")
+    .addOption(
+      new Option("-r, --registry <url>", "registry to publish to")
+        .env("NPM_REGISTRY")
+        .default(DEFAULT_REGISTRY),
+    )
+    .option("--dry-run", "pack each package without uploading", false)
+    .option("--otp <code>", "one-time password for 2FA-protected registries")
+    .parse(process.argv);
 
-let failures = 0;
-for (const pkg of packages) {
-  if (!dryRun && (await isAlreadyPublished(pkg, registry))) {
-    console.log(`- skipping ${pkg.meta.name}@${pkg.meta.version}: already on registry`);
-    continue;
-  }
-  try {
-    await publishOne(pkg);
-  } catch (err) {
-    failures++;
-    console.error(
-      `✗ publish failed for ${pkg.meta.name}@${pkg.meta.version}: ${(err as Error).message}`,
-    );
-  }
+  const { dryRun, registry, otp } = program.opts<{
+    dryRun: boolean;
+    registry: string;
+    otp?: string;
+  }>();
+
+  const result = await release({ registry, dryRun, otp });
+  if (result.failed > 0) fail(`${result.failed} package(s) failed to publish`);
 }
-
-if (failures > 0) fail(`${failures} package(s) failed to publish`);

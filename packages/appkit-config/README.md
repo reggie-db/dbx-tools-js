@@ -1,12 +1,41 @@
-# @dbx-tools/appkit-autopg
+# @dbx-tools/appkit-config
 
-`autopg()` is a one-line helper that fills in every Lakebase Postgres
-env var the AppKit `lakebase` plugin needs from whatever fragments your
-deployment actually carries. Run it once before `createApp(...)` and stop
-hand-rolling connection strings:
+Auto-configuration helpers for AppKit apps. The headline export is
+`createApp`: a drop-in replacement for `@databricks/appkit`'s `createApp`
+that resolves and applies whatever environment each enabled capability
+needs, then delegates to the real `createApp` with the exact same
+arguments (and the same per-plugin export inference).
 
 ```ts
-import { autopg } from "@dbx-tools/appkit-autopg";
+import { createApp } from "@dbx-tools/appkit-config";
+import { lakebase, server } from "@databricks/appkit";
+
+// Because `lakebase()` is present, this resolves the Lakebase env vars
+// first, then hands the untouched config to AppKit's createApp.
+await createApp({ plugins: [server(), lakebase()] });
+```
+
+Auto-config runs BEFORE delegating (so plugins see a populated
+`process.env` during their synchronous `setup()`) and every step is
+self-gating, so apps pay nothing for capabilities they don't use:
+
+| Capability | Trigger | Effect |
+| --- | --- | --- |
+| Lakebase Postgres (`autopg`) | a `lakebase` plugin in `config.plugins` | resolves + writes `PG*` / `LAKEBASE_*` env |
+
+The package is intentionally broader than Postgres: new capability
+auto-config slots into `createApp` behind its own plugin/env signal
+without changing the call site.
+
+## Standalone `autopg()`
+
+`autopg()` fills in every Lakebase Postgres env var the AppKit `lakebase`
+plugin needs from whatever fragments your deployment actually carries.
+`createApp` runs it for you; call it directly only when you want the
+resolution without the wrapper:
+
+```ts
+import { autopg } from "@dbx-tools/appkit-config";
 import { createApp, lakebase, server } from "@databricks/appkit";
 
 await autopg();
@@ -18,8 +47,8 @@ await createApp({ plugins: [lakebase(), server()] });
 AppKit's `static phase` field orders plugin `setup()` _invocation_, not
 async _completion_. `lakebase.setup()` synchronously throws on a missing
 `PGHOST` after its first `await`, so a sibling plugin that performs REST
-discovery during `setup()` races and loses every time. Awaiting
-`autopg()` before `createApp(...)` sidesteps the race - by the time any
+discovery during `setup()` races and loses every time. Resolving the env
+before `createApp(...)` delegates sidesteps the race - by the time any
 plugin runs, `process.env` is fully populated.
 
 ## What it accepts
@@ -95,7 +124,7 @@ The address parser is exported as well if you want it without the
 resolver wrapper:
 
 ```ts
-import { parseAddress } from "@dbx-tools/appkit-autopg";
+import { parseAddress } from "@dbx-tools/appkit-config";
 
 parseAddress("postgresql://user@ep-foo.database.azuredatabricks.net/dbpg");
 // { user, host, database, port?, sslMode?, project?, branch?, endpointId? }

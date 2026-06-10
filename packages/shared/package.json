@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/shared",
-  "version": "0.1.33",
+  "version": "0.1.34",
   "dependencies": {
     "fast-deep-equal": "catalog:",
     "lru-cache": "catalog:",
@@ -11,10 +11,6 @@
   },
   "exports": {
     ".": {
-      "source": {
-        "browser": "./index.client.ts",
-        "default": "./index.ts"
-      },
       "browser": {
         "types": "./dist/index.client.d.ts",
         "default": "./dist/index.client.js"
@@ -22,6 +18,10 @@
       "import": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "source": {
+        "browser": "./index.client.ts",
+        "default": "./index.ts"
       },
       "default": {
         "types": "./dist/index.d.ts",
