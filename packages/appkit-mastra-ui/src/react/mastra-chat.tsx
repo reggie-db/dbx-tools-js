@@ -1,7 +1,7 @@
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import type { UIMessage } from "ai";
 import { nanoid } from "nanoid";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearMastraHistory,
   fetchMastraHistory,
@@ -11,6 +11,7 @@ import {
   useMastraSuggestions,
 } from "../lib/mastra-client.js";
 import { ChatView } from "./chat-view.js";
+import { dedupeSuggestions } from "./suggestions.js";
 import type {
   ApprovalDecision,
   ChatStatus,
@@ -123,16 +124,21 @@ export const useMastraChat = (
   const showModelPicker = Boolean(options.showModelPicker);
   const { models } = useMastraModels(showModelPicker);
   // Starter suggestions: an explicit `options.suggestions` always
-  // wins (including `[]` to force none); otherwise auto-source the
-  // agent's Genie space sample questions. The fetch is skipped when
-  // the caller passed an explicit list so we never round-trip for a
-  // value we won't use.
+  // wins (including `[]` to force none) and is rendered verbatim;
+  // otherwise auto-source the agent's Genie space sample questions.
+  // The fetch is skipped when the caller passed an explicit list so we
+  // never round-trip for a value we won't use. Genie-sourced questions
+  // run through the same dedupe + cap as in-conversation follow-ups so
+  // initial and follow-up suggestions behave identically.
   const explicitSuggestions = options.suggestions;
   const { questions: genieSuggestions } = useMastraSuggestions(
     options.agentId,
     explicitSuggestions === undefined,
   );
-  const suggestions = explicitSuggestions ?? genieSuggestions;
+  const suggestions = useMemo(
+    () => explicitSuggestions ?? dedupeSuggestions(genieSuggestions),
+    [explicitSuggestions, genieSuggestions],
+  );
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("ready");
   // The error from the last failed turn, surfaced by ChatView as a

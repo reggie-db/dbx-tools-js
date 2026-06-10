@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AssistantBubble, UserBubble } from "./bubbles.js";
+import { SuggestionPills } from "./suggestion-pills.js";
 import type { ChatViewProps } from "./types.js";
 
 // Controlled, presentational chat shell: the scroll container, header
@@ -386,20 +387,12 @@ export const ChatView = ({
           )}
         </div>
 
-        {messages.length === 0 && suggestions.length > 0 && (
-          <div className="mx-auto flex w-full max-w-4xl flex-wrap gap-2 px-4 pb-2 md:px-6">
-            {suggestions.map((s) => (
-              <Button
-                key={s}
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => sendMessage({ text: s })}
-              >
-                {s}
-              </Button>
-            ))}
-          </div>
+        {messages.length === 0 && (
+          <SuggestionPills
+            questions={suggestions}
+            onSelect={(s) => sendMessage({ text: s })}
+            className="mx-auto w-full max-w-4xl px-4 pb-2 md:px-6"
+          />
         )}
 
         <form

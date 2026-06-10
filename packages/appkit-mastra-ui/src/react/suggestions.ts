@@ -40,30 +40,16 @@ function tokenSimilarity(a: Set<string>, b: Set<string>): number {
 }
 
 /**
- * Build the short, deduped list of suggested follow-up questions for
- * an assistant message. Within each tool event the **last**
- * `suggested` progress entry wins (Genie publishes an evolving list;
- * the final one is the refined version). Across events we round-robin
- * by position so every Genie query contributes its *top* question
- * before any query contributes a second - favoring breadth over depth.
- * Near-duplicates (see {@link SUGGESTION_SIMILARITY}) are skipped, and
- * the result is capped at {@link MAX_SUGGESTIONS}.
+ * Dedupe + cap an ordered list of question lists into the short,
+ * varied list the UI renders. Each inner list is one source's ordered
+ * questions; we round-robin by position so every source contributes
+ * its *top* question before any source contributes a second -
+ * favoring breadth over depth. Near-duplicates (see
+ * {@link SUGGESTION_SIMILARITY}) are skipped and the result is capped
+ * at {@link MAX_SUGGESTIONS}. Exact-duplicate questions across
+ * sources also fold via the similarity check.
  */
-export const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
-  if (!events || events.length === 0) return [];
-
-  // One ordered question list per event that emitted any.
-  const lists: string[][] = [];
-  for (const event of events) {
-    const last = [...(event.progress ?? [])]
-      .reverse()
-      .find(
-        (p): p is Extract<ToolProgress, { type: "suggested_questions" }> =>
-          p.type === "suggested_questions",
-      );
-    if (last && last.questions.length > 0) lists.push(last.questions);
-  }
-
+function pickSuggestions(lists: string[][]): string[] {
   const accepted: string[] = [];
   const acceptedTokens: Set<string>[] = [];
   const consider = (question: string): void => {
@@ -86,4 +72,38 @@ export const collectSuggestions = (events: ToolEvent[] | undefined): string[] =>
     }
   }
   return accepted;
+}
+
+/**
+ * Dedupe + cap a single flat list of suggested questions (e.g. the
+ * initial Genie sample questions). Shares the similarity dedupe and
+ * {@link MAX_SUGGESTIONS} cap with the follow-up extractor so initial
+ * and follow-up suggestions behave identically.
+ */
+export const dedupeSuggestions = (questions: string[] | undefined): string[] =>
+  questions && questions.length > 0 ? pickSuggestions([questions]) : [];
+
+/**
+ * Build the short, deduped list of suggested follow-up questions for
+ * an assistant message. Within each tool event the **last**
+ * `suggested` progress entry wins (Genie publishes an evolving list;
+ * the final one is the refined version). Delegates dedupe + cap to
+ * {@link pickSuggestions}.
+ */
+export const collectSuggestions = (events: ToolEvent[] | undefined): string[] => {
+  if (!events || events.length === 0) return [];
+
+  // One ordered question list per event that emitted any.
+  const lists: string[][] = [];
+  for (const event of events) {
+    const last = [...(event.progress ?? [])]
+      .reverse()
+      .find(
+        (p): p is Extract<ToolProgress, { type: "suggested_questions" }> =>
+          p.type === "suggested_questions",
+      );
+    if (last && last.questions.length > 0) lists.push(last.questions);
+  }
+
+  return pickSuggestions(lists);
 };

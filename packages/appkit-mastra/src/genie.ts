@@ -43,12 +43,7 @@ import {
 } from "@dbx-tools/appkit-mastra-shared";
 import { genieEventChat, genieSampleQuestions, getGenieSpace } from "@dbx-tools/genie";
 import { type GenieMessage } from "@dbx-tools/genie-shared";
-import {
-  appkitUtils,
-  commonUtils,
-  logUtils,
-  stringUtils,
-} from "@dbx-tools/shared";
+import { appkitUtils, commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import type { RequestContext } from "@mastra/core/request-context";
 import { MASTRA_THREAD_ID_KEY } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";

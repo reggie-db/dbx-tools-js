@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { MarkdownWithEmbeds } from "./embed-slots.js";
+import { SuggestionPills } from "./suggestion-pills.js";
 import { collectSuggestions } from "./suggestions.js";
 import { ToolSessionPill, humanizeToolName } from "./tool-pill.js";
 import type {
@@ -381,33 +382,11 @@ export const AssistantBubble = ({
             </Tooltip>
           </div>
         )}
-        {suggestions.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {suggestions.map((q) => (
-              <Button
-                key={q}
-                type="button"
-                size="sm"
-                variant="outline"
-                // `h-auto` lets long suggestions grow vertically;
-                // `whitespace-normal` + `text-left` overrides the
-                // base button's `whitespace-nowrap` so multi-line
-                // questions wrap inside the pill instead of
-                // overflowing the chat column. `rounded-2xl`
-                // keeps a friendly capsule shape for short
-                // suggestions while scaling cleanly when a long
-                // question wraps to two or three lines (the full
-                // `rounded-full` capsule warps awkwardly with
-                // wrapped text).
-                className="h-auto max-w-full whitespace-normal text-left rounded-2xl px-3 py-1.5 text-xs font-normal leading-snug"
-                onClick={() => onSuggestionClick?.(q)}
-                disabled={!onSuggestionClick}
-              >
-                {q}
-              </Button>
-            ))}
-          </div>
-        )}
+        <SuggestionPills
+          questions={suggestions}
+          onSelect={onSuggestionClick}
+          className="mt-1"
+        />
       </ItemContent>
     </Item>
   );
