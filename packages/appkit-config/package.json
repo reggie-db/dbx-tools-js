@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-config",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "dependencies": {
     "@dbx-tools/shared": "workspace:*"
   },

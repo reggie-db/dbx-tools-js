@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/shared",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "dependencies": {
     "fast-deep-equal": "catalog:",
     "lru-cache": "catalog:",
