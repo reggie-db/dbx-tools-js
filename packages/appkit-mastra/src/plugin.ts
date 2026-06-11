@@ -339,8 +339,35 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
     router.use((req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
-      return this.userScopedSelf(req).mastraApp!(req, res, next);
+      // Dispatch through a real method, NOT the `mastraApp` property. The
+      // AppKit `asUser(req)` proxy wraps function-valued props with
+      // `value.bind(target)`. `mastraApp` is an express app whose `.bind` is
+      // the HTTP BIND route registrar (express defines a method per HTTP verb,
+      // and BIND is one), not `Function.prototype.bind` - so binding it through
+      // the proxy registers a bogus route and crashes `pathToRegexp`
+      // ("path must be a string ..."). This only manifests in production where
+      // an OBO token makes `userScopedSelf` return the proxy. `dispatchMastra`
+      // is a plain method (its `.bind` is the normal one) and invokes
+      // `this.mastraApp` off the real target, keeping the OBO scope active.
+      return this.userScopedSelf(req).dispatchMastra(req, res, next);
     });
+  }
+
+  /**
+   * Invoke the Mastra express sub-app. Exists as a method (instead of reading
+   * `this.mastraApp` through the `asUser(req)` proxy at the call site) so the
+   * proxy binds this plain method - whose `.bind` is `Function.prototype.bind`
+   * - rather than the express app, whose `.bind` is the HTTP BIND route
+   * registrar (see the note in `injectRoutes`). Runs inside the user scope so
+   * `getExecutionContext()` returns the OBO client for the agent/model
+   * resolvers.
+   */
+  private dispatchMastra(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    this.mastraApp!(req, res, next);
   }
 
   /**

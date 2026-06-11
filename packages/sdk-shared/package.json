@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/sdk-shared",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "codegen": {
     "inputs": [
       "node_modules/@databricks/sdk-experimental/dist/apis/dashboards/model.d.ts"
