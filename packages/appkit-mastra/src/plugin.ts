@@ -37,11 +37,12 @@ import {
   type PluginManifest,
   type ResourceRequirement,
 } from "@databricks/appkit";
-import { appkitUtils, logUtils } from "@dbx-tools/shared";
+import { appkitUtils, commonUtils, logUtils } from "@dbx-tools/shared";
 import { chatRoute } from "@mastra/ai-sdk";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
 import express from "express";
+import type { Pool } from "pg";
 
 import type {
   MastraClientConfig,
@@ -52,7 +53,7 @@ import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
-import { createMemoryBuilder, needsLakebase } from "./memory.js";
+import { createMemoryBuilder, createServicePrincipalPool, needsLakebase } from "./memory.js";
 import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import {
@@ -125,6 +126,14 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   private mastra: Mastra | null = null;
   private mastraApp: express.Express | null = null;
   private mastraServer: MastraServer | null = null;
+  /**
+   * Dedicated service-principal Lakebase pool backing Mastra memory /
+   * storage. Built once in {@link buildAgentAndServer} (outside any
+   * `asUser` scope, so it never inherits a request's OBO identity) and
+   * drained in {@link abortActiveOperations}. `null` until setup runs
+   * or when Lakebase isn't needed.
+   */
+  private servicePrincipalPool: Pool | null = null;
 
   override async setup(): Promise<void> {
     // Wait until sibling plugins (e.g. `lakebase`) finish `setup()` so
@@ -148,6 +157,26 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     if (!hasLakebase) return;
     if (this.config.storage === undefined) this.config.storage = true;
     if (this.config.memory === undefined) this.config.memory = true;
+  }
+
+  /**
+   * Drain the memory service-principal pool on shutdown. AppKit calls
+   * this during teardown; the lakebase plugin closes its own SP / OBO
+   * pools the same way. Fire-and-forget so shutdown isn't blocked on a
+   * slow drain, and clear the handle so a re-`setup()` rebuilds it.
+   */
+  override abortActiveOperations(): void {
+    super.abortActiveOperations();
+    if (this.servicePrincipalPool) {
+      this.log.info("closing memory SP pool");
+      const pool = this.servicePrincipalPool;
+      this.servicePrincipalPool = null;
+      pool.end().catch((err) => {
+        this.log.error("error closing memory SP pool", {
+          error: commonUtils.errorMessage(err),
+        });
+      });
+    }
   }
 
   override exports() {
@@ -451,12 +480,25 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   }
 
   private async buildAgentAndServer(): Promise<void> {
-    // Per-agent memory factory. The builder resolves the Lakebase pool
-    // lazily (on first agent that actually needs storage / vector) and
-    // caches both the pool and the shared `PgVector` singleton so
-    // registering N agents stays cheap. See `./memory.js`.
-    const memoryBuilder = needsLakebase(this.config)
-      ? createMemoryBuilder(this.config, this.context)
+    // Per-agent memory factory. When any storage / memory setting needs
+    // Postgres, stand up a dedicated service-principal pool first so
+    // memory acts as the app SP (owner of the `mastra_*` schemas),
+    // never the per-request OBO identity the chat turn runs under.
+    // `getPgConfig()` is read here, outside any `asUser` scope, so it
+    // returns the SP connection target + token refresh plus any
+    // `lakebase({ pool })` overrides; `require` turns a missing
+    // sibling into a clear wiring error. The builder caches the shared
+    // `PgVector` singleton so registering N agents stays cheap. See
+    // `./memory.js`.
+    if (needsLakebase(this.config)) {
+      const spPgConfig = appkitUtils
+        .require(this.context, lakebase, this.config)
+        .exports()
+        .getPgConfig();
+      this.servicePrincipalPool = await createServicePrincipalPool(spPgConfig);
+    }
+    const memoryBuilder = this.servicePrincipalPool
+      ? createMemoryBuilder(this.config, this.servicePrincipalPool)
       : undefined;
 
     this.log.debug("build:start", {

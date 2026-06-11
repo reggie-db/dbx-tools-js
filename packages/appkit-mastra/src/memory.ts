@@ -27,23 +27,46 @@
  * is registered); per-agent settings cascade on top of that.
  */
 
-import { lakebase } from "@databricks/appkit";
-import { appkitUtils, logUtils } from "@dbx-tools/shared";
+import { getUsernameWithApiLookup } from "@databricks/appkit";
+import { logUtils } from "@dbx-tools/shared";
 import { fastembed } from "@mastra/fastembed";
 import { Memory } from "@mastra/memory";
 import { PgVector, PostgresStore } from "@mastra/pg";
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 
 import type { MastraAgentDefinition, MastraMemoryConfigOverride } from "./agents.js";
 import type { MastraPluginConfig } from "./config.js";
 
 const log = logUtils.logger("mastra/memory");
 
-/** Pool handle returned by the AppKit `lakebase` plugin `exports().pool`. */
-export type LakebasePool = ReturnType<
-  InstanceType<ReturnType<typeof lakebase>["plugin"]>["exports"]
->["pool"];
+/**
+ * Build a dedicated **service-principal** Lakebase pool for Mastra
+ * memory from the lakebase plugin's resolved SP pg config.
+ *
+ * The plugin's `exports().pool` is a `RoutingPool` that switches to
+ * the per-user (OBO) pool whenever a query runs inside an `asUser`
+ * scope - exactly the context the mastra plugin establishes around
+ * every chat turn. Memory (threads / messages + semantic recall) must
+ * instead always act as the app service principal: it owns the
+ * auto-created `mastra_*` schemas (a per-user role usually can't
+ * `CREATE SCHEMA`) and is shared across users, so it cannot inherit a
+ * request's OBO identity.
+ *
+ * `pgConfig` must be the plugin's `exports().getPgConfig()` evaluated
+ * **outside** any `asUser` scope (i.e. during setup), so it carries
+ * the SP connection target, OAuth token-refresh `password` callback,
+ * and any `lakebase({ pool })` tuning overrides - all of which this
+ * pool inherits. See the call site in `plugin.ts`.
+ */
+export async function createServicePrincipalPool(pgConfig: PoolConfig): Promise<Pool> {
+  // `getPgConfig()` resolves the SP username synchronously from
+  // `PGUSER` / `DATABRICKS_CLIENT_ID`; fall back to the async API
+  // lookup (e.g. local dev authenticating via PAT) so the pool always
+  // has an identity to connect with.
+  const user = pgConfig.user ?? (await getUsernameWithApiLookup());
+  return new Pool({ ...pgConfig, user });
+}
 
 /** Effective per-knob setting after the plugin/agent cascade. */
 type StorageSetting = MastraAgentDefinition["storage"];
@@ -51,9 +74,9 @@ type MemorySetting = MastraAgentDefinition["memory"];
 
 /**
  * True when any plugin-level or per-agent setting could need the
- * Lakebase pool. Used by `plugin.ts` to gate pool acquisition; the
- * builder also acquires lazily so missed cases still fail with a
- * clear lakebase-not-registered error.
+ * Lakebase pool. Used by `plugin.ts` to gate creation of the
+ * service-principal pool and the {@link MemoryBuilder} that consumes
+ * it; when false neither is built.
  */
 export function needsLakebase(config: MastraPluginConfig): boolean {
   if (settingNeedsSharedPool(config.storage)) return true;
@@ -65,42 +88,29 @@ export function needsLakebase(config: MastraPluginConfig): boolean {
 }
 
 /**
- * Look up the `lakebase` plugin and return its managed `pg.Pool`.
- * Throws when the sibling plugin is not registered; enabling
- * `storage` / `memory` without lakebase is a wiring bug, not a runtime
- * condition we can recover from.
- */
-export function resolveLakebasePool(
-  context: appkitUtils.PluginContextLike | undefined,
-  caller: MastraPluginConfig,
-): LakebasePool {
-  return appkitUtils.require(context, lakebase, caller).exports().pool;
-}
-
-/**
- * Construct a per-agent {@link Memory} factory. Caches the shared
- * `PgVector` singleton (built on first need) and the lazily-resolved
- * Lakebase pool so each agent build is O(1) after the first.
+ * Construct a per-agent {@link Memory} factory bound to the supplied
+ * service-principal pool (see {@link createServicePrincipalPool}).
+ * Caches the shared `PgVector` singleton (built on first need) so each
+ * agent build is O(1) after the first.
  */
 export function createMemoryBuilder(
   config: MastraPluginConfig,
-  context: appkitUtils.PluginContextLike | undefined,
+  servicePrincipalPool: Pool,
 ): MemoryBuilder {
-  return new MemoryBuilder(config, context);
+  return new MemoryBuilder(config, servicePrincipalPool);
 }
 
 /**
- * Builds one `Memory` per agent. Per-instance state keeps the shared
- * `PgVector` and the resolved Lakebase pool alive across calls so
- * registering N agents stays cheap.
+ * Builds one `Memory` per agent against a shared service-principal
+ * Lakebase pool. Per-instance state keeps the shared `PgVector` alive
+ * across calls so registering N agents stays cheap.
  */
 export class MemoryBuilder {
   private sharedVector: PgVector | undefined;
-  private pool: LakebasePool | undefined;
 
   constructor(
     private readonly config: MastraPluginConfig,
-    private readonly context: appkitUtils.PluginContextLike | undefined,
+    private readonly servicePrincipalPool: Pool,
   ) {}
 
   /**
@@ -133,7 +143,7 @@ export class MemoryBuilder {
     return new PostgresStore({
       id: "mastra-store__instance",
       schemaName: "mastra_instance",
-      pool: this.requirePool() as Pool,
+      pool: this.servicePrincipalPool,
     });
   }
 
@@ -179,7 +189,7 @@ export class MemoryBuilder {
       return new PostgresStore({
         id: `mastra-store__${agentId}`,
         schemaName: `mastra_${agentId}`,
-        pool: this.requirePool() as Pool,
+        pool: this.servicePrincipalPool,
       });
     }
     // Cast: `withId` guarantees `id` is set, but the distributive
@@ -209,16 +219,9 @@ export class MemoryBuilder {
 
   private getSharedVector(): PgVector {
     if (!this.sharedVector) {
-      this.sharedVector = buildSharedPgVector(this.requirePool());
+      this.sharedVector = buildSharedPgVector(this.servicePrincipalPool);
     }
     return this.sharedVector;
-  }
-
-  private requirePool(): LakebasePool {
-    if (!this.pool) {
-      this.pool = resolveLakebasePool(this.context, this.config);
-    }
-    return this.pool;
   }
 }
 
@@ -242,7 +245,7 @@ export class MemoryBuilder {
  * the lakebase pool from then on. The placeholder pool is `.end()`'d
  * so its socket book-keeping is released.
  */
-function buildSharedPgVector(pool: LakebasePool): PgVector {
+function buildSharedPgVector(pool: Pool): PgVector {
   const vector = new PgVector({
     id: `pg${randomUUID()}`,
     host: "-1",
@@ -252,7 +255,7 @@ function buildSharedPgVector(pool: LakebasePool): PgVector {
     password: "_",
   });
   const placeholder = vector.pool;
-  vector.pool = pool as Pool;
+  vector.pool = pool;
   void placeholder.end().catch(() => undefined);
   return vector;
 }

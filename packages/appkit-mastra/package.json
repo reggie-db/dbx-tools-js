@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
@@ -16,6 +16,7 @@
     "@mastra/otel-bridge": "catalog:",
     "@mastra/pg": "catalog:",
     "fuse.js": "^7.0.0",
+    "pg": "^8.20.0",
     "zod": "catalog:"
   },
   "devDependencies": {
