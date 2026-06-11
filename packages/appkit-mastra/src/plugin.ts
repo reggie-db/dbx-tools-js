@@ -337,7 +337,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     router.get("/suggestions", handleSuggestions);
     router.get("/suggestions/:agentId", handleSuggestions);
 
-    router.use("", (req, res, next) => {
+    router.use((req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       return this.userScopedSelf(req).mastraApp!(req, res, next);
     });
