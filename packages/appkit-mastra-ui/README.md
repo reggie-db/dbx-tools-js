@@ -68,43 +68,31 @@ lookup, or `[]` to force none:
 <MastraChat suggestions={["What were last quarter's top stores?"]} />
 ```
 
-## Controlled: `ChatView`
+## Headless: `useMastraChat` + `ChatView`
 
-For full control over message state and transport, render the
-presentational `ChatView` and feed it your own `messages` / `status` /
-`sendMessage`. This is what powers `MastraChat` internally and pairs
-naturally with the AI SDK's `useChat`:
+`useMastraChat` is the headless driver behind `MastraChat`: it owns the
+full conversation lifecycle (streaming over `@mastra/client-js`,
+tool-event tracking, approvals, model selection, clear, and
+infinite-scroll-up history) and returns the exact prop bag the
+presentational `ChatView` consumes. Use it when you want the drop-in
+behaviour but need to render the shell yourself:
 
 ```tsx
-import {
-  ChatView,
-  useChatUrl,
-  useMastraModels,
-  useMastraSuggestions,
-} from "@dbx-tools/appkit-mastra-ui/react";
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { ChatView, useMastraChat } from "@dbx-tools/appkit-mastra-ui/react";
 
 function Chat() {
-  const api = useChatUrl();
-  const { models } = useMastraModels();
-  // Optional: surface the agent's Genie space starter questions.
-  const { questions: suggestions } = useMastraSuggestions();
-  const { messages, status, sendMessage, regenerate } = useChat({
-    transport: new DefaultChatTransport({ api }),
-  });
-  return (
-    <ChatView
-      messages={messages}
-      status={status}
-      sendMessage={sendMessage}
-      regenerate={regenerate}
-      suggestions={suggestions}
-      models={models}
-    />
-  );
+  const chat = useMastraChat({ showModelPicker: true });
+  return <ChatView {...chat} className="h-full" />;
 }
 ```
+
+For lower-level access, `useMastraClient()` returns a
+`MastraPluginClient` (a `@mastra/client-js` `MastraClient` subclass)
+that streams turns via `getAgent(id).stream()` and adds `history()` /
+`clearHistory()`, `models()`, `suggestions()`, and `chart()` /
+`statement()` over the plugin's own routes. `useMastraModels()` and
+`useMastraSuggestions()` are thin hooks over the catalogue and Genie
+starter questions.
 
 `ChatView` itself shows no suggestions unless you pass them (it has no
 built-in defaults); `useMastraSuggestions()` resolves the agent's Genie

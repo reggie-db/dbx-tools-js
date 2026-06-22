@@ -2,8 +2,8 @@
 
 An AppKit plugin that hosts [Mastra](https://mastra.ai) agents inside a
 Databricks App with user-scoped workspace auth (OBO), optional
-Lakebase-backed memory, and an AI SDK chat route the React client can
-consume with `useChat()`.
+Lakebase-backed memory, and the standard Mastra agent stream the React
+client drives via `@mastra/client-js` (`getAgent(id).stream()`).
 
 The plugin is designed so that wiring it up looks the same as the
 AppKit
@@ -70,28 +70,24 @@ for routing / one-shot agents that don't need history.
 See [Memory + storage](#memory--storage) for the full cascade and worked
 examples.
 
-On the React side, never hardcode `/api/mastra/...`. Pull the published
-paths from `usePluginClientConfig` and use the `chatUrl` helper. Import
-them from the dependency-free `@dbx-tools/appkit-mastra-shared` package
-so your browser bundle doesn't pull in `pg`, `fastembed`, or Mastra:
+On the React side, drop in the prebuilt chat UI from
+[`@dbx-tools/appkit-mastra-ui`](../appkit-mastra-ui) - it wires itself
+from the plugin's published client config and streams over
+`@mastra/client-js`, so there's no transport code to write:
 
 ```tsx
-import { usePluginClientConfig } from "@databricks/appkit-ui/react";
-import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { useMemo } from "react";
+import { MastraChat } from "@dbx-tools/appkit-mastra-ui/react";
 
-function Chat() {
-  const config = usePluginClientConfig<MastraClientConfig>("mastra");
-  const transport = useMemo(
-    () => new DefaultChatTransport({ api: chatUrl(config) }),
-    [config],
-  );
-  const { messages, sendMessage } = useChat({ transport });
-  // ...
+export default function ChatPage() {
+  return <MastraChat showModelPicker />;
 }
 ```
+
+Under the hood that's `useMastraClient()` -> a `MastraPluginClient`
+(a `@mastra/client-js` `MastraClient` subclass) that streams turns and
+adds the plugin's custom routes (history, models, suggestions, embeds).
+Never hardcode `/api/mastra/...`; the client derives every URL from the
+`basePath` published in `clientConfig()`.
 
 See [Client wiring](#client-wiring) for the full `MastraClientConfig`
 shape and per-agent selection.
@@ -136,9 +132,9 @@ Plugin-level fields:
 | Field                   | Description                                                                                                                                                                                                                                                                                                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agents`                | The registry. Omit for a built-in `default` analyst.                                                                                                                                                                                                                                                                                                                                         |
-| `defaultAgent`          | Id that `chatRoute` binds to when no `:agentId` is supplied. Defaults to first registered.                                                                                                                                                                                                                                                                                                   |
+| `defaultAgent`          | Id the client talks to when no `:agentId` is supplied. Defaults to first registered.                                                                                                                                                                                                                                                                                                         |
 | `defaultModel`          | Fallback for any agent that omits `model`. Same shape (string sugar or `DynamicArgument`).                                                                                                                                                                                                                                                                                                   |
-| `defaultModelFallbacks` | Priority-ordered list walked when no `model` / env / override is set. First entry whose endpoint exists in the workspace wins. Default chains the three `ModelTier`s (Thinking → Balanced → Fast); within each tier providers are interleaved Claude ↔ GPT ↔ Gemini with open-weights appended. Compose your own with `modelsForTier(ModelTier.Fast)` or read straight from `MODEL_CATALOG`. |
+| `defaultModelFallbacks` | Priority-ordered list tried first when no `model` / env / override is set, ahead of the dynamic score-classified catalogue. First entry whose endpoint exists in the workspace wins. When unset, resolution is driven by the live Foundation Model API scores (see [Model resolution](#model-resolution)); set this to pin a regulated workspace to an approved subset. Compose one with `modelsForTier(ModelTier.Fast)`. |
 | `tools`                 | Ambient tools merged into every agent (per-agent tools win on collisions).                                                                                                                                                                                                                                                                                                                   |
 | `storage`               | `undefined` (default) auto-enables when `lakebase()` is registered; `true` does the same explicitly; `false` opts out; an object opens a dedicated `PostgresStore`. Per-agent default is `schemaName: "mastra_<agentId>"`.                                                                                                                                                                   |
 | `memory`                | `undefined` (default) auto-enables when `lakebase()` is registered; `true` does the same explicitly; `false` opts out; an object opens a dedicated `PgVector`. Default behavior: one shared `PgVector` singleton across every agent.                                                                                                                                                         |
@@ -254,7 +250,7 @@ Genie writer event flow:
 - Charts ride out-of-band: `prepare_chart` mints a `chartId`
   synchronously, the planner runs in the background and writes
   the spec to the chart cache (1h TTL). The host UI long-polls
-  `${MastraClientConfig.embedPathTemplate}` (`/embed/chart/:id`)
+  `${basePath}/embed/chart/:id` (via `MastraPluginClient.chart(id)`)
   by id and renders inline at the matching `[chart:<chartId>]`
   marker.
 - After a hard reload, the live `started` / `status` / `sql`
@@ -426,43 +422,48 @@ loose tokens like `"claude sonnet"` snap to
 `modelFuzzyThreshold` (default `0.4`) the input is returned verbatim
 and Databricks surfaces the canonical 404.
 
-### No explicit ask (tier-aware fallback list)
+### No explicit ask (dynamic, score-based tiers)
 
-When nothing is set, the resolver walks an opinionated
-priority-ordered list and returns **the first id that is actually
-present in the workspace's endpoint listing**. This is how a workspace
-without Claude Opus still gets a sensible default automatically -
-the resolver skips ahead to whichever Sonnet / GPT-5 / Gemini / Llama
-variant is wired up.
+When nothing is set, the resolver classifies the **live** workspace
+catalogue and returns **the first id that is actually present in the
+endpoint listing**. This is how a workspace without Claude Opus still
+gets a sensible default automatically - the resolver skips ahead to
+whichever model is the best fit and actually wired up.
 
-The catalogue is grouped two ways:
+Tiers are derived, not hard-coded. Databricks publishes a
+`quality` / `speed` / `cost` profile per Foundation Model API endpoint
+(the bars in the AI Playground), surfaced on `ServingEndpointSummary.profile`.
+`classifyEndpoints(endpoints)` buckets the scored chat models by the
+**relative distribution** of `quality`: the observed scores are split
+at their 1/3 and 2/3 quantiles, so the top third is
+`ModelTier.Thinking`, the bottom third `ModelTier.Fast`, and the
+middle `ModelTier.Balanced`. Because the thresholds come from the data,
+the split adapts as Databricks adds or rescores models - nothing is
+pinned to a fixed score band, and a brand-new model that lands outside
+today's range still slots in next to its peers.
 
-- By **capability tier** via the `ModelTier` enum:
-`ModelTier.Thinking` (deepest reasoning), `ModelTier.Balanced`
-(cost/latency sweet spot), `ModelTier.Fast` (cheap & quick for
-classification / routing / simple summarisation).
-- By **provider** within each tier: `claude`, `gpt`, `gemini`,
-`openSource`.
+Two escape hatches cover missing scores:
 
-Both views live on `MODEL_CATALOG[tier][provider]`. The walked
-`FALLBACK_MODEL_IDS` chains the three tiers in descending power
-(Thinking → Balanced → Fast); within each tier providers are
-round-robin-zipped (Claude ↔ GPT ↔ Gemini) before the open-weights
-tail is appended as the universal floor.
+- **Unscored but recognizable** endpoints (a model Databricks hasn't
+  scored yet, e.g. a fresh release) are placed by a small **family
+  heuristic** keyed on provider + variant words (`opus`/`sonnet`/`haiku`,
+  `pro`/`mini`/`nano`, `flash`/`flash-lite`, Llama parameter sizes).
+  Unrecognized, unscored endpoints are never auto-selected.
+- **Catalogue unreachable**: the resolver falls back to the small,
+  family-classified `FALLBACK_MODEL_IDS` floor (Thinking → Balanced →
+  Fast).
 
-
-| Tier (most powerful first) | Claude                           | GPT                                   | Gemini                          | Open weights                                   |
-| -------------------------- | -------------------------------- | ------------------------------------- | ------------------------------- | ---------------------------------------------- |
-| `ModelTier.Thinking`       | Opus 4.8 → 4.7 → 4.6 → 4.5 → 4.1 | 5.5 Pro                               | 3.1 Pro → 3 Pro → 2.5 Pro       | Llama 4 Maverick, GPT-OSS 120B, Llama 3.1 405B |
-| `ModelTier.Balanced`       | Sonnet 4.6 → 4.5 → 4             | 5.5 → 5.4 → 5.2 → 5.1 → 5             | 3.5 Flash → 3 Flash → 2.5 Flash | Llama 3.3 70B, Qwen3-Next 80B, Qwen35 122B     |
-| `ModelTier.Fast`           | Haiku 4.5                        | 5.4 mini → 5.4 nano → 5 mini → 5 nano | 3.1 Flash Lite                  | GPT-OSS 20B, Gemma 3 12B, Llama 3.1 8B         |
-
+The default chain is therefore: any `defaultModelFallbacks` you set,
+then the live score-classified catalogue in descending tier order,
+then the `FALLBACK_MODEL_IDS` floor.
 
 #### Pick a tier-appropriate model for one agent
 
-Use `modelForTier(tier)` to grab the top of a tier as a string; the
-agent-step resolver fuzzy-matches it against the live catalogue at
-call time so it still works when the literal top pick isn't deployed.
+`modelForTier(tier)` / `modelsForTier(tier)` return the **static
+fallback opinion** for a tier (the small built-in list, no workspace
+call). They're handy for seeding a default; the agent-step resolver
+still fuzzy-matches the result against the live catalogue at call time
+so it works even when the literal pick isn't deployed.
 
 ```ts
 import { createAgent, ModelTier, modelForTier } from "@dbx-tools/appkit-mastra";
@@ -480,7 +481,7 @@ const planner = createAgent({
 
 #### Bias the plugin-level fallback toward a tier
 
-`modelsForTier(tier)` returns the priority-ordered list for one tier;
+`modelsForTier(tier)` returns the static fallback list for one tier;
 pass it to `defaultModelFallbacks` to scope the auto-resolver:
 
 ```ts

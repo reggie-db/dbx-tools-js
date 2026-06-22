@@ -1,0 +1,77 @@
+---
+description: AppKit source-code naming conventions for new code (files, directories, packages, identifiers)
+alwaysApply: true
+---
+
+# AppKit naming conventions
+
+New code in this repo follows the naming scheme of the upstream
+`databricks/appkit` source. This governs **new** files, packages,
+directories, and symbols only - existing files are NOT retroactively
+renamed or moved to satisfy this rule.
+
+## Files and directories
+
+- kebab-case for every `.ts` / `.tsx` file and every directory
+  (`base-server.ts`, `genie-chat.tsx`, `create-agent.ts`,
+  `remote-tunnel-controller.ts`). A single-word name is already
+  kebab-case (`chart.ts`, `genie.ts`).
+- React component files are kebab-case too (`genie-chat.tsx`,
+  `data-table.tsx`), not PascalCase.
+- Exceptions AppKit itself keeps: the Vite entry pair `App.tsx` and
+  `main.tsx` stay as-is.
+
+### Conventional filenames
+
+- `index.ts` - re-export barrel for a directory.
+- `types.ts` - shared types for the surrounding module.
+- `defaults.ts` - default config / option values.
+- `schemas.ts` - zod (or similar) schemas.
+- `policy.ts`, `params.ts`, `helpers.ts` - focused helpers next to
+  their owner.
+- `use-*.ts` - React hooks (`use-genie-chat.ts`, `use-agent-chat.ts`).
+- `*.example.tsx` - example / demo usage of a component.
+- `*.generated.ts` - generated output; never hand-edited.
+- `*.browser.ts` - browser-only variant of a same-named module.
+
+## Directory grouping by concern
+
+Group files into concern directories rather than a flat folder:
+
+- `plugins/<name>/` - one directory per plugin.
+- `connectors/<service>/` - one directory per external service client.
+- `core/`, `context/`, `errors/`, `hooks/`, `charts/<type>/`.
+- `features/<feature>/{components,hooks,lib}/` - feature-scoped UI.
+
+## Plugin layout
+
+A plugin lives in `plugins/<name>/`:
+
+- `index.ts` re-exports `./<name>` and `./types`.
+- `<name>.ts` holds the implementation: a
+  `class <Name>Plugin extends Plugin` plus the lowercase factory
+  `export const <name> = toPlugin(<Name>Plugin)`.
+- Co-locate `defaults.ts`, `types.ts`, `schemas.ts`, etc. as needed.
+
+## Connector layout
+
+A connector lives in `connectors/<service>/` with `client.ts`,
+`types.ts`, `defaults.ts`, and `index.ts`.
+
+## Identifiers
+
+- Functions: camelCase. Factory functions take a verb prefix:
+  `create*` (`createApp`, `createAgent`), `define*` (`defineTool`),
+  `get*` (`getWorkspaceClient`, `getExecutionContext`), `build*`
+  (`buildToolkit`).
+- Plugin factory functions are lowercase, named after the plugin, and
+  produced via `toPlugin(...)`: `export const genie = toPlugin(GeniePlugin)`.
+- Classes, interfaces, and types: PascalCase (`GeniePlugin`,
+  `AgentDefinition`, `AppKitMcpClient`). Plugin classes are suffixed
+  `Plugin`.
+- Module-level constants: SCREAMING_SNAKE_CASE.
+
+## Packages
+
+Scoped kebab-case package names (`@databricks/appkit`,
+`@databricks/appkit-ui`). In this repo that scope is `@dbx-tools/*`.

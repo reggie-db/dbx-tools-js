@@ -9,8 +9,8 @@
  *
  * The route is registered through {@link historyRoute} as a Mastra
  * `registerApiRoute` so it sits in the same dispatcher pipeline as
- * `chatRoute`. That means the `MastraServer` auth middleware (in
- * `./server.ts`) has already populated `RequestContext` with
+ * the standard agent routes. That means the `MastraServer` auth
+ * middleware (in `./server.ts`) has already populated `RequestContext` with
  * `MASTRA_THREAD_ID_KEY` and `MASTRA_RESOURCE_ID_KEY` by the time
  * the handler runs - no cookie or user lookups happen here, and the
  * session-cookie logic stays the single source of truth in `server.ts`.
@@ -197,10 +197,10 @@ export type HistoryRouteOptions =
  *     anchors the thread id is left alone so the user keeps the
  *     same thread - only the contents go away.
  *
- * Modeled after `chatRoute` from `@mastra/ai-sdk`: pass `agent` for a
- * fixed-agent mount, or include `:agentId` in the path for dynamic
- * routing. Pairs cleanly with the AppKit Mastra plugin's chat route
- * layout (`/route/chat` + `/route/chat/:agentId`).
+ * Follows the `@mastra/ai-sdk` `chatRoute` convention for agent
+ * binding: pass `agent` for a fixed-agent mount, or include
+ * `:agentId` in the path for dynamic routing. The plugin registers
+ * both `/route/history` (default agent) and `/route/history/:agentId`.
  *
  * The handler reads `threadId` and `resourceId` from `RequestContext`
  * (populated upstream by `MastraServer.registerAuthMiddleware`), so

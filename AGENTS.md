@@ -60,6 +60,14 @@ Genie directly via `@dbx-tools/genie`, not through AppKit's stock
 `genie` plugin. See
 [`.cursor/rules/appkit-mastra-patterns.mdc`](.cursor/rules/appkit-mastra-patterns.mdc).
 
+### 5. AppKit naming conventions
+
+New files, packages, directories, and symbols follow the upstream
+`databricks/appkit` naming scheme (kebab-case files/dirs, concern
+directories, `create*`/`get*` factory functions, `PascalCase`
+types). Existing code is not retroactively renamed. See
+[`.cursor/rules/appkit-naming.mdc`](.cursor/rules/appkit-naming.mdc).
+
 ## Releases
 
 Tag-driven. `bun run tag` bumps every publishable package, commits

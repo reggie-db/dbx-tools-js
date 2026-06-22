@@ -1,5 +1,6 @@
 import { Spinner } from "@databricks/appkit-ui/react";
 import {
+  isUuid,
   parseMarkers,
   stripIncompleteMarkerTail,
   type ParsedMarker,
@@ -154,14 +155,18 @@ type RenderSegment =
 
 /**
  * Map one parsed marker onto its render segment. The marker grammar
- * matches ANY `[<type>:<id>]` (and already guarantees a UUID-shaped
- * id), but rendering is type-aware - charts need ECharts, data needs
- * a Table - so map only the kinds this UI can render. Anything else
+ * matches ANY `[<type>:<id>]`, including fabricated ids the model
+ * glued together from a label (e.g. `[chart:placeholder]`), so the id
+ * is validated with {@link isUuid} before it's treated as a real
+ * embed. A non-UUID id - or a UUID with a type this UI can't render -
  * collapses to an empty text segment: the marker is consumed so no
- * literal `[<type>:...]` leaks into the prose, but no slot renders
- * and no `/embed/<type>/:id` request fires.
+ * literal `[<type>:...]` leaks into the prose, but no slot renders and
+ * no `/embed/<type>/:id` request fires. Only a UUID-shaped id with a
+ * known, renderable type (charts need ECharts, data needs a Table)
+ * resolves to a slot.
  */
 const markerSegment = (marker: ParsedMarker): RenderSegment => {
+  if (!isUuid(marker.id)) return { kind: "text", text: "" };
   switch (marker.type) {
     case "chart":
       return { kind: "chart", chartId: marker.id };

@@ -1,0 +1,9 @@
+{
+  "name": "@dbx-tools/model-shared",
+  "version": "0.1.42",
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "module": "index.ts",
+  "type": "module"
+}

@@ -190,12 +190,12 @@ const ToolApprovalCard = ({
 
 /**
  * Pull every approval-pending tool call out of an assistant
- * message's parts. Mastra's `chatRoute()` (v5 and v6) emits a
- * dedicated `data-tool-call-approval` data part carrying
- * `{ runId, toolCallId, toolName, args }` whenever a
- * `requireApproval: true` tool is paused; that's what `useChat`
- * deserializes into `message.parts`. We read those parts directly
- * (matching the canonical Mastra UI Dojo example,
+ * message's parts. A paused `requireApproval: true` tool surfaces as
+ * a dedicated `data-tool-call-approval` data part carrying
+ * `{ runId, toolCallId, toolName, args }` in the AI SDK v5 UI message
+ * shape (e.g. rehydrated from history via `toAISdkV5Messages`). We
+ * read those parts directly (matching the canonical Mastra UI Dojo
+ * example,
  * `mastra-ai/ui-dojo/.../tool-approval.tsx`) and additionally filter
  * by {@link APPROVAL_GATED_TOOLS} so unrelated `data-*` parts don't
  * render a card.

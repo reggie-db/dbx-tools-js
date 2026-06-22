@@ -1,27 +1,226 @@
 import { usePluginClientConfig } from "@databricks/appkit-ui/react";
 import {
-  chatUrl,
-  embedUrl,
-  historyUrl,
-  suggestionsUrl,
+  ChartSchema,
+  MASTRA_ROUTES,
+  MastraClearHistoryResponseSchema,
+  MastraHistoryResponseSchema,
+  MastraSuggestionsResponseSchema,
+  ServingEndpointsResponseSchema,
+  StatementDataSchema,
   type Chart,
   type MastraClearHistoryResponse,
   type MastraClientConfig,
   type MastraHistoryResponse,
-  type MastraSuggestionsResponse,
   type ServingEndpointSummary,
-  type ServingEndpointsResponse,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
 import { MastraClient } from "@mastra/client-js";
-import type { UIMessage } from "ai";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /** HTTP header the Mastra plugin reads for a per-request model override. */
 const MODEL_OVERRIDE_HEADER = "X-Mastra-Model";
 
 /**
- * Read the Mastra plugin's `clientConfig()` payload (mount paths,
+ * `@mastra/client-js` `MastraClient` extended with the Mastra plugin's
+ * custom routes. One client drives everything the chat UI needs:
+ *
+ *   - Conversation streaming via the inherited
+ *     `getAgent(id).stream()` (the standard Mastra agent route).
+ *   - Thread history (`history` / `clearHistory`), the model catalogue
+ *     (`models`), Genie starter prompts (`suggestions`), and inline
+ *     embed resolution (`chart` / `statement`) over the plugin's own
+ *     routes - all derived from `basePath` + {@link MASTRA_ROUTES}.
+ *
+ * Built from the plugin's published `clientConfig()` payload
+ * ({@link MastraClientConfig}). `credentials: "include"` is set once at
+ * construction so the session cookie (which pins the server-side
+ * thread id) travels with every request, streaming included.
+ */
+export class MastraPluginClient extends MastraClient {
+  /** Plugin mount prefix (`/api/<plugin-name>`); all custom routes derive from it. */
+  readonly basePath: string;
+  /** Agent the bare (un-suffixed) routes resolve to. */
+  readonly defaultAgent: string;
+  /** Registered agent ids, surfaced for pickers. */
+  readonly agents: readonly string[];
+
+  constructor(config: MastraClientConfig) {
+    super({
+      baseUrl:
+        typeof window !== "undefined" ? window.location.origin : "http://localhost",
+      apiPrefix: config.basePath,
+      credentials: "include",
+      headers: {},
+    });
+    this.basePath = config.basePath;
+    this.defaultAgent = config.defaultAgent;
+    this.agents = config.agents;
+  }
+
+  /**
+   * Set (or clear) the per-request model override sent on every
+   * streaming call as `X-Mastra-Model`. The Mastra plugin's middleware
+   * reads it and overrides the resolved model for that request without
+   * an agent redeploy. `model` is either a concrete endpoint name
+   * (fuzzy-matched server-side) or a capability tier slug
+   * (`ModelTier.Fast` / `"thinking"`); pass `undefined` to fall back to
+   * the agent's configured default.
+   *
+   * Mutates the shared `options.headers` in place (rather than
+   * rebuilding the client) so the client identity stays stable across
+   * model changes - hooks can depend on it without refiring history
+   * loads when only the model changes.
+   */
+  setModelOverride(model?: string): void {
+    const headers = (this.options.headers ??= {});
+    if (model) headers[MODEL_OVERRIDE_HEADER] = model;
+    else delete headers[MODEL_OVERRIDE_HEADER];
+  }
+
+  /**
+   * Fetch the cached Model Serving endpoint catalogue from
+   * `GET ${basePath}/models`. Returns every endpoint the plugin
+   * publishes (server-cached for ~5 minutes); callers filter to
+   * chat-capable models for a picker.
+   */
+  async models(signal?: AbortSignal): Promise<ServingEndpointSummary[]> {
+    const payload = await this.#getJson(
+      `${this.basePath}${MASTRA_ROUTES.models}`,
+      ServingEndpointsResponseSchema,
+      signal,
+    );
+    return payload.endpoints;
+  }
+
+  /**
+   * Fetch the curated starter questions for `agentId`'s Genie space
+   * from `GET ${basePath}/suggestions`. Empty when the agent has no
+   * Genie space (or it defines none).
+   */
+  async suggestions(agentId?: string, signal?: AbortSignal): Promise<string[]> {
+    const payload = await this.#getJson(
+      this.#agentScoped(MASTRA_ROUTES.suggestions, agentId),
+      MastraSuggestionsResponseSchema,
+      signal,
+    );
+    return payload.questions;
+  }
+
+  /**
+   * Fetch one page of thread history from `GET ${basePath}/history`.
+   * Messages come back oldest -> newest so the caller can prepend them
+   * to a live transcript.
+   */
+  async history(
+    options: {
+      agentId?: string;
+      page?: number;
+      perPage?: number;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<MastraHistoryResponse> {
+    const params = new URLSearchParams();
+    if (options.page !== undefined) params.set("page", String(options.page));
+    if (options.perPage !== undefined) params.set("perPage", String(options.perPage));
+    const qs = params.toString();
+    const base = this.#agentScoped(MASTRA_ROUTES.history, options.agentId);
+    return this.#getJson(
+      qs ? `${base}?${qs}` : base,
+      MastraHistoryResponseSchema,
+      options.signal,
+    );
+  }
+
+  /**
+   * Wipe the caller's thread history (`DELETE ${basePath}/history`).
+   * The session cookie that anchors the thread id is preserved - only
+   * the messages go away. Idempotent: a fresh thread reports
+   * `cleared: 0` without erroring.
+   */
+  async clearHistory(
+    options: { agentId?: string; signal?: AbortSignal } = {},
+  ): Promise<MastraClearHistoryResponse> {
+    const init: RequestInit = { method: "DELETE", credentials: "include" };
+    if (options.signal) init.signal = options.signal;
+    const res = await fetch(
+      this.#agentScoped(MASTRA_ROUTES.history, options.agentId),
+      init,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return MastraClearHistoryResponseSchema.parse(await res.json());
+  }
+
+  /**
+   * Resolve a `[chart:<id>]` marker from
+   * `GET ${basePath}/embed/chart/:id`. The chart planner runs in the
+   * background, so the server long-polls the cache and returns the
+   * settled entry in one response. A 404 (unknown / expired id)
+   * resolves to `undefined` so the slot renders nothing.
+   */
+  chart(id: string, signal?: AbortSignal): Promise<Chart | undefined> {
+    return this.#embed("chart", id, ChartSchema.parse, signal);
+  }
+
+  /**
+   * Resolve a `[data:<id>]` marker from
+   * `GET ${basePath}/embed/data/:id`. Returns the same coerced rows the
+   * `get_statement` tool produced for the model. A 404 resolves to
+   * `undefined`.
+   */
+  statement(id: string, signal?: AbortSignal): Promise<StatementData | undefined> {
+    return this.#embed("data", id, StatementDataSchema.parse, signal);
+  }
+
+  /**
+   * Compose an agent-scoped URL: `${basePath}${segment}` for the
+   * default agent (the mount that does not require an `:agentId`), or
+   * `${basePath}${segment}/<encoded id>` for any other agent.
+   */
+  #agentScoped(segment: string, agentId: string | undefined): string {
+    const path = `${this.basePath}${segment}`;
+    const id = agentId ?? this.defaultAgent;
+    return !id || id === this.defaultAgent ? path : `${path}/${encodeURIComponent(id)}`;
+  }
+
+  /** GET + JSON-parse + schema-validate against a route that always 200s. */
+  async #getJson<T>(
+    url: string,
+    schema: { parse: (raw: unknown) => T },
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const init: RequestInit = { credentials: "include" };
+    if (signal) init.signal = signal;
+    const res = await fetch(url, init);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return schema.parse(await res.json());
+  }
+
+  /**
+   * Single-shot fetch of an embed marker of kind `type`. A 404
+   * (unknown embed type, or unknown / expired id) resolves to
+   * `undefined` so the host treats it as a missing slot. Caching /
+   * long-poll retry policy is the caller's concern.
+   */
+  async #embed<T>(
+    type: string,
+    id: string,
+    parse: (raw: unknown) => T,
+    signal?: AbortSignal,
+  ): Promise<T | undefined> {
+    const url = `${this.basePath}${MASTRA_ROUTES.embed}/${encodeURIComponent(
+      type,
+    )}/${encodeURIComponent(id)}`;
+    const init: RequestInit = { credentials: "include" };
+    if (signal) init.signal = signal;
+    const res = await fetch(url, init);
+    if (res.status === 404) return undefined;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return parse(await res.json());
+  }
+}
+
+/**
+ * Read the Mastra plugin's `clientConfig()` payload (`basePath`,
  * default agent, registered agent list). One call per render; values
  * are cached at boot by `usePluginClientConfig`.
  */
@@ -29,39 +228,31 @@ export const useMastraConfig = (): MastraClientConfig =>
   usePluginClientConfig<MastraClientConfig>("mastra");
 
 /**
- * Build a `MastraClient` from the published `basePath`. Pass `model`
- * to attach `X-Mastra-Model` to every outgoing request, which the
- * Mastra plugin treats as a per-request override (no agent redeploy
- * needed). A new client is returned whenever `model` changes so
- * callers can use it as a `useMemo` dep.
+ * The single {@link MastraPluginClient} for the plugin, built once from
+ * the published `basePath`. Use it for everything: stream a turn with
+ * `client.getAgent(agentId).stream(...)`, page history with
+ * `client.history()`, resolve embeds with `client.chart(id)`, etc.
+ * Rebuilt only when `basePath` / `defaultAgent` change (e.g. a custom
+ * mount), so it's safe as a `useMemo` / `useCallback` / `useEffect`
+ * dependency; the per-request model override is applied in place via
+ * {@link MastraPluginClient.setModelOverride} without changing identity.
  */
-export const useMastraClient = (model?: string): MastraClient => {
-  const { basePath } = useMastraConfig();
-  return useMemo(
-    () =>
-      new MastraClient({
-        baseUrl:
-          typeof window !== "undefined" ? window.location.origin : "http://localhost",
-        apiPrefix: basePath,
-        ...(model ? { headers: { [MODEL_OVERRIDE_HEADER]: model } } : {}),
-      }),
-    [basePath, model],
-  );
-};
-
-/** Convenience: the `chatRoute` URL for an agent (defaults to the registered default). */
-export const useChatUrl = (agentId?: string): string => {
+export const useMastraClient = (): MastraPluginClient => {
   const config = useMastraConfig();
-  return chatUrl(config, agentId);
+  return useMemo(
+    () => new MastraPluginClient(config),
+    // `config` identity can churn across renders; the route layout is
+    // fully determined by these two scalars.
+    [config.basePath, config.defaultAgent],
+  );
 };
 
 /**
  * Fetch the cached Model Serving endpoint catalogue exposed by the
- * Mastra plugin at `GET ${basePath}/models`. Filters out non-LLM
- * endpoints (anything without a `llm/v1/*` task) so the dropdown
- * doesn't surface embedding / vision / agent-bricks endpoints. The
- * response itself is server-cached for 5 minutes so polling cost is
- * negligible.
+ * Mastra plugin (`client.models()`). Filters out non-LLM endpoints
+ * (anything without a `llm/v1/*` task) so the dropdown doesn't surface
+ * embedding / vision / agent-bricks endpoints. The response itself is
+ * server-cached for 5 minutes so polling cost is negligible.
  *
  * Pass `enabled: false` to skip the fetch entirely (e.g. when the
  * model picker is hidden), in which case `models` stays empty.
@@ -73,7 +264,7 @@ export const useMastraModels = (
   loading: boolean;
   error: Error | null;
 } => {
-  const { modelsPath } = useMastraConfig();
+  const client = useMastraClient();
   const [models, setModels] = useState<ServingEndpointSummary[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<Error | null>(null);
@@ -83,46 +274,39 @@ export const useMastraModels = (
       setLoading(false);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(modelsPath, { credentials: "include" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as ServingEndpointsResponse;
-      })
-      .then((payload) => {
-        if (cancelled) return;
+    client
+      .models(controller.signal)
+      .then((endpoints) => {
+        if (controller.signal.aborted) return;
         // Filter to chat-capable endpoints; if the server didn't tag
         // tasks at all, just pass everything through so we don't show
         // an empty list.
-        const llms = payload.endpoints.filter(
-          (e) => !e.task || e.task.startsWith("llm/v1/"),
-        );
-        setModels(llms.length > 0 ? llms : payload.endpoints);
+        const llms = endpoints.filter((e) => !e.task || e.task.startsWith("llm/v1/"));
+        setModels(llms.length > 0 ? llms : endpoints);
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e : new Error(String(e)));
+        if (controller.signal.aborted) return;
+        setError(e instanceof Error ? e : new Error(String(e)));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [modelsPath, enabled]);
+    return () => controller.abort();
+  }, [client, enabled]);
 
   return { models, loading, error };
 };
 
 /**
- * Fetch the curated starter questions for an agent's Genie space
- * from the Mastra plugin's `GET ${basePath}/suggestions` endpoint.
- * These are the `sample_questions` an author configured on the
- * space, surfaced as one-tap prompts on the chat empty state. The
- * server returns an empty list when the agent has no Genie space, so
- * `questions` stays empty in that case and the UI shows a bare empty
- * state rather than built-in example prompts.
+ * Fetch the curated starter questions for an agent's Genie space via
+ * `client.suggestions(agentId)`. These are the `sample_questions` an
+ * author configured on the space, surfaced as one-tap prompts on the
+ * chat empty state. The server returns an empty list when the agent
+ * has no Genie space, so `questions` stays empty in that case and the
+ * UI shows a bare empty state rather than built-in example prompts.
  *
  * Pass `enabled: false` to skip the fetch (e.g. when the caller
  * supplies its own explicit suggestion list), in which case
@@ -133,11 +317,7 @@ export const useMastraSuggestions = (
   agentId?: string,
   enabled = true,
 ): { questions: string[]; loading: boolean } => {
-  const { suggestionsPath, defaultAgent } = useMastraConfig();
-  const url = useMemo(
-    () => suggestionsUrl({ suggestionsPath, defaultAgent }, agentId),
-    [suggestionsPath, defaultAgent, agentId],
-  );
+  const client = useMastraClient();
   const [questions, setQuestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(enabled);
 
@@ -147,100 +327,25 @@ export const useMastraSuggestions = (
       setQuestions([]);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
-    fetch(url, { credentials: "include" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as MastraSuggestionsResponse;
-      })
-      .then((payload) => {
-        if (cancelled) return;
-        setQuestions(Array.isArray(payload.questions) ? payload.questions : []);
+    client
+      .suggestions(agentId, controller.signal)
+      .then((qs) => {
+        if (controller.signal.aborted) return;
+        setQuestions(Array.isArray(qs) ? qs : []);
       })
       .catch(() => {
         // Non-critical: a failed lookup just means no starter prompts.
-        if (!cancelled) setQuestions([]);
+        if (!controller.signal.aborted) setQuestions([]);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [url, enabled]);
+    return () => controller.abort();
+  }, [client, agentId, enabled]);
 
   return { questions, loading };
-};
-
-/**
- * Page of UI-formatted history messages plus the metadata needed to
- * drive infinite-scroll-up. `uiMessages` is widened to `UIMessage[]`
- * (from the `ai` package) since the server sends back exactly the
- * payload `toAISdkV5Messages` produces; the dependency-free shared
- * types use a structural shape instead of importing `ai`.
- */
-export interface MastraHistoryPage {
-  uiMessages: UIMessage[];
-  page: number;
-  perPage: number;
-  total: number;
-  hasMore: boolean;
-}
-
-/**
- * Fetch one page of thread history from the Mastra plugin's
- * `/history` endpoint. Cookies travel with the request so the server
- * can resolve the session-scoped `threadId`. Returns a typed page
- * the UI can prepend (oldest -> newest) to its live transcript.
- */
-export const fetchMastraHistory = async (
-  config: Pick<MastraClientConfig, "historyPath" | "defaultAgent">,
-  options: {
-    agentId?: string;
-    page?: number;
-    perPage?: number;
-    signal?: AbortSignal;
-  } = {},
-): Promise<MastraHistoryPage> => {
-  const url = historyUrl(config, {
-    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
-    ...(options.page !== undefined ? { page: options.page } : {}),
-    ...(options.perPage !== undefined ? { perPage: options.perPage } : {}),
-  });
-  const init: RequestInit = { credentials: "include" };
-  if (options.signal) init.signal = options.signal;
-  const res = await fetch(url, init);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const payload = (await res.json()) as MastraHistoryResponse;
-  return {
-    uiMessages: payload.uiMessages as unknown as UIMessage[],
-    page: payload.page,
-    perPage: payload.perPage,
-    total: payload.total,
-    hasMore: payload.hasMore,
-  };
-};
-
-/**
- * Wipe the caller's thread history on the Mastra plugin. Hits
- * `DELETE` on the same `/history` endpoint `fetchMastraHistory`
- * reads from, so the session cookie (and therefore the thread id)
- * is preserved - only the messages go away. Idempotent: a fresh
- * thread reports `cleared: 0` without erroring.
- */
-export const clearMastraHistory = async (
-  config: Pick<MastraClientConfig, "historyPath" | "defaultAgent">,
-  options: { agentId?: string; signal?: AbortSignal } = {},
-): Promise<MastraClearHistoryResponse> => {
-  const url = historyUrl(config, {
-    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
-  });
-  const init: RequestInit = { method: "DELETE", credentials: "include" };
-  if (options.signal) init.signal = options.signal;
-  const res = await fetch(url, init);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as MastraClearHistoryResponse;
 };
 
 /**
@@ -258,7 +363,7 @@ export interface ByIdFetchState<T> {
 }
 
 /**
- * Module-level by-URL cache for `/<resource>/:id` fetches.
+ * Module-level by-key cache for `/<resource>/:id` fetches.
  *
  * Statements are immutable by construction (a `statement_id`
  * always materializes the same rows), and a settled chart entry
@@ -270,9 +375,8 @@ export interface ByIdFetchState<T> {
  *      markdown on every chunk, React StrictMode double-mounts
  *      effects in dev, and any parent re-render can shift slot
  *      identity. Without a cache, each remount cancels the
- *      in-flight `fetch()` and starts another. With it,
- *      remounts hit the cache synchronously - zero network,
- *      zero spinner flash.
+ *      in-flight fetch and starts another. With it, remounts hit
+ *      the cache synchronously - zero network, zero spinner flash.
  *   2. Concurrent consumers: two slots pointing at the same id
  *      (e.g. user toggles a thread that already rendered the
  *      same chart in history) dedupe to a single in-flight
@@ -284,7 +388,7 @@ export interface ByIdFetchState<T> {
  * the next consumer retries. Per-consumer cancellation only
  * detaches that consumer from the promise; the fetch keeps
  * running for any other live consumer. Page reload clears
- * everything.
+ * everything. Keyed by `<type>:<id>` (e.g. `chart:abc123`).
  */
 type FetchCacheEntry<T> =
   | { kind: "pending"; promise: Promise<T | undefined> }
@@ -293,52 +397,53 @@ type FetchCacheEntry<T> =
 const fetchCache = new Map<string, FetchCacheEntry<unknown>>();
 
 /**
- * Resolve `url` through the by-id cache. See {@link fetchCache}
- * for the lifecycle. `isTerminal` lets callers opt out of
- * caching responses that aren't actually settled yet (e.g. a
- * chart whose planner is still working): only `true` answers
- * land as `kind: "ready"`, everything else is dropped so the
- * next mount refetches.
+ * Resolve `key` through the by-id cache. See {@link fetchCache}
+ * for the lifecycle. `fetcher` performs the underlying single-shot
+ * request ({@link MastraPluginClient.chart} /
+ * {@link MastraPluginClient.statement}), resolving to `undefined` on a
+ * 404. `isTerminal` lets callers opt out of caching responses that
+ * aren't actually settled yet (e.g. a chart whose planner is still
+ * working): only `true` answers land as `kind: "ready"`, everything
+ * else is dropped so the next mount refetches.
  *
  * 404s always cache (as `data: undefined`) - unknown ids stay
  * unknown for the tab's lifetime, mirroring the slot semantics
  * ("expired / never minted -> render nothing").
  */
 async function fetchByIdCached<T>(
-  url: string,
+  key: string,
+  fetcher: () => Promise<T | undefined>,
   isTerminal: (data: T) => boolean,
 ): Promise<T | undefined> {
-  const existing = fetchCache.get(url) as FetchCacheEntry<T> | undefined;
+  const existing = fetchCache.get(key) as FetchCacheEntry<T> | undefined;
   if (existing?.kind === "ready") return existing.data;
   if (existing?.kind === "pending") return existing.promise;
 
   const promise = (async (): Promise<T | undefined> => {
-    const res = await fetch(url, { credentials: "include" });
-    if (res.status === 404) {
-      fetchCache.set(url, { kind: "ready", data: undefined });
+    const data = await fetcher();
+    if (data === undefined) {
+      fetchCache.set(key, { kind: "ready", data: undefined });
       return undefined;
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as T;
     if (isTerminal(data)) {
-      fetchCache.set(url, { kind: "ready", data });
+      fetchCache.set(key, { kind: "ready", data });
     } else {
-      fetchCache.delete(url);
+      fetchCache.delete(key);
     }
     return data;
   })().catch((err: unknown) => {
-    fetchCache.delete(url);
+    fetchCache.delete(key);
     throw err;
   });
 
-  fetchCache.set(url, { kind: "pending", promise } as FetchCacheEntry<unknown>);
+  fetchCache.set(key, { kind: "pending", promise } as FetchCacheEntry<unknown>);
   return promise;
 }
 
 /** Synchronous cache peek used to seed initial state on mount. */
-function readFetchCache<T>(url: string | undefined): T | undefined {
-  if (!url) return undefined;
-  const e = fetchCache.get(url) as FetchCacheEntry<T> | undefined;
+function readFetchCache<T>(key: string | undefined): T | undefined {
+  if (!key) return undefined;
+  const e = fetchCache.get(key) as FetchCacheEntry<T> | undefined;
   return e?.kind === "ready" ? e.data : undefined;
 }
 
@@ -346,7 +451,8 @@ function readFetchCache<T>(url: string | undefined): T | undefined {
  * React hook for any resource the Mastra plugin exposes as
  * `/<resource>/:id`. Powers both the chart and statement slots
  * in the chat UI; the slot-specific hooks below are thin
- * adapters that pick the right path template and terminal check.
+ * adapters that pick the right cache `key`, `fetcher`, and
+ * terminal check.
  *
  * Cached through {@link fetchByIdCached} - re-mounts (StrictMode,
  * markdown re-parses during streaming, parent re-renders) hit
@@ -354,26 +460,29 @@ function readFetchCache<T>(url: string | undefined): T | undefined {
  * Per-consumer unmount only detaches that consumer from the
  * shared promise; the underlying fetch keeps running for any
  * other live consumer.
+ *
+ * `key`, `fetcher`, and `isTerminal` must be referentially stable
+ * (memoized by the caller) so the effect doesn't refire every render.
  */
 function useByIdFetch<T>(
-  id: string | undefined,
-  url: string | undefined,
+  key: string | undefined,
+  fetcher: () => Promise<T | undefined>,
   isTerminal: (data: T) => boolean,
 ): ByIdFetchState<T> {
-  const [data, setData] = useState<T | undefined>(() => readFetchCache<T>(url));
+  const [data, setData] = useState<T | undefined>(() => readFetchCache<T>(key));
   const [loading, setLoading] = useState(
-    () => id !== undefined && url !== undefined && readFetchCache<T>(url) === undefined,
+    () => key !== undefined && readFetchCache<T>(key) === undefined,
   );
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (!id || !url) {
+    if (!key) {
       setData(undefined);
       setLoading(false);
       setError(null);
       return;
     }
-    const cached = readFetchCache<T>(url);
+    const cached = readFetchCache<T>(key);
     if (cached !== undefined) {
       setData(cached);
       setLoading(false);
@@ -385,7 +494,7 @@ function useByIdFetch<T>(
     setError(null);
     setLoading(true);
 
-    fetchByIdCached<T>(url, isTerminal)
+    fetchByIdCached<T>(key, fetcher, isTerminal)
       .then((payload) => {
         if (cancelled) return;
         setData(payload);
@@ -400,7 +509,7 @@ function useByIdFetch<T>(
     return () => {
       cancelled = true;
     };
-  }, [id, url, isTerminal]);
+  }, [key, fetcher, isTerminal]);
 
   return { data, loading, error };
 }
@@ -430,8 +539,9 @@ const statementIsTerminal = (_: StatementData): boolean => true;
 
 /**
  * Fetch a chart by id from the Mastra plugin's generic
- * `/embed/chart/:id` endpoint. Used by the chat UI to resolve
- * `[chart:<chartId>]` markers the agent embeds in prose.
+ * `/embed/chart/:id` endpoint via {@link MastraPluginClient.chart}.
+ * Used by the chat UI to resolve `[chart:<chartId>]` markers the agent
+ * embeds in prose.
  *
  * The chart planner runs in the background after `prepare_chart`
  * mints the id, so the server long-polls the cache until the
@@ -448,32 +558,31 @@ const statementIsTerminal = (_: StatementData): boolean => true;
  *     nothing.
  */
 export const useChartFetch = (chartId: string | undefined): ByIdFetchState<Chart> => {
-  const { embedPathTemplate } = useMastraConfig();
-  const url = useMemo(
-    () => (chartId ? embedUrl({ embedPathTemplate }, "chart", chartId) : undefined),
-    [chartId, embedPathTemplate],
-  );
-  return useByIdFetch<Chart>(chartId, url, chartIsTerminal);
+  const client = useMastraClient();
+  const key = chartId ? `chart:${chartId}` : undefined;
+  const fetcher = useCallback(() => client.chart(chartId as string), [client, chartId]);
+  return useByIdFetch<Chart>(key, fetcher, chartIsTerminal);
 };
 
 /**
  * Fetch the rows of a Databricks statement by id from the Mastra
- * plugin's generic `/embed/data/:id` endpoint. Used by the chat
- * UI to resolve `[data:<statement_id>]` markers the agent embeds
- * in prose. Server-side, the route reuses the `get_statement`
- * tool's fetch + coercion pipeline so the shape matches what the
- * LLM saw for the same statement; `data.truncated` signals the
- * server clipped to its row cap. Cached for the tab's lifetime
- * because a `statement_id` materializes the same rows forever.
+ * plugin's generic `/embed/data/:id` endpoint via
+ * {@link MastraPluginClient.statement}. Used by the chat UI to resolve
+ * `[data:<statement_id>]` markers the agent embeds in prose.
+ * Server-side, the route reuses the `get_statement` tool's fetch +
+ * coercion pipeline so the shape matches what the LLM saw for the same
+ * statement; `data.truncated` signals the server clipped to its row
+ * cap. Cached for the tab's lifetime because a `statement_id`
+ * materializes the same rows forever.
  */
 export const useStatementFetch = (
   statementId: string | undefined,
 ): ByIdFetchState<StatementData> => {
-  const { embedPathTemplate } = useMastraConfig();
-  const url = useMemo(
-    () =>
-      statementId ? embedUrl({ embedPathTemplate }, "data", statementId) : undefined,
-    [statementId, embedPathTemplate],
+  const client = useMastraClient();
+  const key = statementId ? `data:${statementId}` : undefined;
+  const fetcher = useCallback(
+    () => client.statement(statementId as string),
+    [client, statementId],
   );
-  return useByIdFetch<StatementData>(statementId, url, statementIsTerminal);
+  return useByIdFetch<StatementData>(key, fetcher, statementIsTerminal);
 };

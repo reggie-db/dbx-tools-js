@@ -44,7 +44,8 @@ the AI Gateway speed/quality/cost profile, and a derived semver out of
 each endpoint, so callers can rank or filter Foundation Model endpoints
 without re-implementing the parsing themselves. `appkit-mastra` is a beta
 AppKit plugin that mounts Mastra
-(`@mastra/express` + `@mastra/ai-sdk` `chatRoute`), resolves the model from the
+(`@mastra/express`; the client streams over the standard Mastra agent route
+via `@mastra/client-js`), resolves the model from the
 workspace host and `/serving-endpoints` with per-request user auth, reuses the
 `lakebase` plugin pool for Mastra Memory when `storage` / `memory` are enabled,
 forwards Genie streaming events through `ToolStream` for live UI feedback,
@@ -53,8 +54,9 @@ chart-planner agent runs server-side per dataset and ships its `EChartsOption`
 straight back through the writer, so the client never has to round-trip for
 chart specs.
 `appkit-mastra-shared` is the dependency-free wire-format contract (types +
-`chatUrl` / `historyUrl` helpers + Genie writer-event vocabulary) that the
-React client imports without dragging in `pg`, `fastembed`, or Mastra itself.
+schemas + the shared `MASTRA_ROUTES` segments + Genie writer-event vocabulary)
+that the React client imports without dragging in `pg`, `fastembed`, or Mastra
+itself.
 `appkit-mastra-ui` is the React surface for the Mastra plugin, packaged like
 `@databricks/appkit-ui`: a `./react` subpath plus a `./styles.css` entry,
 styled entirely with AppKit semantic tokens so it inherits the host theme. It
@@ -93,7 +95,7 @@ bun dev                # or `bun dev` from the repo root (`--filter` demo)
 ```
 
 See [demo/README.md](demo/README.md) for layout, scripts, bundle deploy notes,
-and how the client targets `/api/mastra/route/chat/<agentId>`.
+and how the client streams from the Mastra agent route under `/api/mastra`.
 
 ## Scaffold a new package
 

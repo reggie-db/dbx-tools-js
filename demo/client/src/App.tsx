@@ -1,4 +1,3 @@
-import Chat from "@/pages/Chat";
 import Stream from "@/pages/Stream";
 import { Button, Separator } from "@databricks/appkit-ui/react";
 import {
@@ -23,12 +22,6 @@ type RouteDef = {
 };
 
 const ROUTES: RouteDef[] = [
-  {
-    path: "/chat",
-    label: "Chat",
-    description: "useChat against the chatRoute()",
-    element: <Chat />,
-  },
   {
     path: "/stream",
     label: "Stream",
@@ -66,11 +59,11 @@ const App = () => (
       </header>
       <main className="flex-1 min-h-0">
         <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
+          <Route path="/" element={<Navigate to="/stream" replace />} />
           {ROUTES.map((r) => (
             <Route key={r.path} path={r.path} element={r.element} />
           ))}
-          <Route path="*" element={<Navigate to="/chat" replace />} />
+          <Route path="*" element={<Navigate to="/stream" replace />} />
         </Routes>
       </main>
     </div>

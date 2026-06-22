@@ -1,9 +1,9 @@
 /**
  * AppKit plugin that builds one or more Mastra `Agent` instances and
- * mounts the `@mastra/express` server plus `@mastra/ai-sdk` `chatRoute`
- * handlers. The UI message stream matches what `chatRoute()` emits, so
- * the client can use `useChat()` from `@ai-sdk/react` without custom
- * parsing.
+ * mounts the `@mastra/express` server. Clients drive the conversation
+ * over the standard Mastra agent stream (`@mastra/client-js`'s
+ * `getAgent(id).stream()`), so there's no bespoke chat transport to
+ * keep in sync.
  *
  * - Agents: registered through `config.agents` at plugin creation
  *   ({@link MastraAgentDefinition}). Each entry's `tools` field accepts
@@ -21,10 +21,11 @@
  *   `schemaName: "mastra_<agentId>"`; the vector store is a single
  *   shared singleton across every agent.
  * - Server: the Express subapp wiring lives in `./server.js`.
- * - HTTP: AppKit mounts this plugin under `/api/mastra`. `chatRoute`
- *   is registered at `/route/chat` (bound to `config.defaultAgent` or
- *   the first registered id) and `/route/chat/:agentId`, so the
- *   AI SDK transport URL is `/api/mastra/route/chat/<agentId>`.
+ * - HTTP: AppKit mounts this plugin under `/api/mastra`. Alongside the
+ *   Mastra agent routes, the plugin registers `/route/history`
+ *   (load + clear thread history), `/models`, `/suggestions`, and the
+ *   generic `/embed/:type/:id` resolver for inline chart / data
+ *   markers.
  */
 
 import {
@@ -38,30 +39,34 @@ import {
   type ResourceRequirement,
 } from "@databricks/appkit";
 import { appkitUtils, commonUtils, logUtils } from "@dbx-tools/shared";
-import { chatRoute } from "@mastra/ai-sdk";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
 import express from "express";
 import type { Pool } from "pg";
 
-import type {
-  MastraClientConfig,
-  StatementData,
+import {
+  MASTRA_ROUTES,
+  type MastraClientConfig,
+  type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
+import {
+  clearServingEndpointsCache,
+  listServingEndpoints,
+  type ServingEndpointSummary,
+} from "@dbx-tools/model";
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
-import { createMemoryBuilder, createServicePrincipalPool, needsLakebase } from "./memory.js";
+import {
+  createMemoryBuilder,
+  createServicePrincipalPool,
+  needsLakebase,
+} from "./memory.js";
 import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
-import {
-  clearServingEndpointsCache,
-  listServingEndpoints,
-  resolveServingConfig,
-  type ServingEndpointSummary,
-} from "./serving.js";
+import { resolveServingConfig } from "./serving.js";
 import {
   fetchStatementData,
   isStatementNotFoundError,
@@ -194,9 +199,9 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
        */
       get: (id: string): Agent | null => this.built?.agents[id] ?? null,
       /**
-       * The agent `chatRoute` binds to when the client doesn't name
-       * one. Resolves to `config.defaultAgent`, the first registered
-       * id, or the built-in `default` fallback.
+       * The agent the client converses with when it doesn't name one.
+       * Resolves to `config.defaultAgent`, the first registered id, or
+       * the built-in `default` fallback.
        */
       getDefault: (): Agent | null =>
         (this.built && this.built.agents[this.built.defaultAgentId]) ?? null,
@@ -225,22 +230,16 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
   override clientConfig(): Record<string, unknown> {
     // AppKit mounts every plugin at `/api/<plugin.name>`. `this.name`
-    // honors `config.name` overrides, so the published paths stay
-    // accurate if someone remounts the plugin under a custom id.
+    // honors `config.name` overrides, so publishing `basePath` is
+    // enough for the client to stay correct under a custom mount id -
+    // the per-route segments are fixed (`MASTRA_ROUTES`) and the
+    // client (`MastraPluginClient`) derives every endpoint from
+    // `basePath`.
     // Return widens to `Record<string, unknown>` to satisfy the
     // base-class signature; consumers read it through the typed
     // `MastraClientConfig` shape via `usePluginClientConfig<...>(...)`.
-    const basePath = `/api/${this.name}`;
     const config: MastraClientConfig = {
-      basePath,
-      chatPath: `${basePath}/route/chat`,
-      chatPathTemplate: `${basePath}/route/chat/:agentId`,
-      modelsPath: `${basePath}/models`,
-      historyPath: `${basePath}/route/history`,
-      historyPathTemplate: `${basePath}/route/history/:agentId`,
-      embedPathTemplate: `${basePath}/embed/:type/:id`,
-      suggestionsPath: `${basePath}/suggestions`,
-      suggestionsPathTemplate: `${basePath}/suggestions/:agentId`,
+      basePath: `/api/${this.name}`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
     };
@@ -253,7 +252,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // be registered before the catch-all that forwards everything to
     // the Mastra subapp. Errors propagate to Express's default error
     // handler via `next(err)` so callers see the real SDK message.
-    router.get("/models", (req, res, next) => {
+    router.get(MASTRA_ROUTES.models, (req, res, next) => {
       this.userScopedSelf(req)
         .listModels()
         .then((endpoints) => res.json({ endpoints }))
@@ -307,7 +306,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       },
     };
 
-    router.get("/embed/:type/:id", (req, res, next) => {
+    router.get(`${MASTRA_ROUTES.embed}/:type/:id`, (req, res, next) => {
       const type = req.params["type"] ?? "";
       const id = req.params["id"];
       const resolve = embedResolvers[type];
@@ -363,8 +362,8 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
           res.json({ questions: [] });
         });
     };
-    router.get("/suggestions", handleSuggestions);
-    router.get("/suggestions/:agentId", handleSuggestions);
+    router.get(MASTRA_ROUTES.suggestions, handleSuggestions);
+    router.get(`${MASTRA_ROUTES.suggestions}/:agentId`, handleSuggestions);
 
     router.use((req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
@@ -549,20 +548,28 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       mastra: this.mastra,
       prefix: "",
       customApiRoutes: [
-        chatRoute({ path: "/route/chat", agent: this.built.defaultAgentId }),
-        chatRoute({ path: "/route/chat/:agentId" }),
         // `historyRoute` registers both GET (load) and DELETE
         // (clear) on the same path, so it returns an array we
         // splice in.
-        ...historyRoute({ path: "/route/history", agent: this.built.defaultAgentId }),
-        ...historyRoute({ path: "/route/history/:agentId" }),
+        ...historyRoute({
+          path: MASTRA_ROUTES.history,
+          agent: this.built.defaultAgentId,
+        }),
+        // Assert the `:agentId` template type: the per-package build's
+        // NodeNext resolution widens the imported `MASTRA_ROUTES.history`
+        // to `string` (the source/bundler typecheck keeps it a literal),
+        // which would otherwise drop this out of the dynamic-agent
+        // overload and demand a fixed `agent`.
+        ...historyRoute({
+          path: `${MASTRA_ROUTES.history}/:agentId` as `${string}:agentId`,
+        }),
       ],
     });
     await this.mastraServer.init();
     this.log.debug("build:done", {
       agents: Object.keys(this.built.agents),
       defaultAgent: this.built.defaultAgentId,
-      routes: ["/route/chat", "/route/history", "/models"],
+      routes: ["/route/history", "/models", "/suggestions", "/embed/:type/:id"],
       instanceStorage: instanceStorage !== undefined,
       observability: observability !== undefined ? "mlflow" : "off",
     });

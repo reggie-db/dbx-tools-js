@@ -23,16 +23,21 @@
  *     statement id (a time-ordered UUID) and resolves to the
  *     statement's rows.
  *
- * The `<id>` MUST be UUID-shaped (`8-4-4-4-12` hex): both id kinds
- * above are UUIDs, just different versions (chart = v4, statement =
- * v7-style). Baking that shape into the grammar means a fabricated
+ * The `<id>` of a real embed is UUID-shaped (`8-4-4-4-12` hex): both
+ * id kinds above are UUIDs, just different versions (chart = v4,
+ * statement = v7-style). The grammar deliberately captures ANY
+ * non-bracket id token, not just UUID-shaped ones, so a fabricated
  * marker the model glued together from a label
- * (e.g. `[chart:01f163b6-1eac-region-fill-oos]`) simply doesn't
- * parse - it's left as prose instead of firing a doomed request -
- * so no separate id-shape guard is needed downstream.
+ * (e.g. `[chart:placeholder]` or
+ * `[chart:01f163b6-1eac-region-fill-oos]`) still parses as a marker.
+ * Matching it - rather than letting the broad regex miss it - is what
+ * lets the host UI consume and obscure the bogus marker instead of
+ * leaking the literal `[chart:...]` text into the rendered prose.
+ * Whether an id is a genuine embed is a separate {@link isUuid}
+ * check the caller runs on {@link ParsedMarker.id}.
  *
- * Parse everything through {@link parseMarkers} and branch on the
- * returned {@link ParsedMarker.type}.
+ * Parse everything through {@link parseMarkers}, validate the id with
+ * {@link isUuid}, and branch on the returned {@link ParsedMarker.type}.
  */
 
 /**
@@ -48,23 +53,44 @@ export type MarkerType = string;
 /**
  * Single matcher for ANY embed marker, regardless of type. Matches
  * `[<type>:<id>]`. Capture group 1 is the marker type token (e.g.
- * `chart`, `data`); group 2 is the id, constrained to a UUID shape
- * (`8-4-4-4-12` hex, any version - covers v4 chart ids and
- * time-ordered statement ids alike).
+ * `chart`, `data`); group 2 is the id - any run of non-bracket,
+ * non-whitespace characters, NOT constrained to a UUID shape.
  *
- * The type is intentionally NOT enumerated here - the server's
- * resolver registry decides which types are real and 404s the rest,
- * so a new embed kind needs no grammar change. Pinning only the id
- * SHAPE (not the type) is what lets the grammar self-reject
- * fabricated, non-UUID ids without a separate guard.
+ * Neither the type nor the id shape is enumerated here. The type is
+ * left open because the server's resolver registry decides which
+ * types are real and 404s the rest, so a new embed kind needs no
+ * grammar change. The id is left broad on purpose: a fabricated
+ * marker the model emits from a label (e.g. `[chart:placeholder]`)
+ * MUST still match so the host UI can consume and obscure it rather
+ * than leak the literal `[chart:...]` text into the prose. The id is
+ * then validated with {@link isUuid} downstream; non-UUID ids resolve
+ * to no embed.
  *
  * Safe to share as a `/g` constant: it's only ever consumed via
  * {@link String.prototype.matchAll}, which clones the regex and
  * never advances this object's `lastIndex`. (A `.exec()`/`.test()`
  * loop would need a fresh regex each time, but we don't do that.)
  */
-const MARKER_RE =
-  /\[([A-Za-z][A-Za-z0-9_-]*):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/gi;
+const MARKER_RE = /\[([A-Za-z][A-Za-z0-9_-]*):([^\]\s]+)\]/g;
+
+/**
+ * UUID matcher (`8-4-4-4-12` hex, any version) anchored to the whole
+ * string. Covers v4 chart ids and time-ordered (v7-style) statement
+ * ids alike. Used by {@link isUuid} to tell a genuine embed id apart
+ * from a label the model fabricated into a marker.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether `id` is a UUID-shaped embed id. The marker grammar
+ * ({@link MARKER_RE}) matches any non-bracket id token so fabricated
+ * markers don't leak as literal prose; this is the guard callers run
+ * to decide whether an id is a real embed (render the slot) or a
+ * bogus label to obscure (drop the marker entirely).
+ */
+export function isUuid(id: string): boolean {
+  return UUID_RE.test(id);
+}
 
 /** One marker found in agent prose, with its source span. */
 export interface ParsedMarker {
@@ -83,9 +109,11 @@ export interface ParsedMarker {
  * regex pass means matches never overlap, so callers can splice the
  * spans directly without a sort/dedupe step. This is the one entry
  * point for marker parsing: type branching runs on the returned
- * markers, and every returned id is already UUID-shaped because the
- * grammar ({@link MARKER_RE}) requires it - no separate id-shape
- * check is needed.
+ * markers. The grammar ({@link MARKER_RE}) matches any non-bracket id
+ * token, so a returned {@link ParsedMarker.id} is NOT guaranteed to
+ * be a real embed id - run it through {@link isUuid} to tell a
+ * genuine embed apart from a fabricated label, which the caller then
+ * obscures rather than rendering.
  */
 export function parseMarkers(text: string): ParsedMarker[] {
   const out: ParsedMarker[] = [];

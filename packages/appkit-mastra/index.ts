@@ -11,29 +11,18 @@
  * consumers.
  */
 export * from "@dbx-tools/appkit-mastra-shared";
+export * from "@dbx-tools/model";
 export * from "./src/agents.js";
 export * from "./src/chart.js";
 export * from "./src/config.js";
 export * from "./src/genie.js";
-export {
-  FALLBACK_MODEL_IDS,
-  MODEL_CATALOG,
-  ModelTier,
-  modelForTier,
-  modelsForTier,
-} from "./src/model.js";
 export * from "./src/plugin.js";
 export {
   MASTRA_MODEL_OVERRIDE_KEY,
   MODEL_OVERRIDE_BODY_FIELDS,
   MODEL_OVERRIDE_HEADER,
   MODEL_OVERRIDE_QUERY,
-  clearServingEndpointsCache,
   extractModelOverride,
-  listServingEndpoints,
-  resolveModelId,
-  type ResolveModelOptions,
-  type ResolvedModel,
-  type ServingEndpointSummary,
+  type ModelOverrideRequest,
 } from "./src/serving.js";
 export * from "./src/tools/email.js";

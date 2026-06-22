@@ -33,15 +33,13 @@ Generated from the AppKit `app init` template, then adapted to:
   `streamdown` for GitHub-flavored markdown with Shiki syntax
   highlighting and KaTeX math). The demo is a consumer of that
   package, not the home of the chat code.
-- Ship two pages that exercise both entry points of the package: a
-  vanilla AI SDK `useChat` flow (`/chat`) that drives the controlled
-  `ChatView`, and the self-contained `MastraChat` drop-in (`/stream`)
-  that wires itself from the Mastra plugin config. Both include a
-  model-picker dropdown
-  driven by `GET /api/mastra/models` (the live serving-endpoint
-  catalogue) and pass the selection through an `X-Mastra-Model`
-  header. Lazy-loads older history on scroll-up via
-  `/api/mastra/route/history`.
+- Ship the self-contained `MastraChat` drop-in (`/stream`) that wires
+  itself from the Mastra plugin config and streams over
+  `@mastra/client-js` (`getAgent(id).stream()`). Includes a
+  model-picker dropdown driven by `GET /api/mastra/models` (the live
+  serving-endpoint catalogue), passing the selection through an
+  `X-Mastra-Model` header, and lazy-loads older history on scroll-up
+  via `/api/mastra/route/history`.
 - Bind to `127.0.0.1` locally for the friendliest dev URL; falls back
   to `0.0.0.0` automatically when `DATABRICKS_APP_PORT` is set (i.e.
   inside a deployed Databricks App).
@@ -68,7 +66,6 @@ demo/
       ErrorBoundary.tsx
       index.css           # @import appkit-ui/styles.css + tailwindcss + @dbx-tools/appkit-mastra-ui/styles.css
       pages/
-        Chat.tsx          # /chat - @ai-sdk/react useChat -> controlled <ChatView> from @dbx-tools/appkit-mastra-ui
         Stream.tsx        # /stream - <MastraChat> drop-in from @dbx-tools/appkit-mastra-ui
 ```
 

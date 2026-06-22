@@ -10,7 +10,7 @@
  * away can't crash a tool mid-flight.
  */
 
-import type { MinimalWriter } from "@dbx-tools/appkit-mastra-shared";
+import type { MastraWriter } from "@dbx-tools/appkit-mastra-shared";
 import { commonUtils, type logUtils } from "@dbx-tools/shared";
 
 /**
@@ -24,7 +24,7 @@ import { commonUtils, type logUtils } from "@dbx-tools/shared";
  */
 export async function safeWrite(
   log: logUtils.Logger,
-  writer: MinimalWriter | undefined,
+  writer: MastraWriter | undefined,
   chunk: unknown,
   context: Record<string, unknown> = {},
 ): Promise<void> {

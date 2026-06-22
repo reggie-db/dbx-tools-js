@@ -18,10 +18,10 @@
  *          `DATA_SOURCING`, `STEPS`, and `UNDERSTANDING` thought
  *          kinds).
  *        - `GenieAttachment.attachment_type: AttachmentType`
- *          (a derived discriminator literal so callers can
+ *          (an optional discriminator literal so callers can
  *          `switch (att.attachment_type)` instead of probing
- *          which sub-key is populated; populated by
- *          {@link tagAttachment}).
+ *          which sub-key is populated; compute it with
+ *          {@link detectAttachmentType}).
  *
  *   2. Event vocabulary for the high-level `genieEventChat`
  *      driver. Each event is a flat `z.object` with a `type`
@@ -105,8 +105,8 @@ export type GenieThought = z.infer<typeof GenieThoughtSchema>;
  * narrow correctly under `switch`.
  *
  * Lifted into the schema as the optional
- * {@link GenieAttachmentSchema}.`attachment_type` field
- * (populated by {@link tagAttachment}) so consumers can branch
+ * {@link GenieAttachmentSchema}.`attachment_type` field (compute
+ * it with {@link detectAttachmentType}) so consumers can branch
  * on a literal instead of probing which sub-object key is
  * present. Also surfaced on {@link AttachmentEvent}'s payload as
  * `attachment_type` (vs a bare `type`) to keep the field clear of
@@ -143,10 +143,9 @@ export type GenieQueryAttachment = z.infer<typeof GenieQueryAttachmentSchema>;
  *   - `attachment_type` discriminator literal
  *     ({@link AttachmentType}) so consumers can `switch
  *     (att.attachment_type)` to narrow which sub-object is
- *     populated. Optional on the wire (Genie doesn't send it),
- *     but every attachment that flows through {@link
- *     tagAttachment} - including all of the ones
- *     `genieEventChat` emits - has it filled in.
+ *     populated. Optional on the wire (Genie doesn't send it);
+ *     callers compute it with {@link detectAttachmentType} when
+ *     they want the literal up-front.
  *
  * `attachment_id`, `text`, and `suggested_questions` pass through
  * unchanged. `attachment_id` is genuinely optional on the wire:
@@ -283,9 +282,8 @@ export function humanizeStatus(status: MessageStatus): string {
  * populated, falls back to the first non-bookkeeping key
  * (forward-compat for types we don't model yet), else `"unknown"`.
  *
- * Honors a pre-tagged `attachment_type` if one is already on the
- * value (e.g. from a prior {@link tagAttachment} pass) so this is
- * idempotent across re-detections.
+ * Honors a pre-set `attachment_type` if one is already on the
+ * value, so this is idempotent across re-detections.
  */
 export function detectAttachmentType(att: GenieAttachment): AttachmentType {
   if (att.attachment_type) return att.attachment_type;
@@ -296,17 +294,6 @@ export function detectAttachmentType(att: GenieAttachment): AttachmentType {
     if (k !== "attachment_id" && k !== "attachment_type") return k;
   }
   return "unknown";
-}
-
-/**
- * Return a copy of `att` with `attachment_type` filled in from
- * {@link detectAttachmentType}. Consumers that want a discriminator
- * literal up-front (e.g. `switch (att.attachment_type)`) call this
- * once when an attachment first arrives.
- */
-export function tagAttachment(att: GenieAttachment): GenieAttachment {
-  if (att.attachment_type) return att;
-  return { ...att, attachment_type: detectAttachmentType(att) };
 }
 
 /* ------------------------- GenieChat events ------------------------ */

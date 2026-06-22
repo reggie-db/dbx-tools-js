@@ -1,10 +1,10 @@
 {
-  "name": "@dbx-tools/genie-shared",
+  "name": "@dbx-tools/model",
   "version": "0.1.42",
   "dependencies": {
-    "@dbx-tools/sdk-shared": "workspace:*",
+    "@dbx-tools/model-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "zod": "catalog:"
+    "fuse.js": "^7.0.0"
   },
   "module": "index.ts",
   "peerDependencies": {

@@ -38,11 +38,11 @@ import { CacheManager, genie } from "@databricks/appkit";
 import { ApiError, HttpError, WorkspaceClient } from "@databricks/sdk-experimental";
 import {
   ChartSchema,
-  type MinimalWriter,
+  type MastraWriter,
   type StartedEvent,
 } from "@dbx-tools/appkit-mastra-shared";
 import { genieEventChat, genieSampleQuestions, getGenieSpace } from "@dbx-tools/genie";
-import { type GenieMessage } from "@dbx-tools/genie-shared";
+import { GenieMessageSchema, type GenieMessage } from "@dbx-tools/genie-shared";
 import { appkitUtils, commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import type { RequestContext } from "@mastra/core/request-context";
 import { MASTRA_THREAD_ID_KEY } from "@mastra/core/request-context";
@@ -93,7 +93,7 @@ export type GenieSpacesConfig = Record<string, GenieSpaceConfig | string>;
 type ToolExecuteCtx =
   | {
       requestContext?: RequestContext;
-      writer?: MinimalWriter;
+      writer?: MastraWriter;
       abortSignal?: AbortSignal;
     }
   | undefined;
@@ -421,7 +421,7 @@ function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string
       question: z.string().min(1, "question is required"),
     }),
     outputSchema: z.object({
-      message: z.custom<GenieMessage>(),
+      message: GenieMessageSchema,
     }),
     execute: async ({ question }, ctxRaw) => {
       const ctx = ctxRaw as ToolExecuteCtx;
@@ -1031,24 +1031,6 @@ export function buildGenieToolkitProvider(opts: {
       return buildGenieTools(opts);
     },
   };
-}
-
-/**
- * Returns `true` when at least one Genie space is reachable
- * through {@link resolveGenieSpaces} - either via
- * {@link MastraPluginConfig.genieSpaces}, the AppKit `genie()`
- * plugin instance, or the `DATABRICKS_GENIE_SPACE_ID` env var.
- *
- * Cheap to call from `resolveProvider` to short-circuit `genie`
- * lookups when nothing is wired, so the `plugins.genie` lookup
- * still resolves to `undefined` (matching AppKit's
- * absent-plugin semantics) when neither source is configured.
- */
-export function hasAnyGenieSpaces(
-  config: MastraPluginConfig,
-  context: appkitUtils.PluginContextLike | undefined,
-): boolean {
-  return Object.keys(resolveGenieSpaces(config, context)).length > 0;
 }
 
 /* --------------------------- starter suggestions --------------------------- */

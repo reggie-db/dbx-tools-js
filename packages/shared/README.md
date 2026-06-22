@@ -78,13 +78,11 @@ app.use((req, res, next) => {
 });
 ```
 
-## `netUtils` - URL builder + path matching + free-port helpers
+## `netUtils` - URL builder + path matching
 
-Public surface: `urlBuilder`, `pathMatch`, plus the server-only
-`getRandomPort`. The URL helpers are pure JS and ship in the
-browser bundle too; `getRandomPort` binds a transient `node:net`
-listener and is therefore server-only (importing `netUtils` from
-the browser entry simply omits it).
+Public surface: `urlBuilder`, `pathMatch`. The URL helpers are pure
+JS and ship in the browser bundle too; the server entry re-exports
+the same surface and is where any server-only (node) helpers belong.
 
 ```ts
 import { netUtils } from "@dbx-tools/shared";
@@ -102,9 +100,6 @@ netUtils
 
 // Segment-boundary prefix test (accepts any UrlLike, incl. a Request).
 netUtils.pathMatch("/api/cool?q=1", "/api"); // true
-
-// Grab a free local port (server only).
-const port = await netUtils.getRandomPort();
 ```
 
 ## `apiUtils` - Databricks REST cancellation helpers (server only)

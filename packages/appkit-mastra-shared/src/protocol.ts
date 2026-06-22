@@ -1,30 +1,40 @@
 /**
- * Shape of the data published by {@link MastraPlugin.clientConfig}.
- * Kept dependency-free (no `pg`, no `fastembed`, no Mastra runtime)
- * so the React client can import these schemas without dragging in
- * server-only dependencies.
+ * Wire-format contract for `@dbx-tools/appkit-mastra`: the
+ * dependency-free zod schemas + inferred types every consumer (the
+ * React client, browser bundles, the server plugin) shares.
  *
- * Server-side, `MastraPlugin` derives every path from the plugin
- * mount (AppKit conventionally serves plugin `foo` at `/api/foo`).
- * Publishing the resolved paths lets the client compute URLs
- * without hard-coding `/api/mastra` anywhere - rename the plugin
- * and the React client keeps working.
+ * Kept free of `pg`, `fastembed`, and the Mastra runtime so the
+ * client can import these schemas without dragging in server-only
+ * dependencies. Three layers live here:
  *
- * URL helpers live in the sibling `mastra.ts` module so this file
- * stays purely declarative (schemas + inferred types only).
+ *   1. The descriptor published by `MastraPlugin.clientConfig()`
+ *      plus the REST payloads its routes return (models, history,
+ *      suggestions, chart embeds, statement data). The server
+ *      derives every path from the plugin mount and publishes the
+ *      resolved paths so the client composes URLs without
+ *      hard-coding `/api/mastra` - rename the plugin and the client
+ *      keeps working.
+ *   2. The `ctx.writer` event vocabulary: the wire-derived
+ *      {@link GenieChatEvent}s from `@dbx-tools/genie-shared` plus
+ *      the Mastra-only agent lifecycle events, unified as
+ *      {@link GenieWriterEvent} so subscribers narrow both halves
+ *      with a single `switch (event.type)`.
+ *   3. The Genie agent's workflow output shapes
+ *      ({@link GenieAgentResult} and its summary / dataset items).
  *
- * @example
- * ```tsx
- * import { usePluginClientConfig } from "@databricks/appkit-ui/react";
- * import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
- *
- * const config = usePluginClientConfig<MastraClientConfig>("mastra");
- * const transport = new DefaultChatTransport({
- *   api: chatUrl(config, selectedAgentId),
- * });
- * ```
+ * The route segments live in the sibling `routes.ts`
+ * ({@link MASTRA_ROUTES}) and the embed-marker grammar in `marker.ts`,
+ * so this file stays purely declarative (schemas + inferred types).
+ * The browser client that drives these routes (`MastraPluginClient`)
+ * ships from `@dbx-tools/appkit-mastra-ui`.
  */
 
+import {
+  GenieChatEventSchema,
+  type GenieChatEvent,
+  type MessageStatus,
+} from "@dbx-tools/genie-shared";
+import { ServingEndpointSummarySchema } from "@dbx-tools/model-shared";
 import { z } from "zod";
 
 /* ---------------------------- client config ---------------------------- */
@@ -33,63 +43,24 @@ import { z } from "zod";
  * JSON-safe descriptor published by the Mastra plugin's
  * `clientConfig()`.
  *
+ * Only the irreducible data lives here: `basePath` (the one path the
+ * client can't otherwise know, since it encodes the plugin's mount
+ * name) plus the runtime agent roster. Every concrete endpoint URL is
+ * derived from `basePath` by the browser client
+ * (`MastraPluginClient`) using the shared {@link MASTRA_ROUTES}
+ * segments, so there's nothing to publish per-route.
+ *
  * Fields:
- *   - `basePath`: plugin mount path. Always `/api/<pluginName>`.
- *   - `chatPath`: chat endpoint for the **default** agent, i.e.
- *     `${basePath}/route/chat`. Equivalent to `chatUrl(config)`.
- *   - `chatPathTemplate`: template form used by the route handler:
- *     `${basePath}/route/chat/:agentId`. Provided for documentation
- *     / tools that want the OpenAPI-style placeholder; clients
- *     should normally call {@link chatUrl} instead.
- *   - `modelsPath`: models catalogue endpoint: `${basePath}/models`.
- *   - `historyPath`: thread history endpoint for the **default**
- *     agent: `${basePath}/route/history`. Returns AI SDK V5
- *     `UIMessage`s for the current session's thread; takes `page`
- *     and `perPage` query params. See {@link historyUrl}.
- *   - `historyPathTemplate`: templated form of `historyPath`:
- *     `${basePath}/route/history/:agentId`. Use this to reach a
- *     non-default agent's history; clients should normally call
- *     {@link historyUrl} instead.
- *   - `embedPathTemplate`: templated generic embed fetch endpoint:
- *     `${basePath}/embed/:type/:id`. One route resolves every embed
- *     marker the agent emits: `:type` is the marker's `<type>`
- *     token (`chart`, `data`, ...) and `:id` its id. The server
- *     dispatches on `:type` through its resolver registry and 404s
- *     any type it doesn't register, so new embed kinds are
- *     server-only changes. Behavior is per-type:
- *       - `chart`: long-polls the chart cache until the entry
- *         settles (`result` / `error`) or the server budget
- *         elapses (then returns the still-`processing` entry to
- *         poll again). 404 once the 1h TTL expires. Optional
- *         `?timeoutMs=<n>` (default 60s, capped at 5min).
- *       - `data`: one OBO-scoped fetch returns the rows of a Genie
- *         / Statement Execution result. Optional `?limit=<n>`
- *         caps rows (server clamps). 404 when the statement id is
- *         unknown / expired upstream.
- *     Clients should call {@link embedUrl} rather than substituting
- *     the placeholders by hand.
- *   - `suggestionsPath`: starter-question endpoint for the **default**
- *     agent: `${basePath}/suggestions`. Returns the agent's Genie
- *     space curated sample questions (`{ questions }`); an empty list
- *     when the agent has no Genie space. See {@link suggestionsUrl}.
- *   - `suggestionsPathTemplate`: templated form of `suggestionsPath`:
- *     `${basePath}/suggestions/:agentId`. Use this to reach a
- *     non-default agent's suggestions; clients should normally call
- *     {@link suggestionsUrl} instead.
- *   - `defaultAgent`: agent id `chatRoute` binds to when the client
+ *   - `basePath`: plugin mount path. Always `/api/<pluginName>`. Feed
+ *     it to `new MastraPluginClient(config)` (from
+ *     `@dbx-tools/appkit-mastra-ui`) to get a typed client over every
+ *     route plus the standard agent stream.
+ *   - `defaultAgent`: agent id the client converses with when it
  *     doesn't name one.
  *   - `agents`: every registered agent id in registration order.
  */
 export const MastraClientConfigSchema = z.object({
   basePath: z.string(),
-  chatPath: z.string(),
-  chatPathTemplate: z.string(),
-  modelsPath: z.string(),
-  historyPath: z.string(),
-  historyPathTemplate: z.string(),
-  embedPathTemplate: z.string(),
-  suggestionsPath: z.string(),
-  suggestionsPathTemplate: z.string(),
   defaultAgent: z.string(),
   agents: z.array(z.string()),
 });
@@ -98,27 +69,12 @@ export type MastraClientConfig = z.infer<typeof MastraClientConfigSchema>;
 /* ---------------------------- model catalogue ---------------------------- */
 
 /**
- * Minimal descriptor for a Databricks Model Serving endpoint.
- * Mirrors the server-side `ServingEndpointSummary` from `serving.ts`
- * and is kept here so the React client can type the `/models`
- * response without importing the full plugin (which would pull in
- * `pg`, `fastembed`, and Mastra itself).
- *
- * Fields:
- *   - `name`: endpoint name as listed by the Model Serving REST API.
- *   - `task`: task hint (e.g. `"llm/v1/chat"`). Useful for filtering.
- *   - `state`: ready / updating / failed state.
- *   - `description`: free-form description; mostly informational.
+ * JSON payload returned by `GET ${basePath}/models`. Wraps the shared
+ * {@link ServingEndpointSummarySchema} (re-exported from
+ * `@dbx-tools/model-shared` via the package index) so the catalogue
+ * descriptor has a single definition the client, server, and the
+ * standalone `@dbx-tools/model` toolkit all agree on.
  */
-export const ServingEndpointSummarySchema = z.object({
-  name: z.string(),
-  task: z.string().optional(),
-  state: z.string().optional(),
-  description: z.string().optional(),
-});
-export type ServingEndpointSummary = z.infer<typeof ServingEndpointSummarySchema>;
-
-/** JSON payload returned by `GET ${basePath}/models`. */
 export const ServingEndpointsResponseSchema = z.object({
   endpoints: z.array(ServingEndpointSummarySchema),
 });
@@ -330,3 +286,264 @@ export const StatementDataSchema = z.object({
   truncated: z.boolean(),
 });
 export type StatementData = z.infer<typeof StatementDataSchema>;
+
+/* ----------------------------- writer surface ---------------------------- */
+
+/**
+ * The `ToolStream`-shaped writer the Mastra Genie agent and chart
+ * helpers publish events through. Defined here (vs imported from
+ * `@mastra/core`) so helpers in `@dbx-tools/appkit-mastra` can
+ * accept any object with a `.write` method without dragging
+ * Mastra's full `ToolStream` (and its agent / tool typings) into
+ * call sites. The actual Mastra `ctx.writer` is assignable to
+ * this shape so callers pass it straight through.
+ *
+ * Kept as a plain TypeScript interface (vs a zod schema) because
+ * the contract is a method - zod can only validate the shape via
+ * `z.custom`, which adds noise without buying any runtime check.
+ */
+export interface MastraWriter {
+  write: (chunk: unknown) => unknown;
+}
+
+/* ---------------- mastra-only genie-agent events ---------------- */
+
+/**
+ * Mastra-only lifecycle event: the Genie tool invocation started.
+ * Emitted immediately when the calling agent invokes the Genie
+ * tool, before any inner agent / wire activity, so the UI can
+ * pop a "Thinking..." pill the instant the model decides to
+ * delegate. `conversationId` / `messageId` are absent on this
+ * first emit (no Genie round-trip yet). Field names are
+ * camelCase (vs the snake_case wire events) to mirror the
+ * Genie agent's own internal data plumbing.
+ */
+export const StartedEventSchema = z.object({
+  type: z.literal("started"),
+  spaceId: z.string(),
+  /**
+   * Genie conversation id, populated only when this `started`
+   * event corresponds to a follow-up turn on an existing
+   * conversation. Absent on the first turn.
+   */
+  conversationId: z.string().optional(),
+  /**
+   * Genie message id, populated only after the first wire
+   * `message` event lands. Absent on the immediate-on-invoke
+   * emit.
+   */
+  messageId: z.string().optional(),
+  /** Question the Genie agent sent to Genie. */
+  content: z.string(),
+});
+export type StartedEvent = z.infer<typeof StartedEventSchema>;
+
+/**
+ * Mastra-only lifecycle event: one `ask_genie` invocation
+ * finished. Carries the hydrated `statementIds` (rows are fetched
+ * via `getStatement` separately) and Genie's final prose answer
+ * so the UI can move from "thinking" to "answered" without
+ * waiting for the Genie agent's whole reasoning loop to end.
+ */
+export const AskGenieDoneEventSchema = z.object({
+  type: z.literal("ask_genie_done"),
+  spaceId: z.string(),
+  conversationId: z.string().optional(),
+  messageId: z.string().optional(),
+  /** Genie's natural-language answer for the turn, if any. */
+  answer: z.string().optional(),
+  /** Statement ids for any non-empty result sets this turn produced. */
+  statementIds: z.array(z.string()),
+  /**
+   * Terminal wire status (`COMPLETED` / `FAILED` / `CANCELLED`).
+   * Mirrors the source `result` event's status so subscribers
+   * can react to ask-level completion without re-walking history.
+   * Treated as `z.custom<MessageStatus>` because the SDK is the
+   * source of truth for the enum values.
+   */
+  status: z.custom<MessageStatus>((v) => typeof v === "string"),
+});
+export type AskGenieDoneEvent = z.infer<typeof AskGenieDoneEventSchema>;
+
+/**
+ * Mastra-only error event: terminal Genie agent / transport
+ * error. Genie's own `FAILED` / `CANCELLED` come through the
+ * wire's `result` event - this variant is for failures the wire
+ * can't represent (network, Genie agent crash, planner error,
+ * etc.) plus a UI-friendly mirror of `result` when the status is
+ * non-`COMPLETED`.
+ */
+export const MastraGenieErrorEventSchema = z.object({
+  type: z.literal("error"),
+  spaceId: z.string().optional(),
+  conversationId: z.string().optional(),
+  messageId: z.string().optional(),
+  error: z.string(),
+});
+export type MastraGenieErrorEvent = z.infer<typeof MastraGenieErrorEventSchema>;
+
+/**
+ * Mastra-only lifecycle event: the inner Genie agent's
+ * structured-output coercion has landed. Fires once per Genie
+ * tool invocation, AFTER `agent.generate(...)` completes (i.e.
+ * the inner loop + Mastra's structuring pass have both
+ * finished) and BEFORE the wrapper hydrates each `data` item
+ * with a chart. Signals to the host UI that the agent has
+ * stopped reasoning and is moving into chart generation.
+ *
+ * The structuring pass itself is opaque (it runs inside
+ * Mastra's `agent.generate(...)` together with the tool loop)
+ * so this is the earliest hook we can offer; we can't fire a
+ * "summary started" event the way we fire `started`.
+ */
+export const SummaryEventSchema = z.object({
+  type: z.literal("summary"),
+  spaceId: z.string(),
+  /** Total number of items in the agent's structured summary. */
+  items: z.number().int().nonnegative(),
+  /** Count of `text` / prose items in the summary. */
+  textItems: z.number().int().nonnegative(),
+  /**
+   * Count of `data` items the wrapper will hydrate into charts.
+   * The host UI can use this to seed N chart skeletons before
+   * the per-chart events arrive.
+   */
+  dataItems: z.number().int().nonnegative(),
+});
+export type SummaryEvent = z.infer<typeof SummaryEventSchema>;
+
+/**
+ * Mastra-only event union. Each variant uses the same flat
+ * `{type, ...fields}` shape as {@link GenieChatEvent} so
+ * subscribers union both with a single `switch (event.type)`.
+ */
+export const GenieAgentEventSchema = z.discriminatedUnion("type", [
+  StartedEventSchema,
+  AskGenieDoneEventSchema,
+  MastraGenieErrorEventSchema,
+  SummaryEventSchema,
+]);
+export type GenieAgentEvent = z.infer<typeof GenieAgentEventSchema>;
+
+/**
+ * The unified writer-event vocabulary subscribers see on
+ * `ctx.writer`: the wire-derived {@link GenieChatEvent} union
+ * **plus** Mastra-only events from {@link GenieAgentEvent}. Each
+ * variant is a flat `{type, ...fields}` object; consumers narrow
+ * on `type` and read fields inline - there is no payload wrapper
+ * and no writer-boundary translator.
+ *
+ * Composed via `z.union` (not `z.discriminatedUnion`) because
+ * both halves are themselves discriminated unions on the same
+ * `type` key.
+ */
+export const GenieWriterEventSchema = z.union([
+  GenieChatEventSchema,
+  GenieAgentEventSchema,
+]);
+export type GenieWriterEvent = z.infer<typeof GenieWriterEventSchema>;
+
+/** Discriminator type for {@link GenieWriterEvent}. */
+export type GenieWriterEventType = GenieWriterEvent["type"];
+
+/* ------------------------- summary + dataset ------------------------ */
+
+/**
+ * Tabular payload embedded in every {@link GenieSummaryItem}
+ * `visualize` dataset. Always present: hydrated by the workflow's
+ * agent step before the finalize step runs, so consumers can render
+ * a table fallback regardless of chart-planner outcome.
+ *
+ * Fields:
+ *   - `columns`: column names in display order.
+ *   - `rows`: tabular rows keyed by column name.
+ *   - `rowCount`: total row count Genie reported (may exceed
+ *     `rows.length` when the statement was truncated).
+ */
+export const GenieDatasetDataSchema = z.object({
+  columns: z.array(z.string()),
+  rows: z.array(z.record(z.string(), z.unknown())),
+  rowCount: z.number(),
+});
+export type GenieDatasetData = z.infer<typeof GenieDatasetDataSchema>;
+
+/**
+ * Slim chart reference attached to a visualize dataset. Only
+ * present when planning succeeded.
+ *
+ * `option` is intentionally NOT included. The resolved Echarts
+ * spec lives off-band in the chart cache: the host UI fetches it
+ * by `chartId` via `${MastraClientConfig.embedPathTemplate}`
+ * (`/embed/chart/:id`, see {@link Chart}). Embedding the full spec inline would
+ * inflate every dataset by several KB per chart and round-trip
+ * through the LLM context for zero benefit (the model only needs
+ * the `chartId` to place a `[chart:<chartId>]` marker in its
+ * reply).
+ */
+export const GenieDatasetChartSchema = z.object({
+  chartId: z.string(),
+  chartType: z.enum(["bar", "line", "area", "scatter", "pie"]),
+});
+export type GenieDatasetChart = z.infer<typeof GenieDatasetChartSchema>;
+
+/**
+ * Dataset bundle attached to a {@link GenieSummaryItem} `visualize`
+ * item. `data` is always populated; `chart` is best-effort and
+ * absent when the workflow's chart-planner failed (timeout,
+ * malformed plan, abort) so the host UI can still render the
+ * underlying table.
+ */
+export const GenieDatasetSchema = z.object({
+  data: GenieDatasetDataSchema,
+  chart: GenieDatasetChartSchema.optional(),
+});
+export type GenieDataset = z.infer<typeof GenieDatasetSchema>;
+
+/**
+ * One item inside the Genie workflow's final summary. The
+ * workflow produces a mixed sequence of:
+ *
+ *   - `string`: a markdown paragraph (interpretation, callouts,
+ *     transitions between data blocks).
+ *   - `visualize`: a request from the agent step to visualize a
+ *     specific Genie statement at this position in the prose.
+ *     The finalize step hydrates `dataset.data` (rows from the
+ *     matching `statementId`) and attaches `dataset.chart` after
+ *     running the chart-planner. The agent NEVER picks the chart
+ *     type - it only marks where a visualization belongs.
+ *
+ * The host UI walks the array in display order to compose the
+ * final assistant message.
+ */
+export const GenieSummaryItemSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("string"),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal("visualize"),
+    statementId: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    dataset: GenieDatasetSchema,
+  }),
+]);
+export type GenieSummaryItem = z.infer<typeof GenieSummaryItemSchema>;
+
+/** Discriminator type for {@link GenieSummaryItem}. */
+export type GenieSummaryItemType = GenieSummaryItem["type"];
+
+/**
+ * The Genie agent's final output shape - what the calling agent's
+ * Genie tool returns to the calling LLM. The `summary` array is
+ * the user-facing renderable; `conversationId` lets the calling
+ * agent (or the UI) follow up in the same Genie thread on the
+ * next turn.
+ */
+export const GenieAgentResultSchema = z.object({
+  spaceId: z.string(),
+  conversationId: z.string().optional(),
+  summary: z.array(GenieSummaryItemSchema),
+  error: z.string().optional(),
+});
+export type GenieAgentResult = z.infer<typeof GenieAgentResultSchema>;

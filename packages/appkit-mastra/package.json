@@ -1,11 +1,12 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
     "@dbx-tools/genie": "workspace:*",
     "@dbx-tools/genie-shared": "workspace:*",
+    "@dbx-tools/model": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
     "@mastra/ai-sdk": "catalog:",
     "@mastra/core": "catalog:",
@@ -15,7 +16,6 @@
     "@mastra/observability": "catalog:",
     "@mastra/otel-bridge": "catalog:",
     "@mastra/pg": "catalog:",
-    "fuse.js": "^7.0.0",
     "pg": "^8.20.0",
     "zod": "catalog:"
   },

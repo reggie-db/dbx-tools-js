@@ -39,8 +39,8 @@ export type ChatViewProps = {
   /**
    * The error from the last failed turn, surfaced as a destructive
    * Alert when `status` is `"error"`. When omitted, the Alert shows a
-   * generic message. Pairs with the AI SDK `useChat`'s `error` on the
-   * controlled path; `useMastraChat` populates it on the drop-in path.
+   * generic message. `useMastraChat` populates it on the drop-in path;
+   * a host driving `ChatView` itself supplies its own.
    */
   error?: Error | null;
   sendMessage: (message: { text: string }) => void;
@@ -88,18 +88,14 @@ export type ChatViewProps = {
   /**
    * Resolve an approval-gated tool call. Fired when the user clicks
    * Approve or Deny on the inline approval card. The handler must
-   * resume the suspended Mastra workflow on its own:
+   * resume the suspended Mastra workflow on its own: with
+   * `mastraClient.getAgent(...).stream()`, call
+   * `agent.approveToolCall({ runId, toolCallId })` /
+   * `agent.declineToolCall({ runId, toolCallId })` to get a fresh
+   * stream Response and pipe it through the same chunk handler
+   * (this is exactly what `useMastraChat` does).
    *
-   * - With `useChat` + `chatRoute()`, call
-   *   `sendMessage(undefined, { body: { resumeData: { approved }, runId } })`
-   *   so chatRoute hits `agent.resumeStream(resumeData)` and the
-   *   suspended tool call wakes up.
-   * - With `mastraClient.getAgent(...).stream()`, call
-   *   `agent.approveToolCall({ runId, toolCallId })` /
-   *   `agent.declineToolCall({ runId, toolCallId })` to get a fresh
-   *   stream Response and pipe it through the same chunk handler.
-   *
-   * Both paths require the `runId` Mastra emitted with the approval
+   * It requires the `runId` Mastra emitted with the approval
    * chunk - the field is always populated when the card was rendered
    * from a live `data-tool-call-approval` part or an out-of-band
    * `pendingApprovalsByMessage` entry. It will be missing only for
@@ -122,7 +118,7 @@ export type ChatViewProps = {
    * Wipe the current chat thread. When provided, the header renders
    * a "Clear" button that calls this and shows a confirmation
    * prompt first. The handler is responsible for both the
-   * server-side delete (typically `clearMastraHistory`) and
+   * server-side delete (typically `mastraClient.clearHistory()`) and
    * resetting client-side transcript / tool-event state so the
    * blank slate sticks across the next render. Omit to hide the
    * button entirely (read-only embeds, history-less agents).
@@ -156,7 +152,7 @@ export type ApprovalDecision =
 /**
  * One approval-gated tool call paused mid-turn. `runId` is the
  * Mastra workflow id needed to resume; it's always present when the
- * card was constructed from a live source (chatRoute's
+ * card was constructed from a live source (the stream's
  * `data-tool-call-approval` part or `pendingApprovalsByMessage`),
  * and absent only for approvals reconstructed from a history load
  * where the original runId is lost.

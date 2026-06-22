@@ -1,15 +1,16 @@
 /**
- * Wire-format types and URL helpers shipped by `@dbx-tools/appkit-mastra`'s
- * `clientConfig()` surface.
+ * Wire-format types, embed-marker grammar, and shared route segments
+ * for `@dbx-tools/appkit-mastra`'s `clientConfig()` surface.
  *
  * Kept dependency-free (no `pg`, no `fastembed`, no Mastra runtime) so
- * the React client and any browser bundle can import these types
- * without dragging in server-only dependencies. The server-side plugin
- * publishes resolved paths through this contract; the client reads
- * them back via `usePluginClientConfig<MastraClientConfig>("mastra")`
- * and composes URLs with {@link chatUrl}.
+ * the React client and any browser bundle can import these without
+ * dragging in server-only dependencies. The server-side plugin
+ * publishes its `basePath` through this contract; the browser client
+ * (`MastraPluginClient` in `@dbx-tools/appkit-mastra-ui`) reads it back
+ * via `usePluginClientConfig<MastraClientConfig>("mastra")` and derives
+ * every route from `basePath` + {@link MASTRA_ROUTES}.
  */
-export * from "./src/genie.js";
+export * from "@dbx-tools/model-shared";
 export * from "./src/marker.js";
-export * from "./src/mastra.js";
 export * from "./src/protocol.js";
+export * from "./src/routes.js";

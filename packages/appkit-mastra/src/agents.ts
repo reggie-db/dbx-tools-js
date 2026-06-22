@@ -10,7 +10,7 @@
  *
  * When no agents are registered the plugin falls back to a single
  * built-in analyst so the bare `mastra()` call still mounts a working
- * `chatRoute` agent for demos.
+ * streamable agent for demos.
  */
 
 import { appkitUtils, logUtils, stringUtils } from "@dbx-tools/shared";
@@ -226,8 +226,8 @@ export type MastraToolsFn = (
 /**
  * A code-defined Mastra agent. Mirrors the shape AppKit's `agents`
  * plugin uses for `AgentDefinition`. The registry key under
- * `config.agents` is what `chatRoute` matches on; `name` is purely
- * informational (defaults to the key).
+ * `config.agents` is the `agentId` the client streams against; `name`
+ * is purely informational (defaults to the key).
  */
 export interface MastraAgentDefinition {
   /** Display name used as `Agent.name`. Defaults to the registry key. */

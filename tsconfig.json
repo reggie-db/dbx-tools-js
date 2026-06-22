@@ -61,6 +61,12 @@
       "path": "./packages/genie/tsconfig.build.json"
     },
     {
+      "path": "./packages/model-shared/tsconfig.build.json"
+    },
+    {
+      "path": "./packages/model/tsconfig.build.json"
+    },
+    {
       "path": "./packages/sdk-shared/tsconfig.build.json"
     },
     {

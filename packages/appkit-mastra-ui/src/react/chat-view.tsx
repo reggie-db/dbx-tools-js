@@ -83,7 +83,13 @@ export const ChatView = ({
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  // Mirror `isAtBottom` into a ref so the ResizeObserver below (created
+  // per transcript mount, not per render) reads the latest value
+  // without re-subscribing every time the flag toggles.
+  const isAtBottomRef = useRef(isAtBottom);
+  isAtBottomRef.current = isAtBottom;
   // Scroll-anchor state for prepending older messages. When the
   // parent answers an `onLoadMore` call we capture the pre-prepend
   // `scrollHeight`/`scrollTop`; once the new DOM nodes mount we shift
@@ -107,6 +113,27 @@ export const ChatView = ({
     if (!isAtBottom) return;
     el.scrollTop = el.scrollHeight;
   }, [messages, toolEventsByMessage, isAtBottom]);
+
+  // Keep the view pinned to the bottom as streamed content grows. The
+  // `messages`-dep effect above only fires when the array reference
+  // changes; a ResizeObserver on the transcript also catches height
+  // growth that lands without a new `messages` ref - token-by-token
+  // text, async markdown/syntax layout, the in-flight waiting row - so
+  // the scroll keeps up while the user is pinned to the bottom. Only
+  // pins when already at the bottom, so scrolling up to read history
+  // mid-stream still works. Re-subscribes when the transcript mounts
+  // (empty -> first message, or history finishes loading).
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (prependAnchorRef.current || !isAtBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [messages.length, isLoadingHistory]);
 
   // Restore the visual scroll position after a prepend. Runs in
   // `useLayoutEffect` so the adjustment happens before the browser
@@ -308,7 +335,10 @@ export const ChatView = ({
                 </EmptyHeader>
               </Empty>
             ) : (
-              <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4 md:px-6">
+              <div
+                ref={contentRef}
+                className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4 md:px-6"
+              >
                 {(isLoadingMore || isLoadingHistory) && (
                   <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
                     <Spinner className="size-3" />
@@ -339,7 +369,7 @@ export const ChatView = ({
                   return <UserBubble key={message.id} message={message} />;
                 })}
                 {showWaiting && (
-                  <div className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
+                  <div className="flex h-7 items-center gap-2 px-3 text-xs text-muted-foreground">
                     <Spinner className="size-3" />
                     <span className="animate-pulse">{waitingLabel}</span>
                   </div>

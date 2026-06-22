@@ -26,7 +26,6 @@ import {
   humanizeStatus,
   // Attachment discriminator
   detectAttachmentType,
-  tagAttachment,
   // Pure event detectors + orchestrator
   eventsFromMessage,
   detectStatus,
@@ -73,18 +72,16 @@ narrow correctly under `switch`:
 ### Attachment discriminator
 
 Genie populates only one of `query` / `text` / `suggested_questions`
-per attachment slot. `tagAttachment(att)` stamps the matching
-discriminator literal onto `att.attachment_type`; `detectAttachmentType(att)`
-just returns it without copying.
+per attachment slot. `detectAttachmentType(att)` returns the matching
+discriminator literal (honoring a pre-set `att.attachment_type`).
 
 ```ts
-import { tagAttachment, detectAttachmentType } from "@dbx-tools/genie-shared";
+import { detectAttachmentType } from "@dbx-tools/genie-shared";
 
-const tagged = tagAttachment(att);
-switch (tagged.attachment_type) {
-  case "query":               // tagged.query is non-null
-  case "text":                // tagged.text is non-null
-  case "suggested_questions": // tagged.suggested_questions is non-null
+switch (detectAttachmentType(att)) {
+  case "query":               // att.query is non-null
+  case "text":                // att.text is non-null
+  case "suggested_questions": // att.suggested_questions is non-null
 }
 ```
 

@@ -7,10 +7,11 @@
  * the next turn's `options.conversationId`).
  *
  * Two layers serve two kinds of consumer. The low-level layer
- * yields every poll-observed `GenieMessage` verbatim and owns the
- * messy parts - cancellation, conversation seeding,
- * distinct-filtering, and SDK quirks (Waiter stripping); reach for
- * it when you want the raw stream. The high-level layer wraps it
+ * yields every poll-observed `GenieMessage` (validated against
+ * `GenieMessageSchema`, falling back to the raw snapshot on a schema
+ * miss) and owns the messy parts - cancellation, conversation
+ * seeding, distinct-filtering, and SDK quirks (Waiter stripping);
+ * reach for it when you want the raw stream. The high-level layer wraps it
  * and emits semantic, deduplicated `{ type, payload }` events
  * (see {@link GenieChatEvent}), always closing a successful turn
  * with a terminal `result` event carrying the final
@@ -24,11 +25,32 @@
 import { WorkspaceClient } from "@databricks/sdk-experimental";
 import {
   eventsFromMessage,
+  GenieMessageSchema,
   isTerminalStatus,
   type GenieChatEvent,
   type GenieMessage,
 } from "@dbx-tools/genie-shared";
-import { apiUtils, commonUtils } from "@dbx-tools/shared";
+import { apiUtils, commonUtils, logUtils } from "@dbx-tools/shared";
+
+const log = logUtils.logger("genie/chat");
+
+/**
+ * Validate a polled wire snapshot against {@link GenieMessageSchema}
+ * and return the schema-normalized message. Genie's wire occasionally
+ * ships a shape the (SDK-derived) schema doesn't model exactly - e.g.
+ * an early poll that omits the SDK-required `message_id` - so a miss
+ * degrades to the raw snapshot rather than throwing, keeping a single
+ * odd poll from aborting the whole turn.
+ */
+function validateMessage(raw: GenieMessage): GenieMessage {
+  const result = GenieMessageSchema.safeParse(raw);
+  if (result.success) return result.data;
+  log.debug("wire-message:schema-miss", {
+    message_id: raw.message_id ?? raw.id,
+    issues: result.error.issues.length,
+  });
+  return raw;
+}
 
 /* -------------------------- shared options -------------------------- */
 
@@ -164,21 +186,25 @@ export async function* genieChat(
       );
     };
 
-    yield* commonUtils.poll(pollProducer, {
-      intervalMs: options?.pollIntervalMs ?? 500,
-      // Skip yielding identical consecutive snapshots; Genie
-      // often returns the exact same payload twice during quiet
-      // periods. `poll` does a deep equal on the previous yield.
-      filter: "distinct",
-      // Stop after the terminal message is yielded. `poll` checks
-      // the predicate AFTER yielding, so the terminal message
-      // still reaches the consumer.
-      predicate: (m) => !isTerminalStatus(m.status),
-      // Wake the inter-poll sleep on abort so a `for await` break
-      // (or external abort) tears down promptly instead of waiting
-      // out the interval.
-      signal: controller.signal,
-    });
+    yield* commonUtils.poll(
+      async (ctx: commonUtils.PollContext<GenieMessage>) =>
+        validateMessage(await pollProducer(ctx)),
+      {
+        intervalMs: options?.pollIntervalMs ?? 500,
+        // Skip yielding identical consecutive snapshots; Genie
+        // often returns the exact same payload twice during quiet
+        // periods. `poll` does a deep equal on the previous yield.
+        filter: "distinct",
+        // Stop after the terminal message is yielded. `poll` checks
+        // the predicate AFTER yielding, so the terminal message
+        // still reaches the consumer.
+        predicate: (m) => !isTerminalStatus(m.status),
+        // Wake the inter-poll sleep on abort so a `for await` break
+        // (or external abort) tears down promptly instead of waiting
+        // out the interval.
+        signal: controller.signal,
+      },
+    );
   } finally {
     // Cancels any still-pending SDK call and the inter-poll sleep
     // whether we're unwinding from a normal return, a consumer

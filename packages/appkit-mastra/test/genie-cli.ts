@@ -23,7 +23,7 @@
  */
 
 import { WorkspaceClient } from "@databricks/sdk-experimental";
-import type { GenieWriterEvent, MinimalWriter } from "@dbx-tools/appkit-mastra-shared";
+import type { GenieWriterEvent, MastraWriter } from "@dbx-tools/appkit-mastra-shared";
 import { type GenieMessage, humanizeStatus } from "@dbx-tools/genie-shared";
 import { appkitUtils } from "@dbx-tools/shared";
 import { RequestContext } from "@mastra/core/request-context";
@@ -98,7 +98,7 @@ function renderWireEvent(event: GenieWriterEvent): void {
  * a `.write(chunk)` method, so this stdout sink is enough for a
  * smoke test.
  */
-function makeStdoutWriter(): MinimalWriter {
+function makeStdoutWriter(): MastraWriter {
   return {
     write: (chunk: unknown) => {
       if (chunk && typeof chunk === "object" && "type" in chunk) {
@@ -190,7 +190,7 @@ async function runOne(opts: {
   question: string;
   askGenie: Tool;
   requestContext: RequestContext;
-  writer: MinimalWriter;
+  writer: MastraWriter;
 }): Promise<void> {
   process.stdout.write(`\n=== question: ${opts.question} ===\n`);
   if (!opts.askGenie.execute) {

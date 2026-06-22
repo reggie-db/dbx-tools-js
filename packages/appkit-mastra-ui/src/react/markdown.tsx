@@ -198,16 +198,28 @@ const SHIKI_PLUGIN = { code: createShikiPlugin() };
 /**
  * Per-word fade-in applied while a reply is still streaming. Streamdown
  * wraps each newly arrived token in a `[data-sd-animate]` span and only
- * animates the delta since the previous render (tokens already on screen
- * get `duration: 0`), so the text eases in word-by-word instead of
- * snapping in whole SSE chunks. The keyframes ship in
+ * animates the delta since the previous render (tokens already on
+ * screen don't re-animate), so the text eases in instead of snapping
+ * in whole SSE chunks. Kept short with an `ease-out` curve so the
+ * reveal is quick and smooth. The keyframes ship in
  * `streamdown/styles.css`, imported by this package's `styles.css`.
+ *
+ * `stagger: 0` is load-bearing. Streamdown 2.5 defaults `stagger` to
+ * 40ms, and stagger has NO inter-block coordination: each block's
+ * delay counter restarts at 0, so a freshly-appeared paragraph starts
+ * fading at delay 0 while the previous block's staggered tail words are
+ * still queued at 40ms x N - making sibling sections visibly animate in
+ * parallel ("new paragraphs reveal before the previous finishes").
+ * Pinning `stagger: 0` makes each batch of newly-arrived words fade
+ * together within `duration`, so blocks reveal in order with no overlap
+ * window. See https://github.com/vercel/streamdown/issues/482.
  */
 const ANIMATE_OPTIONS = {
   animation: "fadeIn",
   sep: "word",
-  duration: 220,
-  stagger: 25,
+  duration: 120,
+  easing: "ease-out",
+  stagger: 0,
 } as const;
 
 /**
@@ -220,8 +232,9 @@ const ANIMATE_OPTIONS = {
  * {@link MARKDOWN_COMPONENTS}, then disable the noisy in-block copy/
  * download buttons since this UI lives inside a chat bubble that
  * already has its own copy button. `animate` opts the block into the
- * {@link ANIMATE_OPTIONS} word-by-word fade-in; callers pass it only
- * for the actively streaming bubble so settled history renders plain.
+ * {@link ANIMATE_OPTIONS} word-by-word fade-in (and drives
+ * `isAnimating` for the streaming caret); callers pass it only for the
+ * actively streaming bubble so settled history renders plain.
  */
 export const AssistantMarkdown = ({
   children,

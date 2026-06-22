@@ -3,18 +3,18 @@
 Dependency-free wire-format contract for `@dbx-tools/appkit-mastra`.
 
 This package exists so the React client (and any browser bundle)
-can import the types and URL helpers the Mastra plugin's
+can import the types, schemas, and route segments the Mastra plugin's
 `clientConfig()` publishes without pulling in `pg`, `fastembed`,
 Mastra, or anything else server-only. The surface is lightweight
-Zod schemas, inferred TypeScript types, URL helpers, and a
-handful of structural guards.
+Zod schemas, inferred TypeScript types, the shared `MASTRA_ROUTES`
+segments, the embed-marker grammar, and a handful of structural
+guards. The HTTP client that drives these routes
+(`MastraPluginClient`) ships from `@dbx-tools/appkit-mastra-ui`.
 
 ```ts
 import {
-  // URL helpers
-  chatUrl,
-  historyUrl,
-  embedUrl,
+  // Shared route segments (server registration + client URL building)
+  MASTRA_ROUTES,
   // Protocol types + schemas
   type MastraClientConfig,
   type ServingEndpointSummary,
@@ -33,9 +33,7 @@ import {
   type GenieDatasetData,
   type GenieDatasetChart,
   type GenieWriterEvent,
-  type MinimalWriter,
-  isGenieAgentResult,
-  genieResultToWriterEvents,
+  type MastraWriter,
 } from "@dbx-tools/appkit-mastra-shared";
 ```
 
@@ -44,94 +42,47 @@ import {
 The Mastra plugin's `clientConfig()` returns a
 {@link MastraClientConfig} JSON document. The React client picks it
 up via `usePluginClientConfig<MastraClientConfig>("mastra")` and
-composes URLs with the helpers below; the published paths are
-derived from the plugin's mount point so `/api/<plugin name>/...`
-stays correct even if the plugin is renamed.
+hands it to `new MastraPluginClient(config)` (from
+`@dbx-tools/appkit-mastra-ui`). Only `basePath` matters for routing -
+it encodes the plugin's mount point (`/api/<plugin name>`), so the
+client stays correct even if the plugin is renamed. Every endpoint
+is derived from `basePath` + a fixed segment in `MASTRA_ROUTES`,
+shared between the server's route registration and the client.
 
 ```ts
 interface MastraClientConfig {
-  basePath: string;              // /api/<plugin name>
-  chatPath: string;              // ${basePath}/route/chat (default agent)
-  chatPathTemplate: string;      // ${basePath}/route/chat/:agentId
-  modelsPath: string;            // ${basePath}/models
-  historyPath: string;           // ${basePath}/route/history (default agent)
-  historyPathTemplate: string;   // ${basePath}/route/history/:agentId
-  embedPathTemplate: string;     // ${basePath}/embed/:type/:id
-  defaultAgent: string;          // agent id chatRoute uses when no :agentId
-  agents: string[];              // every registered agent id
+  basePath: string;       // /api/<plugin name>
+  defaultAgent: string;   // agent the client talks to when no :agentId
+  agents: string[];       // every registered agent id
 }
+
+// Relative segments under basePath (single source of truth)
+const MASTRA_ROUTES = {
+  history: "/route/history",
+  suggestions: "/suggestions",
+  models: "/models",
+  embed: "/embed",
+};
 ```
+
+Conversation streaming rides the standard Mastra agent routes
+(`@mastra/client-js`'s `getAgent(id).stream()`), so there's no chat
+segment to keep in sync.
 
 Every embed marker the agent emits resolves through the single
-generic `embedPathTemplate` endpoint. The host UI parses a
-`[<type>:<id>]` marker out of an assistant reply and calls
-`embedUrl(config, type, id)`; the server dispatches on `<type>`
-and `404`s any type it doesn't register. The two types it ships:
+generic `${basePath}/embed/:type/:id` endpoint. The host UI parses a
+`[<type>:<id>]` marker out of an assistant reply and the client
+fetches it; the server dispatches on `<type>` and `404`s any type it
+doesn't register. The two types it ships:
 
 - `chart` (`/embed/chart/:id`) long-polls the chart cache until
-  the entry resolves to a `ready` / `error` state - e.g.
-  `embedUrl(config, "chart", chartId, { timeoutMs: 30_000 })`.
+  the entry resolves to a `ready` / `error` state.
 - `data` (`/embed/data/:id`) resolves `[data:<statement_id>]`
-  markers to inline table data - e.g.
-  `embedUrl(config, "data", statementId, { limit: 100 })`.
+  markers to inline table data.
 
-## URL helpers
-
-### `chatUrl(config, agentId?)`
-
-Returns the chat endpoint for the named agent (or the default if
-`agentId` is omitted). Drops the trailing `/<agentId>` segment for
-the default agent so the URL matches the unrouted mount.
-
-```tsx
-import { useMemo } from "react";
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { usePluginClientConfig } from "@databricks/appkit-ui/react";
-import { chatUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
-
-function Chat() {
-  const config = usePluginClientConfig<MastraClientConfig>("mastra");
-  const transport = useMemo(
-    () => new DefaultChatTransport({ api: chatUrl(config) }),
-    [config],
-  );
-  return useChat({ transport });
-}
-```
-
-### `historyUrl(config, options?)`
-
-Builds the thread-history URL for an agent + page. Accepts
-`{agentId?, page?, perPage?}` and appends them as query params.
-Default-agent shorthand mirrors `chatUrl`.
-
-```ts
-const url = historyUrl(config, { page: 0, perPage: 20 });
-const res = await fetch(url, { credentials: "include" });
-const payload = (await res.json()) as MastraHistoryResponse;
-// payload.uiMessages is oldest -> newest, ready to prepend to live transcript
-```
-
-### `embedUrl(config, type, id, query?)`
-
-Substitutes the `:type` and `:id` placeholders in
-`embedPathTemplate` (`${basePath}/embed/:type/:id`) and appends
-any `query` entries as query-string params. The one resolver for
-every embed marker - `type` is opaque here, the server dispatches
-on it and `404`s unknown types (and unknown / expired ids).
-
-```ts
-import { embedUrl, type MastraClientConfig, type Chart, type StatementData } from "@dbx-tools/appkit-mastra-shared";
-
-// chart: long-poll the chart cache (?timeoutMs tunes the window)
-const chartFetchUrl = embedUrl(config, "chart", chartId, { timeoutMs: 30_000 });
-const chart = (await (await fetch(chartFetchUrl, { credentials: "include" })).json()) as Chart;
-
-// data: one OBO-scoped statement fetch (?limit caps rows)
-const dataFetchUrl = embedUrl(config, "data", statementId, { limit: 100 });
-const data = (await (await fetch(dataFetchUrl, { credentials: "include" })).json()) as StatementData;
-```
+`MastraPluginClient` exposes `chart(id)` / `statement(id)` for these,
+plus `history()` / `clearHistory()`, `models()`, and `suggestions()`;
+see `@dbx-tools/appkit-mastra-ui`.
 
 ## Wire-format types
 
@@ -166,11 +117,18 @@ endpoints. Useful for a model-picker dropdown that drives the
 per-request `X-Mastra-Model` header.
 
 ```ts
+interface ModelProfile {
+  quality?: number;    // higher is more capable
+  speed?: number;      // throughput; higher is faster
+  cost?: number;       // relative price; lower is cheaper
+}
+
 interface ServingEndpointSummary {
   name: string;        // canonical endpoint name
   task?: string;       // e.g. "llm/v1/chat"
   state?: string;      // ready / updating / failed
   description?: string;
+  profile?: ModelProfile; // FMAPI scores when scored; absent otherwise
 }
 
 interface ServingEndpointsResponse {
@@ -214,7 +172,7 @@ interface StatementData {
 ### Genie writer-event vocabulary
 
 The Mastra Genie agent publishes a unified
-[`GenieWriterEvent`](src/genie.ts) union through Mastra's
+[`GenieWriterEvent`](src/protocol.ts) union through Mastra's
 `ctx.writer`. Subscribers narrow on `event.type` and read the
 event's flat fields directly - no payload wrapper, no
 translation layer:
@@ -227,7 +185,6 @@ function handleEvent(event: GenieWriterEvent) {
     case "started":          // Mastra-only: tool invocation began
     case "ask_genie_done":   // Mastra-only: one ask_genie turn finished
     case "summary":          // Mastra-only: structured-output coercion landed
-    case "chart":            // Mastra-only: chart rendered for the active turn
     case "error":            // Mastra-only: terminal error
     case "status":           // wire: status transition
     case "thinking":         // wire: Genie thought
@@ -241,17 +198,6 @@ function handleEvent(event: GenieWriterEvent) {
 }
 ```
 
-`isGenieAgentResult(value)` is an O(1) structural guard that
-detects the agent's tool-result payload off Mastra's
-`tool-result` chunks without coupling to a specific tool name.
-
-`genieResultToWriterEvents(result)` replays the terminal
-`error` event from a completed `GenieAgentResult`, useful for
-reconstructing lifecycle pills on history reload. Live-only
-chart specs are intentionally not replayed (the resolved
-Echarts spec is held off-band on the per-request
-`RequestContext`, not on the persisted summary).
-
 ## Installation
 
 ```bash
@@ -261,27 +207,21 @@ bun add @dbx-tools/appkit-mastra-shared
 ## Usage
 
 ```ts
-import { chatUrl, historyUrl, embedUrl, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
+import { MASTRA_ROUTES, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
 
 declare const config: MastraClientConfig;
 
-// Chat endpoint for the default agent
-const chat = chatUrl(config);
-
-// History with pagination
-const history = historyUrl(config, { page: 0, perPage: 50 });
-
-// Chart long-poll URL (generic embed endpoint, type = "chart")
-const chart = embedUrl(config, "chart", "abc123", { timeoutMs: 30_000 });
+// Build a route by hand (the client does this for you)
+const historyPath = `${config.basePath}${MASTRA_ROUTES.history}`;
 ```
+
+For anything beyond raw paths, use `MastraPluginClient` from
+`@dbx-tools/appkit-mastra-ui` - it owns URL composition, fetching,
+and schema validation for every route plus the agent stream.
 
 ## API
 
-- `chatUrl(config, agentId?)` - returns the chat endpoint URL for a given agent (or the default).
-- `historyUrl(config, options?)` - builds the paginated history URL for an agent.
-- `embedUrl(config, type, id, query?)` - builds the generic `/embed/:type/:id` fetch URL for any embed marker (`chart`, `data`, ...).
-- `isGenieAgentResult(value)` - O(1) structural type guard for `GenieAgentResult`.
-- `genieResultToWriterEvents(result)` - replays terminal writer events from a completed result.
+- `MASTRA_ROUTES` - relative route segments under `basePath` (single source of truth, shared with the server).
 - `MastraClientConfig` - shape published by the plugin's `clientConfig()`.
 - `MastraHistoryUIMessage` / `MastraHistoryResponse` / `MastraClearHistoryResponse` - history endpoint types.
 - `ServingEndpointSummary` / `ServingEndpointsResponse` - model catalogue types.
@@ -289,7 +229,7 @@ const chart = embedUrl(config, "chart", "abc123", { timeoutMs: 30_000 });
 - `StatementData` - statement fetch response type.
 - `GenieWriterEvent` - unified writer-event union (wire + Mastra-only).
 - `GenieAgentResult` / `GenieSummaryItem` / `GenieDataset` / `GenieDatasetData` / `GenieDatasetChart` - workflow output shapes.
-- `MinimalWriter` - structural interface for `ctx.writer`.
+- `MastraWriter` - structural interface for `ctx.writer`.
 
 ## License
 

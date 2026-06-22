@@ -3,10 +3,7 @@ import type { UIMessage } from "ai";
 import { nanoid } from "nanoid";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  clearMastraHistory,
-  fetchMastraHistory,
   useMastraClient,
-  useMastraConfig,
   useMastraModels,
   useMastraSuggestions,
 } from "../lib/mastra-client.js";
@@ -21,13 +18,11 @@ import type {
   ToolProgress,
 } from "./types.js";
 
-// Self-contained drop-in chat. Instead of pointing the AI SDK's
-// `useChat` at the `chatRoute()` endpoint, `useMastraChat` drives the
-// conversation by hand over `@mastra/client-js`: `agent.stream()`
-// returns a Response augmented with `processDataStream()`, which pushes
-// typed Mastra chunks (text-delta, reasoning-delta, tool-*, ...) we
-// translate into `UIMessage` parts so `ChatView` renders identically to
-// the `useChat`-backed path.
+// Self-contained drop-in chat. `useMastraChat` drives the conversation
+// over `@mastra/client-js`: `agent.stream()` returns a Response
+// augmented with `processDataStream()`, which pushes typed Mastra
+// chunks (text-delta, reasoning-delta, tool-*, ...) that we translate
+// into `UIMessage` parts for `ChatView` to render.
 //
 // Approval gates ride the same channel: a paused `requireApproval: true`
 // tool call emits a `tool-call-approval` chunk carrying
@@ -104,21 +99,19 @@ export const useMastraChat = (
   options: UseMastraChatOptions = {},
 ): Omit<ChatViewProps, "className"> => {
   const [model, setModel] = useState("");
-  // `useMastraClient(model)` rebuilds the client with
-  // `X-Mastra-Model` attached as a default header whenever the
-  // selected model changes. The Mastra plugin's server middleware
-  // reads that header and overrides the per-request resolved model
-  // without redeploying the agent.
-  const mastraClient = useMastraClient(model);
-  const mastraConfig = useMastraConfig();
-  // Pull stable scalar fields out of the config for hook deps. The
-  // config object reference can churn across renders (the provider
-  // returns whatever `usePluginClientConfig` hands us), and using the
-  // whole object as a dep would refire the initial-history fetch on
-  // every parent render, leading to duplicate keys when overlapping
-  // pages prepend.
-  const { historyPath, defaultAgent } = mastraConfig;
-  const agentId = options.agentId ?? defaultAgent;
+  // One client drives both the agent stream and the plugin's custom
+  // routes (history / models / suggestions / embeds). Its identity is
+  // stable across renders (memoized on `basePath` / `defaultAgent`) so
+  // using it as a hook dep doesn't refire the initial-history fetch on
+  // every parent render.
+  const mastraClient = useMastraClient();
+  // Apply the selected model as a per-request override header in place,
+  // so the next `agent.stream()` picks it up without rebuilding the
+  // client (which would refire history loads on every model change).
+  useEffect(() => {
+    mastraClient.setModelOverride(model || undefined);
+  }, [mastraClient, model]);
+  const agentId = options.agentId ?? mastraClient.defaultAgent;
   // Picker is opt-in: an omitted (or falsy) `showModelPicker` keeps it
   // hidden and skips the catalogue fetch entirely.
   const showModelPicker = Boolean(options.showModelPicker);
@@ -506,10 +499,10 @@ export const useMastraChat = (
     (history: UIMessage[]) => {
       const assistantId = nanoid();
       const runId = nanoid();
-      // Pre-seed the runId so chatRoute / approveToolCall stay anchored
-      // to the same workflow even if the first chunk is delayed. Server
-      // is authoritative; if it overrides we pick that up via
-      // `currentRunIdRef` inside `processStream`.
+      // Pre-seed the runId so a follow-up `approveToolCall` stays
+      // anchored to the same workflow even if the first chunk is
+      // delayed. Server is authoritative; if it overrides we pick that
+      // up via `currentRunIdRef` inside `processStream`.
       currentRunIdRef.current = runId;
       return driveStream(assistantId, () => {
         const agent = mastraClient.getAgent(agentId);
@@ -612,10 +605,7 @@ export const useMastraChat = (
    */
   const handleClear = useCallback(async () => {
     try {
-      const result = await clearMastraHistory(
-        { historyPath, defaultAgent },
-        { agentId },
-      );
+      const result = await mastraClient.clearHistory({ agentId });
       log.info("history cleared", { cleared: result.cleared });
     } catch (error) {
       log.error("history clear error", {
@@ -635,7 +625,7 @@ export const useMastraChat = (
     currentRunIdRef.current = null;
     setError(null);
     setStatus("ready");
-  }, [historyPath, defaultAgent, agentId, writeMessages]);
+  }, [mastraClient, agentId, writeMessages]);
 
   const regenerate = useCallback(() => {
     if (!lastUserTextRef.current) return;
@@ -662,7 +652,7 @@ export const useMastraChat = (
   }, [runStream, writeMessages]);
 
   // Hydrate the transcript with the latest page of stored messages on
-  // mount. We re-run when `historyPath` or `agentId` changes
+  // mount. We re-run when `basePath` or `agentId` changes
   // (e.g. picker swaps the agent), but not on every model change
   // since the model only affects subsequent generations, not stored
   // history.
@@ -671,18 +661,16 @@ export const useMastraChat = (
     const controller = new AbortController();
     historyInFlightRef.current = true;
     setIsLoadingHistory(true);
-    fetchMastraHistory(
-      { historyPath, defaultAgent },
-      {
+    mastraClient
+      .history({
         agentId,
         page: 0,
         perPage: HISTORY_PAGE_SIZE,
         signal: controller.signal,
-      },
-    )
+      })
       .then((response) => {
         if (cancelled) return;
-        writeMessages(response.uiMessages);
+        writeMessages(response.uiMessages as unknown as UIMessage[]);
         // Tool events are live-stream only - the progress that
         // built the SQL/thinking pills isn't persisted, so a
         // reload renders the settled assistant text + any
@@ -707,7 +695,7 @@ export const useMastraChat = (
       cancelled = true;
       controller.abort();
     };
-  }, [historyPath, defaultAgent, agentId, writeMessages]);
+  }, [mastraClient, agentId, writeMessages]);
 
   // Lazy-load the next older page when the user scrolls near the top
   // of the transcript. ChatView captures the pre-prepend scroll
@@ -727,13 +715,12 @@ export const useMastraChat = (
     setIsLoadingMore(true);
     const page = historyPageRef.current;
     historyPageRef.current = page + 1;
-    fetchMastraHistory(
-      { historyPath, defaultAgent },
-      { agentId, page, perPage: HISTORY_PAGE_SIZE },
-    )
+    mastraClient
+      .history({ agentId, page, perPage: HISTORY_PAGE_SIZE })
       .then((response) => {
-        if (response.uiMessages.length > 0) {
-          writeMessages([...response.uiMessages, ...messagesRef.current]);
+        const uiMessages = response.uiMessages as unknown as UIMessage[];
+        if (uiMessages.length > 0) {
+          writeMessages([...uiMessages, ...messagesRef.current]);
         }
         setHasMoreHistory(response.hasMore);
       })
@@ -751,7 +738,7 @@ export const useMastraChat = (
         historyInFlightRef.current = false;
         setIsLoadingMore(false);
       });
-  }, [hasMoreHistory, historyPath, defaultAgent, agentId, writeMessages]);
+  }, [hasMoreHistory, mastraClient, agentId, writeMessages]);
 
   return {
     messages,

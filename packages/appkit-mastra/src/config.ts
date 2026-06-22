@@ -150,7 +150,8 @@ export interface MastraPluginConfig extends BasePluginConfig {
    */
   tools?: MastraTools;
   /**
-   * Agent id used by `chatRoute` when the client doesn't specify one.
+   * Agent id used when the client doesn't specify one (the bare,
+   * un-suffixed history / suggestions routes resolve to it).
    * Defaults to the first key in `agents` (or `"default"` when
    * `agents` is omitted). Must match an id in `agents` when both are
    * set; a mismatch throws at setup with the available candidates.
@@ -198,17 +199,19 @@ export interface MastraPluginConfig extends BasePluginConfig {
    */
   modelOverride?: boolean;
   /**
-   * Priority-ordered list of endpoint names tried when no agent /
-   * plugin / env / request-override model id is set. The resolver
-   * picks the first id that is actually present in the workspace's
-   * `/serving-endpoints` listing - this is what lets a workspace
-   * without Claude Opus still get a sensible default automatically.
+   * Priority-ordered list of endpoint names tried *first* when no
+   * agent / plugin / env / request-override model id is set, ahead of
+   * the dynamic score-classified catalogue. The resolver picks the
+   * first id that is actually present in the workspace's
+   * `/serving-endpoints` listing.
    *
-   * Defaults to the built-in list in `model.ts` (`FALLBACK_MODEL_IDS`):
-   * Claude (Opus -> Sonnet -> Haiku), then OpenAI GPT-5 family, then
-   * open weights (Llama 4, Llama 3.3, GPT-OSS, Qwen, Llama 3.1).
-   * Override here to pin a regulated workspace to an approved subset
-   * or to add custom endpoints in front of the public catalogue.
+   * When unset, resolution is driven by the live Foundation Model API
+   * `quality` / `speed` / `cost` scores: endpoints are classified into
+   * tiers (`classifyEndpoints`) and walked best-first (Thinking ->
+   * Balanced -> Fast), with the small built-in `FALLBACK_MODEL_IDS`
+   * list as the floor when the catalogue can't be read. Set this to
+   * pin a regulated workspace to an approved subset, or to put custom
+   * endpoints in front of the auto-classified catalogue.
    */
   defaultModelFallbacks?: readonly string[];
   /**

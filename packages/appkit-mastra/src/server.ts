@@ -1,8 +1,8 @@
 /**
  * Express-layer plumbing for the Mastra plugin: a `MastraServer` that
  * stamps the per-request `RequestContext`, and a route-patch middleware
- * that lets `@mastra/ai-sdk` `chatRoute` work behind an Express mount
- * point.
+ * that lets the plugin's custom API routes (e.g. `historyRoute`) work
+ * behind an Express mount point.
  */
 
 import { getExecutionContext } from "@databricks/appkit";
@@ -172,30 +172,23 @@ export class MastraServer extends MastraServerExpress {
 }
 
 /**
- * Patches around `@mastra/express`'s custom-route dispatcher so
- * `chatRoute` works when `MastraServer` is hosted on an Express subapp
- * mounted under a parent path (e.g. `/api/mastra`).
+ * Patches around `@mastra/express`'s custom-route dispatcher so the
+ * plugin's custom API routes (e.g. `historyRoute`) work when
+ * `MastraServer` is hosted on an Express subapp mounted under a parent
+ * path (e.g. `/api/mastra`).
  *
- * Two concerns:
- *
- * 1. The adapter's `registerCustomApiRoutes` matches against `req.path`
- *    (mount-relative, correct) but dispatches to its internal Hono
- *    mini-app using `req.originalUrl`, which still contains the parent
- *    mount prefix. The Hono app registers the literal `chatRoute` paths
- *    (for example `/route/chat`), so the absolute URL never matches
- *    until we overwrite `originalUrl` for `/route` and `/route/*` to
- *    the mount-relative path.
- *
- * 2. `memory.resource` must be the authenticated user, not whatever the
- *    client posts. The custom-route forwarder re-serializes `req.body`
- *    into the Request body it hands Hono, so mutating the parsed body
- *    here would propagate into `handleChatStream`'s params (kept for
- *    future use; `express.json()` runs first so `req.body` is parsed).
+ * The adapter's `registerCustomApiRoutes` matches against `req.path`
+ * (mount-relative, correct) but dispatches to its internal Hono
+ * mini-app using `req.originalUrl`, which still contains the parent
+ * mount prefix. The Hono app registers the literal route paths
+ * (for example `/route/history`), so the absolute URL never matches
+ * until we overwrite `originalUrl` for `/route` and `/route/*` to the
+ * mount-relative path.
  */
 export function attachRoutePatchMiddleware(app: express.Express): void {
   app.use((req, _res, next) => {
-    const isChat = req.path === "/route" || req.path.startsWith("/route/");
-    if (!isChat) return next();
+    const isCustomRoute = req.path === "/route" || req.path.startsWith("/route/");
+    if (!isCustomRoute) return next();
     req.originalUrl = req.path;
     next();
   });
