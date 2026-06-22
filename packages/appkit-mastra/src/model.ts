@@ -9,19 +9,19 @@
  *
  * This module only adds the Mastra-specific glue. The actual model
  * selection - listing the workspace catalogue and resolving an
- * explicit name / tier / fallback chain to a real endpoint id - lives
+ * explicit name / class / fallback chain to a real endpoint id - lives
  * in `@dbx-tools/model` ({@link selectModel}) so non-Mastra consumers
  * (e.g. a job that just needs a model name) can reuse it. Here we
  * assemble the explicit ask from Mastra's request context (the
  * per-request override under {@link MASTRA_MODEL_OVERRIDE_KEY}, the
  * agent / plugin `modelId`, or `DATABRICKS_SERVING_ENDPOINT_NAME`),
- * pass the plugin's fuzzy / tier / fallback knobs through, and wrap
+ * pass the plugin's fuzzy / class / fallback knobs through, and wrap
  * the resolved id in the OpenAI-compatible provider config Mastra
  * expects. Catalogue fetches fail loud: network / auth errors
  * propagate so callers see the real SDK message.
  */
 
-import { type ModelTier, parseModelTier, selectModel } from "@dbx-tools/model";
+import { type ModelClass, parseModelClass, selectModel } from "@dbx-tools/model";
 import { commonUtils, logUtils, netUtils, stringUtils } from "@dbx-tools/shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
@@ -32,9 +32,9 @@ import { MASTRA_MODEL_OVERRIDE_KEY, resolveServingConfig } from "./serving.js";
 export {
   classifyEndpoints,
   FALLBACK_MODEL_IDS,
-  modelForTier,
-  modelsForTier,
-  ModelTier,
+  ModelClass,
+  modelForClass,
+  modelsForClass,
 } from "@dbx-tools/model";
 
 /** Optional overrides accepted by {@link buildModel}. */
@@ -42,18 +42,18 @@ export interface BuildModelOverrides {
   /**
    * Static model id from the agent / plugin config (string sugar on
    * `def.model` or `config.defaultModel`). Loses to the per-request
-   * override but wins over env / tier / fallback.
+   * override but wins over env / class / fallback.
    */
   modelId?: string;
   /**
-   * Capability tier to resolve when no explicit model id is supplied.
-   * Used by internal agents (e.g. the chart planner asks for
-   * {@link ModelTier.Fast}) to express intent without pinning an
+   * Chat capability class to resolve when no explicit model id is
+   * supplied. Used by internal agents (e.g. the chart planner asks for
+   * {@link ModelClass.ChatFast}) to express intent without pinning an
    * endpoint name; the live catalogue is classified and the top
-   * available model in the tier is chosen, falling back to the
-   * tier's static list when the workspace has none.
+   * available model in the class is chosen, falling back to the
+   * class's static list when the workspace has none.
    */
-  tier?: ModelTier;
+  modelClass?: ModelClass;
 }
 
 /**
@@ -85,23 +85,23 @@ export async function buildModel(
     : undefined;
 
   // The override / agent default / env value can be either a concrete
-  // endpoint name or a capability tier slug ("thinking" / "balanced" /
-  // "fast"). A tier slug becomes a tier intent (let the live catalogue
-  // pick the best model in that band); anything else is an explicit
-  // name fuzzy-matched against the catalogue. An internal
-  // `overrides.tier` (e.g. the chart planner) is the floor when nothing
-  // was requested.
+  // endpoint name or a model class slug ("chat-thinking" /
+  // "chat-balanced" / "chat-fast"). A class slug becomes a class intent
+  // (let the live catalogue pick the best model in that band); anything
+  // else is an explicit name fuzzy-matched against the catalogue. An
+  // internal `overrides.modelClass` (e.g. the chart planner) is the
+  // floor when nothing was requested.
   const requested =
     override ?? overrides.modelId ?? process.env.DATABRICKS_SERVING_ENDPOINT_NAME;
-  const requestedTier = requested !== undefined ? parseModelTier(requested) : null;
-  const explicit = requestedTier === null ? requested : undefined;
-  const tier = requestedTier ?? overrides.tier;
+  const requestedClass = requested !== undefined ? parseModelClass(requested) : null;
+  const explicit = requestedClass === null ? requested : undefined;
+  const modelClass = requestedClass ?? overrides.modelClass;
 
   const { modelId, source } = await selectModel(user.executionContext.client, host, {
     ...(explicit !== undefined ? { explicit } : {}),
     fuzzy: serving.fuzzy,
     threshold: serving.threshold,
-    ...(tier !== undefined ? { tier } : {}),
+    ...(modelClass !== undefined ? { modelClass } : {}),
     fallbacks: serving.fallbacks,
     ttlMs: serving.ttlMs,
   });

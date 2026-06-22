@@ -30,6 +30,21 @@ export interface PluginContextLike {
   getPlugins(): ReadonlyMap<string, unknown>;
 }
 
+// The AppKit per-request execution context returned by
+// `getExecutionContext()` - the OBO-scoped workspace client plus the
+// surrounding request metadata. Derived from AppKit's own return type so
+// it tracks the installed version, and re-exported here so add-on
+// packages can type a context parameter without each re-deriving the
+// same `ReturnType<typeof getExecutionContext>` inline.
+export type ExecutionContextLike = ReturnType<typeof getExecutionContext>;
+
+// The auth-scoped Databricks workspace client carried on an
+// `ExecutionContextLike` (`getExecutionContext().client`). Typed
+// structurally off AppKit so consumers don't take a direct
+// `@databricks/sdk-experimental` dependency - the dep flows in
+// transitively through `@databricks/appkit`.
+export type WorkspaceClientLike = ExecutionContextLike["client"];
+
 type PluginData = {
   plugin: abstract new (...args: never[]) => unknown;
   name: string;

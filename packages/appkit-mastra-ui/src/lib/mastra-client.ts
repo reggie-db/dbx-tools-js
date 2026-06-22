@@ -62,9 +62,9 @@ export class MastraPluginClient extends MastraClient {
    * streaming call as `X-Mastra-Model`. The Mastra plugin's middleware
    * reads it and overrides the resolved model for that request without
    * an agent redeploy. `model` is either a concrete endpoint name
-   * (fuzzy-matched server-side) or a capability tier slug
-   * (`ModelTier.Fast` / `"thinking"`); pass `undefined` to fall back to
-   * the agent's configured default.
+   * (fuzzy-matched server-side) or a model class slug
+   * (`ModelClass.ChatFast` / `"chat-thinking"`); pass `undefined` to
+   * fall back to the agent's configured default.
    *
    * Mutates the shared `options.headers` in place (rather than
    * rebuilding the client) so the client identity stays stable across
@@ -281,10 +281,14 @@ export const useMastraModels = (
       .models(controller.signal)
       .then((endpoints) => {
         if (controller.signal.aborted) return;
-        // Filter to chat-capable endpoints; if the server didn't tag
-        // tasks at all, just pass everything through so we don't show
-        // an empty list.
-        const llms = endpoints.filter((e) => !e.task || e.task.startsWith("llm/v1/"));
+        // Filter to chat-capable endpoints, dropping embeddings (which
+        // carry the `llm/v1/embeddings` task) so the chat picker never
+        // lists a vectoriser. If the server didn't tag tasks at all,
+        // pass everything through so we don't show an empty list.
+        const llms = endpoints.filter(
+          (e) =>
+            e.task !== "llm/v1/embeddings" && (!e.task || e.task.startsWith("llm/v1/")),
+        );
         setModels(llms.length > 0 ? llms : endpoints);
       })
       .catch((e: unknown) => {

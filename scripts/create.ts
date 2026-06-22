@@ -81,7 +81,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import semver from "semver";
-import { discoverPackages, fail, ROOT, writeJson } from "./util.js";
+import { discoverPackages, fail, ROOT_DIR, writeJson } from "./util.js";
 
 const SCOPE = "@dbx-tools";
 // AppKit's version range lives in the root `catalog` (see root
@@ -147,7 +147,7 @@ const [slug] = program.processedArgs as [string];
 const bareSlug = kind === "plugin" ? slug.replace(/^appkit-/, "") : slug;
 const dirSlug = kind === "plugin" ? `appkit-${bareSlug}` : slug;
 
-const pkgDir = resolve(ROOT, "packages", dirSlug);
+const pkgDir = resolve(ROOT_DIR, "packages", dirSlug);
 if (existsSync(pkgDir)) {
   console.error(`packages/${dirSlug} already exists; aborting.`);
   process.exit(1);

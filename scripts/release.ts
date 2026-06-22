@@ -68,8 +68,9 @@ import { dirname, relative, resolve } from "node:path";
 import {
   discoverPackages,
   exec,
+  execScript,
   fail,
-  ROOT,
+  ROOT_DIR,
   writeJson,
   type PackageJson,
   type WorkspacePackage,
@@ -230,16 +231,16 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
   const { registry = DEFAULT_REGISTRY, dryRun = false, otp } = opts;
 
   const rootMeta = (await Bun.file(
-    resolve(ROOT, "package.json"),
+    resolve(ROOT_DIR, "package.json"),
   ).json()) as PackageJson & {
     catalog?: Record<string, string>;
     catalogs?: Record<string, Record<string, string>>;
   };
   const defaultData = (await Bun.file(
-    resolve(ROOT, "package.default.json"),
+    resolve(ROOT_DIR, "package.default.json"),
   ).json()) as PackageJson;
   const enforcedData = (await Bun.file(
-    resolve(ROOT, "package.enforced.json"),
+    resolve(ROOT_DIR, "package.enforced.json"),
   ).json()) as PackageJson;
   const enforcedRepo = (enforcedData.repository ?? {}) as Record<string, unknown>;
 
@@ -330,7 +331,7 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
       ...enforcedData,
       repository: {
         ...enforcedRepo,
-        directory: relative(ROOT, pkg.dir).replace(/\\/g, "/"),
+        directory: relative(ROOT_DIR, pkg.dir).replace(/\\/g, "/"),
       },
     };
     rewriteSpecialDeps(merged);
@@ -428,6 +429,11 @@ if (import.meta.main) {
     registry: string;
     otp?: string;
   }>();
+
+  // Build every publishable package before publishing (formerly the
+  // `prerelease` npm hook). The publish flow stages each package's
+  // compiled `dist/`, so the build has to run first.
+  await execScript("build");
 
   const result = await release({ registry, dryRun, otp });
   if (result.failed > 0) fail(`${result.failed} package(s) failed to publish`);

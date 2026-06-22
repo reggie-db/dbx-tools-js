@@ -49,9 +49,6 @@
       "path": "./packages/appkit-mastra/tsconfig.build.json"
     },
     {
-      "path": "./packages/appkit-serving/tsconfig.build.json"
-    },
-    {
       "path": "./packages/auth/tsconfig.build.json"
     },
     {

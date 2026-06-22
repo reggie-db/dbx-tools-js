@@ -16,10 +16,6 @@
     "sql-formatter": "^15.8.0",
     "streamdown": "^2.5.0"
   },
-  "devDependencies": {
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
-  },
   "exports": {
     "./react": {
       "types": "./dist/react/index.d.ts",

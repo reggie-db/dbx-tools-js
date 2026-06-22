@@ -5,13 +5,14 @@ import { WorkspaceClient } from "@databricks/sdk-experimental";
 import { Agent } from "@mastra/core/agent";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import { createTool } from "@mastra/core/tools";
-import { FileSink, which } from "bun";
+import { FileSink, fileURLToPath, which } from "bun";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import pMemoize from "p-memoize";
 import { z } from "zod";
 
-export const ROOT = resolve(import.meta.dirname, "..");
+export const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
+export const ROOT_DIR = resolve(SCRIPTS_DIR, "..");
 
 /** Minimal package.json shape we care about across scripts. */
 export interface PackageJson {
@@ -22,24 +23,48 @@ export interface PackageJson {
   [key: string]: unknown;
 }
 
-/** A workspace package discovered under `packages/`. */
-export interface WorkspacePackage {
-  /** Path of the package directory relative to ROOT (e.g. `"packages/appkit-config"`). */
-  slug: string;
-  /** Absolute path to the package directory. */
-  dir: string;
-  /** Absolute path to the package's `package.json`. */
-  jsonPath: string;
-  /** Parsed `package.json` contents. */
-  meta: PackageJson;
+export class WorkspacePackage {
+  readonly dir: string;
+  readonly slug: string;
+
+  private constructor(
+    readonly jsonPath: string,
+    readonly meta: PackageJson,
+  ) {
+    this.dir = dirname(jsonPath);
+    this.slug = relative(ROOT_DIR, this.dir);
+  }
+
+  static async fromPackageJson(jsonPath: string): Promise<WorkspacePackage> {
+    const meta = (await Bun.file(jsonPath).json()) as PackageJson;
+
+    return new WorkspacePackage(jsonPath, meta);
+  }
+
+  async tsconfig(): Promise<string | undefined> {
+    for await (const tsconfig of this.tsconfigs()) {
+      return tsconfig;
+    }
+    return undefined;
+  }
+
+  async *tsconfigs(): AsyncIterableIterator<string> {
+    for (const suffix of [".build", ""]) {
+      const glob = new Bun.Glob(`tsconfig${suffix}.json`);
+      const tsconfigs = glob.scan({ cwd: this.dir, absolute: true });
+      for await (const tsconfig of tsconfigs) {
+        yield tsconfig;
+      }
+    }
+  }
 }
 
 export function toAbsolute(path: string): string {
-  return isAbsolute(path) ? path : resolve(ROOT, path);
+  return isAbsolute(path) ? path : resolve(ROOT_DIR, path);
 }
 
 export function toRelative(path: string): string {
-  const rel = relative(ROOT, path);
+  const rel = relative(ROOT_DIR, path);
   return rel !== "" &&
     !rel.startsWith("..") &&
     !rel.startsWith("/") &&
@@ -59,31 +84,16 @@ export function toRelative(path: string): string {
 export async function* discoverPackageJsons(
   includeRoot = false,
 ): AsyncIterableIterator<string> {
-  const rootJson = resolve(ROOT, "package.json");
+  const rootJson = resolve(ROOT_DIR, "package.json");
   if (includeRoot) yield rootJson;
   const { workspaces = [] } = (await Bun.file(rootJson).json()) as PackageJson;
   for (const ws of workspaces) {
     const packageJsonScan = new Bun.Glob(`${ws}/package.json`).scan({
-      cwd: ROOT,
+      cwd: ROOT_DIR,
       absolute: true,
     });
     for await (const packageJson of packageJsonScan) {
       yield packageJson;
-    }
-  }
-}
-
-export async function* discoverTsconfigs(
-  includeRoot = false,
-): AsyncIterableIterator<string> {
-  for await (const pjson of discoverPackageJsons(includeRoot)) {
-    const dir = dirname(pjson);
-    for (const globPattern of ["tsconfig.json", "tsconfig.build.json"]) {
-      const glob = new Bun.Glob(globPattern);
-      const tsconfigs = glob.scan({ cwd: dir, absolute: true });
-      for await (const tsconfig of tsconfigs) {
-        yield tsconfig;
-      }
     }
   }
 }
@@ -101,14 +111,7 @@ export async function discoverPackages(
 ): Promise<WorkspacePackage[]> {
   const wsPackages: WorkspacePackage[] = [];
   for await (const jsonPath of discoverPackageJsons()) {
-    const dir = dirname(jsonPath);
-    const meta = (await Bun.file(jsonPath).json()) as PackageJson;
-    const wsPackage: WorkspacePackage = {
-      slug: relative(ROOT, dir),
-      dir,
-      jsonPath,
-      meta,
-    };
+    const wsPackage = await WorkspacePackage.fromPackageJson(jsonPath);
     if (filter(wsPackage)) wsPackages.push(wsPackage);
   }
   wsPackages.sort((a, b) => a.slug.localeCompare(b.slug));
@@ -163,7 +166,7 @@ export type ExecResult = z.infer<typeof execResultSchema>;
 /**
  * Run a subprocess and capture its output. Resolves `command` on
  * `PATH` (skip with `disableWhich`), spawns it with `args` from
- * `ROOT`, and pipes stdout/stderr - both are collected and returned
+ * `ROOT_DIR`, and pipes stdout/stderr - both are collected and returned
  * trimmed on an {@link ExecResult}. stdin is inherited unless `input`
  * is supplied, in which case that string is written to the child's
  * stdin and the stream is closed.
@@ -189,7 +192,7 @@ export async function exec(
     throw new Error("stdin must be a pipe when input is provided");
   }
   const proc = Bun.spawn([command, ...(args ?? [])], {
-    cwd: ROOT,
+    cwd: ROOT_DIR,
     stdout: "pipe",
     stderr: "pipe",
     stdin: hasInput ? "pipe" : "inherit",
@@ -218,7 +221,7 @@ export async function exec(
   if (!options?.disableCheck && exitCode !== 0) {
     const detail = stderr || stdout;
     throw new Error(
-      `\`${command} ${args.join(" ")}\` failed (exit ${exitCode})${detail ? `: ${detail}` : ""}`,
+      `\`${command} ${(args ?? []).join(" ")}\` failed (exit ${exitCode})${detail ? `: ${detail}` : ""}`,
     );
   }
   return {
@@ -231,6 +234,11 @@ export async function exec(
 export function fail(message: string): never {
   console.error(`✗ ${message}`);
   process.exit(1);
+}
+
+/** Narrow an unknown thrown value to its message string. */
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -246,6 +254,18 @@ export async function bunx(
   return exec("bun", ["x", ...args], { disableWhich: true, ...options }).then(
     (result) => result.stdout,
   );
+}
+
+export async function execScript(
+  name: string,
+  options?: ExecOptions,
+): Promise<ExecResult> {
+  return exec("bun", ["run", name], {
+    disableWhich: true,
+    stdout: "inherit",
+    stderr: "inherit",
+    ...options,
+  });
 }
 
 /**
@@ -352,7 +372,7 @@ function resolveScopePath(base: string, relPath: string): string {
 
 /** Short, human-readable label for the agent's filesystem scope. */
 function scopeLabel(base: string): string {
-  const rel = relative(ROOT, base);
+  const rel = relative(ROOT_DIR, base);
   if (rel === "") return "the dbx-tools-js repo root";
   if (rel.startsWith("..")) return base;
   return `${rel} (under the dbx-tools-js repo)`;
@@ -411,7 +431,7 @@ function createListFilesTool(base: string) {
         return {
           ok: false as const,
           path,
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMessage(err),
         };
       }
     },
@@ -477,7 +497,7 @@ function createReadFilesTool(base: string) {
           return {
             ok: false as const,
             path,
-            error: err instanceof Error ? err.message : String(err),
+            error: errorMessage(err),
           };
         }
       }),
@@ -494,7 +514,7 @@ export async function git(args: string[], options?: ExecOptions): Promise<ExecRe
 
 /**
  * Build the `git_status` / `git_diff` / `git_log` tool trio for the
- * agent, all rooted at {@link ROOT}. Returns `undefined` when `git`
+ * agent, all rooted at {@link ROOT_DIR}. Returns `undefined` when `git`
  * isn't on PATH, so callers drop the tools silently on
  * git-less hosts (matching the {@link createExecuteTypescriptTool}
  * pattern). Tools accept an optional path filter (relative to the
@@ -574,7 +594,7 @@ async function createGitTools() {
 let _cachedCursorRules: string | undefined;
 function loadCursorRules(): string {
   if (_cachedCursorRules !== undefined) return _cachedCursorRules;
-  const dir = join(ROOT, ".cursor", "rules");
+  const dir = join(ROOT_DIR, ".cursor", "rules");
   if (!existsSync(dir)) return (_cachedCursorRules = "");
   let files: string[];
   try {
@@ -632,7 +652,7 @@ export interface ScriptAgentOverrides {
   model?: string;
   /**
    * Base directory for the filesystem tools (`list_files` / `read_files`).
-   * Defaults to {@link ROOT}. Path traversal is refused for anything
+   * Defaults to {@link ROOT_DIR}. Path traversal is refused for anything
    * outside this directory. Use it to scope the agent to a single
    * package (e.g. `cwd: pkg.dir` when generating per-package READMEs)
    * so the agent can't wander the whole repo.
@@ -738,7 +758,7 @@ async function buildScriptModel(
 }
 
 /**
- * Lazily build a Mastra agent that can read files under {@link ROOT}
+ * Lazily build a Mastra agent that can read files under {@link ROOT_DIR}
  * via the `read_files` tool. Memoized per `(instructions, model)`
  * pair so repeated `agentQuery()` calls in one script reuse the
  * same agent and the auth handshake from {@link getWorkspaceClient}.
@@ -752,7 +772,7 @@ export const getScriptAgent = pMemoize(
     const spec = overrides.model ?? process.env[MODEL_PROVIDER_ENV];
     const model = await buildScriptModel(spec);
     if (!model) return null;
-    const base = overrides.cwd ?? ROOT;
+    const base = overrides.cwd ?? ROOT_DIR;
     const gitTools = await createGitTools();
     const sandbox = createExecuteTypescriptTool();
     // Always append the .cursor/rules block so per-script overrides

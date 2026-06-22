@@ -39,7 +39,7 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 import type { MastraPluginConfig } from "./config.js";
-import { buildModel, ModelTier } from "./model.js";
+import { buildModel, ModelClass } from "./model.js";
 
 const log = logUtils.logger("mastra/chart");
 
@@ -330,7 +330,7 @@ function getPlannerAgent(config: MastraPluginConfig): Agent {
       description: "Picks chart type and axis encodings for a dataset.",
       instructions: CHART_PLANNER_INSTRUCTIONS,
       model: ({ requestContext }) =>
-        buildModel(config, requestContext, { tier: ModelTier.Fast }),
+        buildModel(config, requestContext, { modelClass: ModelClass.ChatFast }),
     });
     plannerAgents.set(config, agent);
   }

@@ -31,11 +31,11 @@ browser bundle is safe.
 
 ## What's inside
 
-The single `dashboards` input currently expands to **74 exported
-schemas + matching inferred types**, covering the Genie and Lakeview
-SDK surfaces (conversations, messages, attachments, query results,
-suggested questions, dashboard schedules, subscriptions, etc.). The
-full list lives at
+The single `dashboards` input expands to a schema + matching inferred
+type per upstream shape, covering the Genie and Lakeview SDK surfaces
+(conversations, messages, attachments, query results, suggested
+questions, dashboard schedules, subscriptions, etc.). The generated
+output lives at
 [`./generated/dashboards.zod.ts`](./generated/dashboards.zod.ts) and
 the package barrel at
 [`./generated/index.ts`](./generated/index.ts).
@@ -91,7 +91,7 @@ export * from "./generated/index.js";
 ## Regenerating
 
 ```bash
-bun run prebuild         # runs codegen across every package with a codegen field
+bun run codegen          # runs codegen across every package with a codegen field
 # or, just sdk-shared:
 bun scripts/codegen.ts
 ```

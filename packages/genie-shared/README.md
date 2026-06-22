@@ -10,33 +10,7 @@ No `node:*`, no `WorkspaceClient`, no I/O. Safe to import from any
 runtime, including browser bundles.
 
 ```ts
-import {
-  // Wire schemas (extended over @dbx-tools/sdk-shared)
-  GenieMessageSchema,
-  GenieAttachmentSchema,
-  GenieQueryAttachmentSchema,
-  GenieThoughtSchema,
-  // High-level event union
-  GenieChatEventSchema,
-  type GenieChatEvent,
-  type GenieChatLocation,
-  // Status helpers
-  TERMINAL_STATUSES,
-  isTerminalStatus,
-  humanizeStatus,
-  // Attachment discriminator
-  detectAttachmentType,
-  // Pure event detectors + orchestrator
-  eventsFromMessage,
-  detectStatus,
-  detectThinking,
-  detectText,
-  detectQuery,
-  detectStatement,
-  detectRows,
-  detectSuggestedQuestions,
-  detectAttachmentAdded,
-} from "@dbx-tools/genie-shared";
+import { GenieChatEventSchema, type GenieChatEvent } from "@dbx-tools/genie-shared";
 ```
 
 Server-side chat driving (`genieChat`, `genieEventChat`) lives in
@@ -176,27 +150,20 @@ client (e.g. replaying persisted history, or driving your own loop
 that bypasses `genieEventChat`), use the pure detectors directly:
 
 ```ts
-import {
-  eventsFromMessage,
-  detectStatus,
-  detectText,
-} from "@dbx-tools/genie-shared";
+import { eventsFromMessage } from "@dbx-tools/genie-shared";
 
 // All detectors, in stable wire order:
 for (const event of eventsFromMessage(current, previous, spaceId)) {
   handleEvent(event);
 }
-
-// Or one detector at a time:
-const statusEvent = detectStatus.detect(current, previous, spaceId);
-const textEvent   = detectText.detect(currAttachment, prevAttachment, location, idx);
 ```
 
-Each detector is built with `eventDetector(name, detect)` so the
-event name (`"status"`) is a string literal that TS uses to look up
-the diff signature (`message` vs `attachment`) and the allowed
-return-fields shape (`DetectorResult<T>`). Mis-typing the event name
-or returning the wrong fields fails to compile.
+The per-event detectors are also exported individually (`detectStatus`,
+`detectText`, ...) for one-at-a-time use. Each is built with
+`eventDetector(name, detect)` so the event name is a string literal TS
+uses to look up the diff signature (`message` vs `attachment`) and the
+allowed return-fields shape; mis-typing the name or returning the wrong
+fields fails to compile.
 
 ## License
 

@@ -2,7 +2,7 @@
  * Mastra-specific glue over the generic `@dbx-tools/model` toolkit.
  *
  * The live `/serving-endpoints` catalogue access, fuzzy name
- * resolution, and tier/fallback selection all live in
+ * resolution, and class/fallback selection all live in
  * `@dbx-tools/model`; this module only adds what is specific to the
  * Mastra plugin: pulling a per-request model override off an HTTP
  * request (header / query / body) and projecting the plugin config

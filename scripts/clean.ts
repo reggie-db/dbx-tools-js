@@ -17,7 +17,7 @@
 
 import { existsSync, readdirSync, rmSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { ROOT, toRelative } from "./util.js";
+import { ROOT_DIR, toRelative } from "./util.js";
 
 /** Directory names we wipe wherever we find them. */
 const TARGET_NAMES = new Set(["node_modules", "dist"]);
@@ -56,8 +56,8 @@ function collectTargets(dir: string, acc: string[]): void {
 }
 
 const targets: string[] = [];
-collectTargets(ROOT, targets);
-for (const lockfile of ROOT_LOCKFILES) targets.push(join(ROOT, lockfile));
+collectTargets(ROOT_DIR, targets);
+for (const lockfile of ROOT_LOCKFILES) targets.push(join(ROOT_DIR, lockfile));
 
 let removed = 0;
 for (const target of targets) {

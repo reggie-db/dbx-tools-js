@@ -17,7 +17,6 @@ Databricks Apps. Nine publishable packages plus a runnable demo.
 | `packages/genie-shared` | `@dbx-tools/genie-shared` | Wire-format types + `GenieChatEvent` union for Genie streaming. |
 | `packages/genie` | `@dbx-tools/genie` | `genieChat` (raw) + `genieEventChat` (semantic events) drivers. |
 | `packages/appkit-config` | `@dbx-tools/appkit-config` | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env) before delegating to AppKit's `createApp`. |
-| `packages/appkit-serving` | `@dbx-tools/appkit-serving` | Typed accessors over `/api/2.0/serving-endpoints`. |
 | `packages/appkit-mastra` | `@dbx-tools/appkit-mastra` | AppKit plugin that mounts Mastra agents + chat route + Lakebase memory. |
 | `packages/appkit-mastra-shared` | `@dbx-tools/appkit-mastra-shared` | Dependency-free wire-format contract + URL helpers + Genie writer-event vocabulary. |
 | `packages/appkit-mastra-ui` | `@dbx-tools/appkit-mastra-ui` | React chat UI for the Mastra plugin (`./react` + `./styles.css`, AppKit-token styled). `MastraChat` drop-in + controlled `ChatView`. |

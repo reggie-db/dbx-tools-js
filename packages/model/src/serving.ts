@@ -6,26 +6,41 @@
  * callers sharing one in-flight promise (the coalescing pattern of
  * Python's `cachetools-async`). Surfaces each endpoint as a stable
  * {@link ServingEndpointSummary} - including the Foundation Model API
- * `quality` / `speed` / `cost` profile when present - and snaps loose,
- * human-typed names to real endpoint ids through `fuse.js` extended
- * search so tokens like `"claude sonnet"` resolve to
- * `databricks-claude-sonnet-4-6`.
+ * `quality` / `speed` / `cost` profile when present, the classified
+ * {@link ModelClass}, and (for embedding endpoints) the measured vector
+ * `dimension` - and snaps loose, human-typed names to real endpoint ids
+ * through `fuse.js` extended search so tokens like `"claude sonnet"`
+ * resolve to `databricks-claude-sonnet-4-6`.
+ *
+ * The class stamp and embedding dimension are computed once per cache
+ * load: every embedding endpoint is "pinged" in parallel and the
+ * resulting vector length recorded, so the cost is paid on a cache miss,
+ * not per read. The ping is best-effort - a failure logs at debug and
+ * leaves `dimension` unset rather than failing the whole listing.
  */
 
-import { CacheManager, type getExecutionContext } from "@databricks/appkit";
-import type { ModelProfile, ServingEndpointSummary } from "@dbx-tools/model-shared";
-import { logUtils, stringUtils } from "@dbx-tools/shared";
+import { CacheManager } from "@databricks/appkit";
+import {
+  classifyEndpoints,
+  ModelClass,
+  type ModelProfile,
+  type ServingEndpointSummary,
+} from "@dbx-tools/model-shared";
+import type { appkitUtils } from "@dbx-tools/shared";
+import { commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import Fuse from "fuse.js";
+
+import { MODEL_CLASS_ORDER } from "./classes.js";
 
 const log = logUtils.logger("model/serving");
 
 /**
- * Structural type for the Databricks workspace client. Derived from
- * AppKit's `ExecutionContext` so this module doesn't take a direct
- * dependency on `@databricks/sdk-experimental`; the dep flows in
- * transitively through `@databricks/appkit`.
+ * Structural type for the Databricks workspace client, re-exported from
+ * `@dbx-tools/shared` so the rest of this package can keep importing it
+ * from here. See `appkitUtils.WorkspaceClientLike` for the canonical
+ * definition.
  */
-export type WorkspaceClientLike = ReturnType<typeof getExecutionContext>["client"];
+export type WorkspaceClientLike = appkitUtils.WorkspaceClientLike;
 
 /** Default TTL for the in-memory endpoint cache. Matches the Databricks SDK's session lifetime budget. */
 export const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -46,6 +61,15 @@ const CACHE_KEY_NAMESPACE = "serving-endpoints";
  */
 const SHARED_USER_KEY = "model-shared";
 
+/** Options for {@link listServingEndpoints}. */
+export interface ListServingEndpointsOptions {
+  /**
+   * Override the default cache TTL for this call, in milliseconds.
+   * Forwarded to `CacheManager` as seconds.
+   */
+  ttlMs?: number;
+}
+
 /**
  * List Model Serving endpoints for the workspace owning `client`,
  * routed through AppKit's `CacheManager`. The manager gives us
@@ -65,17 +89,17 @@ const SHARED_USER_KEY = "model-shared";
  * @param host - Workspace host used as the cache key. Pass the value
  *   resolved from `client.config.getHost()` so multi-host apps share
  *   one entry per workspace.
- * @param opts.ttlMs - Override the default TTL just for this call.
+ * @param options.ttlMs - Override the default TTL just for this call.
  *   Forwarded to `CacheManager` as seconds.
  */
 export async function listServingEndpoints(
   client: WorkspaceClientLike,
   host: string,
-  opts: { ttlMs?: number } = {},
+  options: ListServingEndpointsOptions = {},
 ): Promise<ServingEndpointSummary[]> {
   const ttlSec = Math.max(
     1,
-    Math.round((opts.ttlMs ?? DEFAULT_MODEL_CACHE_TTL_MS) / 1000),
+    Math.round((options.ttlMs ?? DEFAULT_MODEL_CACHE_TTL_MS) / 1000),
   );
   return CacheManager.getInstanceSync().getOrExecute(
     [CACHE_KEY_NAMESPACE, host],
@@ -101,8 +125,73 @@ async function fetchEndpoints(
       ...(profile ? { profile } : {}),
     });
   }
+  stampModelClasses(out);
+  await measureEmbeddingDimensions(client, out);
   log.debug("listed", { count: out.length, elapsedMs: Date.now() - startedAt });
   return out;
+}
+
+/**
+ * Stamp each summary's {@link ServingEndpointSummary.class} from the
+ * relative classification of the whole set. Mutates `summaries` in
+ * place. Endpoints the classifier doesn't recognize (custom, unscored,
+ * non-LLM) are left without a class.
+ */
+function stampModelClasses(summaries: ServingEndpointSummary[]): void {
+  const buckets = classifyEndpoints(summaries);
+  const classOf = new Map<string, ModelClass>();
+  for (const cls of MODEL_CLASS_ORDER) {
+    for (const ep of buckets[cls]) classOf.set(ep.name, cls);
+  }
+  for (const summary of summaries) {
+    const cls = classOf.get(summary.name);
+    if (cls !== undefined) summary.class = cls;
+  }
+}
+
+/**
+ * Measure the embedding vector dimension of every
+ * {@link ModelClass.Embedding} endpoint by pinging it once, all in
+ * parallel. Mutates the matching summaries in place with the resulting
+ * `dimension`. Runs only on a cache miss (it's called from
+ * {@link fetchEndpoints}), so the probe cost is amortized across the
+ * cached TTL window. Per-endpoint failures are swallowed (logged at
+ * warn) so one unreachable embedding model never fails the listing.
+ */
+async function measureEmbeddingDimensions(
+  client: WorkspaceClientLike,
+  summaries: ServingEndpointSummary[],
+): Promise<void> {
+  await Promise.all(
+    summaries
+      .filter((s) => s.class === ModelClass.Embedding)
+      .map(async (summary) => {
+        const dimension = await pingEmbeddingDimension(client, summary.name);
+        if (dimension !== undefined) summary.dimension = dimension;
+      }),
+  );
+}
+
+/**
+ * Best-effort embedding dimension probe: query `name` with a tiny
+ * `"ping"` input and return the length of the returned vector. Returns
+ * `undefined` (and logs at warn) when the endpoint can't be queried or
+ * returns no vector - the dimension is informational, never required.
+ */
+async function pingEmbeddingDimension(
+  client: WorkspaceClientLike,
+  name: string,
+): Promise<number | undefined> {
+  try {
+    const response = await client.servingEndpoints.query({ name, input: "ping" });
+    const dimension = response.data?.[0]?.embedding?.length;
+    if (typeof dimension === "number" && dimension > 0) return dimension;
+    log.warn("embedding ping returned no vector", { name });
+    return undefined;
+  } catch (err) {
+    log.warn("embedding ping failed", { name, error: commonUtils.errorMessage(err) });
+    return undefined;
+  }
 }
 
 /**
@@ -174,47 +263,54 @@ export interface ResolvedModel {
   score?: number;
 }
 
-/** Options accepted by {@link resolveModelId}. */
+/** Options accepted by {@link resolveModelId} / {@link searchServingEndpoints}. */
 export interface ResolveModelOptions {
   /** Fuse.js threshold (0 = exact, 1 = anything). Default `0.4`. */
   threshold?: number;
 }
 
+/** A serving endpoint paired with its fuzzy-match distance for a query. */
+export interface ScoredEndpoint {
+  endpoint: ServingEndpointSummary;
+  /** Fuse.js distance: `0` is exact, `1` is no match. */
+  score: number;
+}
+
 /**
- * Snap a user-supplied model name to the closest configured serving
- * endpoint:
+ * Fuzzy-rank endpoints by how closely their `name` matches `input`,
+ * best (lowest score) first, keeping only those within `threshold`:
  *
- * 1. Exact name match wins immediately (no fuzzy needed).
+ * 1. An exact name match short-circuits to a single `score: 0` result.
  * 2. Otherwise the input is tokenized (dashes / underscores / spaces
- *    become separators) and fed through Fuse.js extended search,
- *    which AND-s each token with fuzzy matching enabled. This is the
- *    "tokenized fuzzy match" the user reaches for when they type
- *    `"claude sonnet"` instead of the full endpoint name.
- * 3. If the best Fuse score is above `threshold`, return the input
- *    unchanged and let the upstream call surface the 404. This keeps
- *    deliberate model ids (e.g. brand new endpoints) from being
- *    silently rewritten to a similar-looking neighbour.
+ *    become separators) and fed through Fuse.js extended search, which
+ *    AND-s each token with fuzzy matching enabled - the "tokenized
+ *    fuzzy match" a caller reaches for when they type `"claude sonnet"`
+ *    instead of the full endpoint name.
  *
- * Pass an empty endpoint list to short-circuit fuzzy matching - the
- * input is returned verbatim. This is what callers do when the
- * workspace client can't be reached at resolve time.
+ * Returns `[]` for an empty endpoint list or when `input` tokenizes to
+ * nothing, so callers fall back to the raw input and let Databricks
+ * surface a clean 404. This multi-result core is shared by
+ * {@link resolveModelId} (single best) and the ranked `rankModels`
+ * selector.
  */
-export function resolveModelId(
+export function searchServingEndpoints(
   input: string,
   endpoints: readonly ServingEndpointSummary[],
-  opts: ResolveModelOptions = {},
-): ResolvedModel {
-  if (endpoints.length === 0) {
-    log.debug("resolve:no-endpoints", { input });
-    return { modelId: input, matched: false };
-  }
+  options: ResolveModelOptions = {},
+): ScoredEndpoint[] {
+  if (endpoints.length === 0) return [];
   for (const ep of endpoints) {
-    if (ep.name === input) {
-      log.debug("resolve:exact", { input });
-      return { modelId: ep.name, matched: true, score: 0 };
-    }
+    if (ep.name === input) return [{ endpoint: ep, score: 0 }];
   }
-  const threshold = opts.threshold ?? DEFAULT_FUZZY_THRESHOLD;
+  const threshold = options.threshold ?? DEFAULT_FUZZY_THRESHOLD;
+  // Fuse 7.3 has no built-in tokenize hook; in extended search,
+  // space-separated tokens are AND-ed with fuzzy matching enabled. We
+  // lean on the shared tokenizer so the splitting rules stay
+  // consistent with the rest of the toolkit.
+  const query = Array.from(
+    stringUtils.tokenizeWithOptions({ lowerCase: true, camelCase: false }, input),
+  ).join(" ");
+  if (!query) return [];
   const fuse = new Fuse(endpoints, {
     keys: ["name"],
     threshold,
@@ -223,31 +319,28 @@ export function resolveModelId(
     useExtendedSearch: true,
     isCaseSensitive: false,
   });
-  // Fuse 7.3 has no built-in tokenize hook; in extended search,
-  // space-separated tokens are AND-ed with fuzzy matching enabled. We
-  // lean on the shared tokenizer so the splitting rules stay
-  // consistent with the rest of the toolkit.
-  const query = Array.from(
-    stringUtils.tokenizeWithOptions({ lowerCase: true, camelCase: false }, input),
-  ).join(" ");
-  if (!query) {
-    log.debug("resolve:empty-tokens", { input });
-    return { modelId: input, matched: false };
+  return fuse
+    .search(query)
+    .filter((r) => (r.score ?? 0) <= threshold)
+    .map((r) => ({ endpoint: r.item, score: r.score ?? 0 }));
+}
+
+/**
+ * Snap a user-supplied model name to the single closest configured
+ * serving endpoint via {@link searchServingEndpoints}. Returns the
+ * input unchanged with `matched: false` when nothing scores within the
+ * threshold (or the catalogue is empty), so a deliberate model id is
+ * never silently rewritten to a similar-looking neighbour and the
+ * upstream call surfaces the canonical 404.
+ */
+export function resolveModelId(
+  input: string,
+  endpoints: readonly ServingEndpointSummary[],
+  options: ResolveModelOptions = {},
+): ResolvedModel {
+  const [best] = searchServingEndpoints(input, endpoints, options);
+  if (best) {
+    return { modelId: best.endpoint.name, matched: true, score: best.score };
   }
-  const results = fuse.search(query);
-  const best = results[0];
-  if (best?.item.name && (best.score ?? 0) <= threshold) {
-    log.debug("resolve:fuzzy-match", {
-      input,
-      modelId: best.item.name,
-      score: best.score,
-    });
-    return { modelId: best.item.name, matched: true, score: best.score };
-  }
-  log.debug("resolve:no-match", {
-    input,
-    bestScore: best?.score,
-    threshold,
-  });
   return { modelId: input, matched: false };
 }

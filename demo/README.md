@@ -5,41 +5,19 @@ Runnable Databricks App that wires up the AppKit plugins in this repo plus
 
 Generated from the AppKit `app init` template, then adapted to:
 
-- Mount the Mastra plugin alongside `server`, `genie`, and `lakebase`,
-  booting through `@dbx-tools/appkit-config`'s `createApp` so Lakebase
-  env vars are auto-discovered (`autopg()`) before delegating to AppKit.
-- Hand the central Mastra agent the flat Genie toolset
-  (`ask_genie`, `get_statement`, `prepare_chart`, plus per-space
-  description / serialization tools) and the canonical
-  `GENIE_INSTRUCTIONS` block so the LLM can ask the configured
-  Genie space (`DATABRICKS_GENIE_SPACE_ID`) for SQL-backed
-  answers without any hand-written tool code. Genie streaming
-  events (status pills, thinking, SQL text, row sets, suggested
-  follow-ups) are forwarded through Mastra's `ToolStream` so the
-  UI shows live progress while the model is still waiting on the
-  final result.
-- Inline-render query results as Echarts visualizations. The
-  `prepare_chart` and `render_data` tools mint a short `chartId`
-  and kick chart planning into the background; the model embeds
-  `[chart:<chartId>]` in its markdown reply at the position the
-  chart should appear. The client's `<ChartSlot>` long-polls
-  `${basePath}/embed/chart/:id` (the generic embed route the Mastra
-  plugin exposes) for the resolved `EChartsOption` and renders it in
-  place. Unknown or TTL-expired ids resolve as nothing so the
-  prose flows undisturbed. See `packages/appkit-mastra/README.md`
-  for the full contract.
-- Render the chat UI with the publishable `@dbx-tools/appkit-mastra-ui`
-  package (built on `@databricks/appkit-ui` primitives plus
-  `streamdown` for GitHub-flavored markdown with Shiki syntax
-  highlighting and KaTeX math). The demo is a consumer of that
+- Boot through [`@dbx-tools/appkit-config`](../packages/appkit-config)'s
+  `createApp` (Lakebase env auto-discovery) and mount
+  [`@dbx-tools/appkit-mastra`](../packages/appkit-mastra) alongside
+  `server`, `genie`, and `lakebase`.
+- Give the agent the plugin's Genie toolset and `GENIE_INSTRUCTIONS` so
+  it can answer from the configured space (`DATABRICKS_GENIE_SPACE_ID`)
+  with live streaming progress and inline Echarts charts - the contract
+  for both lives in
+  [`@dbx-tools/appkit-mastra`](../packages/appkit-mastra).
+- Render the chat with the prebuilt `MastraChat` drop-in (`/stream`)
+  from [`@dbx-tools/appkit-mastra-ui`](../packages/appkit-mastra-ui),
+  with the model picker enabled. The demo is a consumer of that
   package, not the home of the chat code.
-- Ship the self-contained `MastraChat` drop-in (`/stream`) that wires
-  itself from the Mastra plugin config and streams over
-  `@mastra/client-js` (`getAgent(id).stream()`). Includes a
-  model-picker dropdown driven by `GET /api/mastra/models` (the live
-  serving-endpoint catalogue), passing the selection through an
-  `X-Mastra-Model` header, and lazy-loads older history on scroll-up
-  via `/api/mastra/route/history`.
 - Bind to `127.0.0.1` locally for the friendliest dev URL; falls back
   to `0.0.0.0` automatically when `DATABRICKS_APP_PORT` is set (i.e.
   inside a deployed Databricks App).

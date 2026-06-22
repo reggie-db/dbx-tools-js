@@ -5,10 +5,6 @@
     "@dbx-tools/shared": "workspace:*",
     "jose": "^6"
   },
-  "devDependencies": {
-    "@types/express": "catalog:",
-    "express": "catalog:"
-  },
   "module": "index.ts",
   "peerDependencies": {
     "express": "catalog:"

@@ -19,11 +19,6 @@
     "pg": "^8.20.0",
     "zod": "catalog:"
   },
-  "devDependencies": {
-    "@types/express": "catalog:",
-    "@types/pg": "^8",
-    "express": "catalog:"
-  },
   "module": "index.ts",
   "peerDependencies": {
     "@databricks/appkit": "catalog:",

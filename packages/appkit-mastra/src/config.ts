@@ -5,7 +5,8 @@
  * `memory.ts` can import them without creating a cycle.
  */
 
-import type { BasePluginConfig, getExecutionContext } from "@databricks/appkit";
+import type { BasePluginConfig } from "@databricks/appkit";
+import type { appkitUtils } from "@dbx-tools/shared";
 import type { AgentConfig } from "@mastra/core/agent";
 import {
   MASTRA_RESOURCE_ID_KEY,
@@ -71,7 +72,7 @@ export const TRACE_REQUEST_CONTEXT_KEYS: readonly string[] = [
 /** AppKit execution context plus the canonical user id. */
 export interface User {
   id: string;
-  executionContext: ReturnType<typeof getExecutionContext>;
+  executionContext: appkitUtils.ExecutionContextLike;
 }
 
 /** PgVector config with an optional Mastra store id. */
@@ -207,9 +208,10 @@ export interface MastraPluginConfig extends BasePluginConfig {
    *
    * When unset, resolution is driven by the live Foundation Model API
    * `quality` / `speed` / `cost` scores: endpoints are classified into
-   * tiers (`classifyEndpoints`) and walked best-first (Thinking ->
-   * Balanced -> Fast), with the small built-in `FALLBACK_MODEL_IDS`
-   * list as the floor when the catalogue can't be read. Set this to
+   * chat classes (`classifyEndpoints`) and walked best-first
+   * (ChatThinking -> ChatBalanced -> ChatFast), with the small built-in
+   * `FALLBACK_MODEL_IDS` list as the floor when the catalogue can't be
+   * read. Set this to
    * pin a regulated workspace to an approved subset, or to put custom
    * endpoints in front of the auto-classified catalogue.
    */

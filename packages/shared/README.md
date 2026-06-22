@@ -54,8 +54,7 @@ need the registered name for a manifest dependency.
 
 ## `httpUtils` - framework-neutral header helpers
 
-Public surface: `forEachHeaderValue`, `parseCookies`. The header-shaped
-helpers work uniformly against any of:
+The header-shaped helpers work uniformly against any of:
 
 - Express `req` (Node-style `req.headers`)
 - Web Fetch `Request` (`Headers` instance)
@@ -80,9 +79,9 @@ app.use((req, res, next) => {
 
 ## `netUtils` - URL builder + path matching
 
-Public surface: `urlBuilder`, `pathMatch`. The URL helpers are pure
-JS and ship in the browser bundle too; the server entry re-exports
-the same surface and is where any server-only (node) helpers belong.
+The URL helpers are pure JS and ship in the browser bundle too; the
+server entry re-exports the same surface and is where any server-only
+(node) helpers belong.
 
 ```ts
 import { netUtils } from "@dbx-tools/shared";

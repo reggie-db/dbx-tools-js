@@ -7,7 +7,7 @@
  *   1. Genie wire shapes derived from `@dbx-tools/sdk-shared`'s
  *      `dashboards.zod.ts` (which is regenerated from the upstream
  *      `@databricks/sdk-experimental` `apis/dashboards/model.d.ts`
- *      on every `bun run prebuild`). We extend the SDK schemas
+ *      on every `bun run codegen`). We extend the SDK schemas
  *      where Genie ships fields on the wire that the SDK doesn't
  *      currently type:
  *

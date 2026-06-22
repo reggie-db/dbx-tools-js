@@ -1,24 +1,26 @@
 // Keep root `tsconfig.json` in sync with the workspace.
 //
-// Walks every workspace tsconfig (via `discoverTsconfigs`) and writes
-// the deduped list back into the root config's `references` array,
-// preserving any non-string-path entries the developer added by hand.
+// Walks every workspace package's tsconfigs (via `pkg.tsconfigs()`) and
+// writes the deduped list back into the root config's `references`
+// array, preserving any non-string-path entries the developer added by
+// hand.
 //
 // Also enforces `"files": []` so a bare `tsc` / `tsc --noEmit` at the
 // repo root doesn't auto-glob the whole tree (which produces TS6305
 // once any referenced project sets `composite: true`, and bogus errors
 // against demo client files that need the demo's `lib`/`paths`).
 //
-// Run via `bun run prebuild`. Idempotent.
+// Run via the `pretypecheck` hook before `bun run typecheck` (and thus
+// during the `bun run build` gate). Idempotent.
 
 import { applyEdits, modify, parse } from "jsonc-parser";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { discoverTsconfigs, ROOT, toAbsolute, toRelative } from "./util.js";
+import { discoverPackages, ROOT_DIR, toAbsolute, toRelative } from "./util.js";
 
 const FORMAT = { insertSpaces: true, tabSize: 2 } as const;
 
-const rootTsconfigPath = `${ROOT}/tsconfig.json`;
+const rootTsconfigPath = `${ROOT_DIR}/tsconfig.json`;
 const original = await Bun.file(rootTsconfigPath).text();
 const parsed = parse(original) as {
   references?: ReadonlyArray<{ path?: unknown } | unknown>;
@@ -41,8 +43,11 @@ for (const ref of parsed.references ?? []) {
   }
   nonPathRefs.push(ref);
 }
-for await (const tsconfig of discoverTsconfigs()) {
-  refPaths.add(toAbsolute(tsconfig));
+
+for (const pkg of await discoverPackages()) {
+  for await (const tsconfig of pkg.tsconfigs()) {
+    refPaths.add(tsconfig);
+  }
 }
 
 const references = [

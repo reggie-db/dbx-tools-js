@@ -6,9 +6,6 @@
     "lru-cache": "catalog:",
     "zod": "catalog:"
   },
-  "devDependencies": {
-    "@databricks/sdk-experimental": "catalog:"
-  },
   "exports": {
     ".": {
       "browser": {
