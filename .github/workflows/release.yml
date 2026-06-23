@@ -77,7 +77,12 @@ jobs:
           registry-url: "https://registry.npmjs.org/"
 
       - name: Install
-        run: bun install --frozen-lockfile
+        # Not `--frozen-lockfile`: `bun.lock` is intentionally not
+        # committed, so a frozen install has nothing to freeze against and
+        # never writes the lockfile to disk. A plain `bun install` resolves
+        # and writes `bun.lock`, which the pacwich-based build scripts read
+        # to discover the workspaces.
+        run: bun install
 
       - name: Build
         run: bun run build

@@ -15,7 +15,12 @@ import { getWorkspaceScriptMetadata } from "pacwich/script";
 type ShellDefault = FileSystemProject["config"]["project"]["defaults"]["shell"];
 
 export const getProject = pMemoize(async (): Promise<FileSystemProject> => {
-  const options: CreateFileSystemProjectOptions = {};
+  // Pin the package manager to bun rather than auto-detecting it from
+  // lockfiles. This repo is bun-only, and `bun.lock` is intentionally not
+  // committed; the install step regenerates it so pacwich can still read
+  // it for workspace discovery, but we don't want PM *selection* to hinge
+  // on which lockfiles happen to be on disk.
+  const options: CreateFileSystemProjectOptions = { packageManager: "bun" };
   const projectPath = readProjectPath();
   if (projectPath) options.rootDirectory = projectPath;
   const project = createFileSystemProject(options);
