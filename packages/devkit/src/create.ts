@@ -51,6 +51,7 @@
 // lockstep with the changesets `fixed` group so the next version bump
 // moves it alongside everyone else.
 
+import { consola } from "consola";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import semver from "semver";
@@ -238,7 +239,7 @@ export const ${camel} = toPlugin(${className});
     write(resolve(pkgDir, "index.ts"), indexTs);
     write(resolve(pkgDir, "src", `${dirSlug}.ts`), pluginTs);
 
-    console.log(
+    consola.log(
       `Scaffolded packages/${dirSlug}/ (plugin, npm name ${pkgName}, manifest name "${bareSlug}")`,
     );
   } else if (kind === "shared") {
@@ -261,7 +262,7 @@ export * from "./src/protocol.js";
     write(resolve(pkgDir, "index.ts"), indexTs);
     write(resolve(pkgDir, "src", "protocol.ts"), protocolTs);
 
-    console.log(`Scaffolded packages/${dirSlug}/ (shared, npm name ${pkgName})`);
+    consola.log(`Scaffolded packages/${dirSlug}/ (shared, npm name ${pkgName})`);
   } else {
     // Standard package: a single barrel re-exporting a seed source module.
     const indexTs = `export * from "./src/${dirSlug}.js";\n`;
@@ -275,8 +276,8 @@ export {};
     write(resolve(pkgDir, "index.ts"), indexTs);
     write(resolve(pkgDir, "src", `${dirSlug}.ts`), sourceTs);
 
-    console.log(`Scaffolded packages/${dirSlug}/ (standard, npm name ${pkgName})`);
+    consola.log(`Scaffolded packages/${dirSlug}/ (standard, npm name ${pkgName})`);
   }
 
-  console.log(`Run \`bun install\` to link the workspace.`);
+  consola.log(`Run \`bun install\` to link the workspace.`);
 }

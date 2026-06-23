@@ -8,6 +8,7 @@
 // break for external npm consumers, who only get what the manifest
 // declares - so we treat them as errors and fail the build.
 
+import { consola } from "consola";
 import { getProject } from "./project.js";
 import { fail } from "./script.js";
 
@@ -17,7 +18,8 @@ export async function verify(): Promise<void> {
   const result = await project.verify({ strict: true });
 
   for (const issue of [...result.errors, ...result.warnings]) {
-    console.log(`${issue.level === "error" ? "✗" : "!"} ${issue.message}`);
+    if (issue.level === "error") consola.error(issue.message);
+    else consola.warn(issue.message);
   }
 
   if (!result.ok) {
@@ -27,5 +29,5 @@ export async function verify(): Promise<void> {
     );
   }
 
-  console.log(`verify: ${project.workspaces.length} workspace(s) OK`);
+  consola.log(`verify: ${project.workspaces.length} workspace(s) OK`);
 }

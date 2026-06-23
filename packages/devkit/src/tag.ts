@@ -22,6 +22,7 @@
 //   - Branch must have an upstream (otherwise we can't push).
 //   - New tag must not already exist locally or on the remote.
 
+import { consola } from "consola";
 import semver from "semver";
 import { agentQuery } from "./agent.js";
 import { getDevkitConfig } from "./config.js";
@@ -198,7 +199,7 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
   try {
     return await agentQuery(NOTES_INSTRUCTIONS, ctx);
   } catch (error) {
-    console.warn("Release notes hook failed, falling back:", error);
+    consola.warn("Release notes hook failed, falling back:", error);
     return null;
   }
 }
@@ -214,10 +215,10 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
  */
 async function publishGithubRelease(tag: string, body: string): Promise<void> {
   if (!Bun.which("gh")) {
-    console.log("(skipping GitHub Release: gh CLI not on PATH)");
+    consola.log("(skipping GitHub Release: gh CLI not on PATH)");
     return;
   }
-  console.log(`Publishing GitHub Release ${tag}...`);
+  consola.log(`Publishing GitHub Release ${tag}...`);
   const gh = async (args: string[]): Promise<number> => {
     const { exitCode } = await sh(["gh", ...args], { nothrow: true });
     return exitCode;
@@ -235,10 +236,10 @@ async function publishGithubRelease(tag: string, body: string): Promise<void> {
   // Most common failure: the release already exists (e.g. the tag
   // was pushed but a previous run aborted before this step). Update
   // it in place so reruns are idempotent.
-  console.warn(`gh release create exited ${createCode}; trying gh release edit.`);
+  consola.warn(`gh release create exited ${createCode}; trying gh release edit.`);
   const editCode = await gh(["release", "edit", tag, "--notes", body]);
   if (editCode !== 0) {
-    console.warn(
+    consola.warn(
       `gh release edit exited ${editCode}; release may need manual creation.`,
     );
   }
@@ -297,30 +298,30 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   const prevTag =
     (await git(["describe", "--tags", "--abbrev=0"], { nothrow: true })).stdout || null;
 
-  console.log(`Bump:    ${bump}`);
-  console.log(`Current: ${currentVersion}`);
-  console.log(`Next:    ${nextVersion}`);
-  console.log(`Tag:     ${tagName}`);
-  console.log(`Prev:    ${prevTag ?? "(none)"}`);
+  consola.log(`Bump:    ${bump}`);
+  consola.log(`Current: ${currentVersion}`);
+  consola.log(`Next:    ${nextVersion}`);
+  consola.log(`Tag:     ${tagName}`);
+  consola.log(`Prev:    ${prevTag ?? "(none)"}`);
   const headSha = await gitRevParse("--short", "HEAD");
-  console.log(`HEAD:    ${headSha} (${branch})`);
-  console.log(`Packages:`);
-  for (const p of pkgs) console.log(`  ${p.name}`);
+  consola.log(`HEAD:    ${headSha} (${branch})`);
+  consola.log(`Packages:`);
+  for (const p of pkgs) consola.log(`  ${p.name}`);
   if (dirty) {
-    console.log(`Dirty files (will be folded into the release commit):`);
-    for (const line of nonEmptyLines(dirty)) console.log(`  ${line}`);
+    consola.log(`Dirty files (will be folded into the release commit):`);
+    for (const line of nonEmptyLines(dirty)) consola.log(`  ${line}`);
   }
   if (ahead !== "0") {
-    console.log(`Unpushed commits: ${ahead} (will be pushed with the release commit)`);
+    consola.log(`Unpushed commits: ${ahead} (will be pushed with the release commit)`);
   }
-  console.log();
+  consola.log("");
 
   // Opt-in via `readme`: sync READMEs with current source before the
   // release commit is built so the shipped docs match the tagged code.
   if (readme) {
-    console.log("Syncing READMEs with current source...");
+    consola.log("Syncing READMEs with current source...");
     await syncReadmes({ upgrade: true, dryRun });
-    console.log();
+    consola.log("");
   }
 
   const notesContext = await buildReleaseNotesContext(prevTag, tagName);
@@ -328,7 +329,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   const hasChanges =
     notesContext.commits.length > 0 || notesContext.pendingFiles.length > 0;
   if (!hasChanges) {
-    console.log(
+    consola.log(
       "(skipping release notes: no commits or pending changes since previous tag)",
     );
   } else {
@@ -338,36 +339,36 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
     ? `Release ${tagName}\n\n${aiSummary}\n`
     : `Release ${tagName}`;
 
-  console.log();
-  console.log("--- tag message ---");
-  console.log(tagMessage);
-  console.log("-------------------");
-  console.log();
+  consola.log("");
+  consola.log("--- tag message ---");
+  consola.log(tagMessage);
+  consola.log("-------------------");
+  consola.log("");
 
   if (dryRun) {
-    console.log("--dry-run: skipping write, commit, tag, and push.");
+    consola.log("--dry-run: skipping write, commit, tag, and push.");
     if (publish) {
-      console.log();
-      console.log(`--dry-run: previewing local publish to ${registry}...`);
+      consola.log("");
+      consola.log(`--dry-run: previewing local publish to ${registry}...`);
       await release({ registry, dryRun: true });
     }
     return;
   }
 
-  console.log(`Writing ${nextVersion} to ${pkgs.length} package.json file(s)...`);
+  consola.log(`Writing ${nextVersion} to ${pkgs.length} package.json file(s)...`);
   for (const p of pkgs) await writeVersion(p.jsonPath, nextVersion);
 
-  console.log(`Committing release ${tagName}...`);
+  consola.log(`Committing release ${tagName}...`);
   await git(["add", "-A"]);
   await git(["commit", "-m", `chore: release ${tagName}`]);
 
-  console.log(`Pushing ${branch}...`);
+  consola.log(`Pushing ${branch}...`);
   await gitPush(branch);
 
-  console.log(`Tagging HEAD as ${tagName}...`);
+  consola.log(`Tagging HEAD as ${tagName}...`);
   await git(["tag", "-a", tagName, "-m", tagMessage]);
 
-  console.log(`Pushing ${tagName} to origin...`);
+  consola.log(`Pushing ${tagName} to origin...`);
   await gitPush(tagName);
 
   // The annotated tag message shows up as plaintext on GitHub's tag
@@ -379,29 +380,29 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   // consume them right away. Best-effort: the tag is already pushed, so
   // an unreachable local registry is a warning, not a failure.
   if (publish) {
-    console.log();
-    console.log(`Publishing ${tagName} to local registry ${registry}...`);
+    consola.log("");
+    consola.log(`Publishing ${tagName} to local registry ${registry}...`);
     try {
       const result = await release({ registry });
       if (result.failed > 0) {
-        console.warn(
+        consola.warn(
           `  ${result.failed} package(s) failed to publish to ${registry}; rerun \`devkit release\` once it's reachable.`,
         );
       }
     } catch (err) {
-      console.warn(
+      consola.warn(
         `  local publish to ${registry} failed: ${errorMessage(err)}; rerun \`devkit release\`.`,
       );
     }
   }
 
-  console.log();
-  console.log(`✓ Released ${tagName}.`);
+  consola.log("");
+  consola.log(`✓ Released ${tagName}.`);
   const { repo } = await getDevkitConfig();
   if (repo) {
-    console.log("  The Release workflow will fire on the tag push:");
-    console.log(`  https://github.com/${repo}/actions/workflows/release.yml`);
+    consola.log("  The Release workflow will fire on the tag push:");
+    consola.log(`  https://github.com/${repo}/actions/workflows/release.yml`);
   } else {
-    console.log("  The Release workflow will fire on the tag push.");
+    consola.log("  The Release workflow will fire on the tag push.");
   }
 }

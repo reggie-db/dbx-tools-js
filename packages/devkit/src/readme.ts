@@ -21,6 +21,7 @@
 // package right before assembling the release commit, so the
 // shipped READMEs always reflect the code being tagged.
 
+import { consola } from "consola";
 import { resolve } from "node:path";
 import { agentQuery } from "./agent.js";
 import { discoverPackages, toRelative } from "./package.js";
@@ -127,7 +128,7 @@ export async function syncReadmes(
 
     if (existing && !upgrade) {
       skipped++;
-      console.log(`skip ${pkg.meta.name} (README exists; pass --upgrade to refresh)`);
+      consola.log(`skip ${pkg.meta.name} (README exists; pass --upgrade to refresh)`);
       continue;
     }
 
@@ -148,14 +149,14 @@ existing README byte-for-byte.
 ${existing}`
       : `Write a README for ${pkg.meta.name} from scratch by inspecting its source.`;
 
-    console.log(`> ${pkg.meta.name} (${mode})`);
+    consola.log(`> ${pkg.meta.name} (${mode})`);
     const md = await agentQuery(prompt, undefined, {
       instructions: README_INSTRUCTIONS,
       cwd: pkg.dir,
     });
     if (!md) {
       failed++;
-      console.warn(`  no agent output (skipping; check Databricks auth)`);
+      consola.warn(`  no agent output (skipping; check Databricks auth)`);
       continue;
     }
 
@@ -165,24 +166,24 @@ ${existing}`
     const cleaned = md.trim();
     if (!cleaned.startsWith("# ")) {
       failed++;
-      console.warn(`  agent output didn't start with a '# ' heading; skipping`);
+      consola.warn(`  agent output didn't start with a '# ' heading; skipping`);
       continue;
     }
 
     const body = cleaned.endsWith("\n") ? cleaned : `${cleaned}\n`;
     if (dryRun) {
-      console.log(`\n--- ${pkg.meta.name}: ${toRelative(readmePath)} ---\n${body}`);
+      consola.log(`\n--- ${pkg.meta.name}: ${toRelative(readmePath)} ---\n${body}`);
     } else if (existing && body === existing) {
       skipped++;
-      console.log(`  unchanged (already in sync)`);
+      consola.log(`  unchanged (already in sync)`);
     } else {
       await Bun.write(readmePath, body);
       wrote++;
-      console.log(`  wrote ${toRelative(readmePath)}`);
+      consola.log(`  wrote ${toRelative(readmePath)}`);
     }
   }
 
-  console.log(
+  consola.log(
     `\nDone: ${wrote} written, ${skipped} skipped, ${failed} failed (of ${pkgs.length} package(s))${
       dryRun ? " [--dry-run, nothing persisted]" : ""
     }.`,

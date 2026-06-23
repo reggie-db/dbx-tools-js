@@ -21,6 +21,7 @@
 // private packages (e.g. a demo) aren't shipped to npm and have their
 // own build pipelines.
 
+import { consola } from "consola";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { clean } from "./clean.js";
@@ -98,7 +99,7 @@ async function pruneUnusedDevDependencies(): Promise<number> {
     if (Object.keys(devDeps).length === 0) delete meta.devDependencies;
     await writeJson(jsonPath, meta);
     removed += dropped.length;
-    console.log(`pruned ${dropped.sort().join(", ")} from ${toRelative(jsonPath)}`);
+    consola.log(`pruned ${dropped.sort().join(", ")} from ${toRelative(jsonPath)}`);
   }
   return removed;
 }
@@ -110,7 +111,7 @@ export async function build(): Promise<void> {
   await typecheck();
   await verify();
   const removed = await pruneUnusedDevDependencies();
-  console.log(
+  consola.log(
     removed > 0
       ? `Removed ${removed} unused devDependenc${removed === 1 ? "y" : "ies"}.`
       : "No unused devDependencies found.",
@@ -123,7 +124,7 @@ export async function build(): Promise<void> {
     existsSync(resolve(pkg.dir, "tsconfig.build.json")),
   );
 
-  console.log(`=== Building ${targets.length} package(s) ===`);
+  consola.log(`=== Building ${targets.length} package(s) ===`);
 
   // Wipe every package's build output first, so a stale
   // `tsconfig.build.tsbuildinfo` can't make tsc skip emit and leave an
@@ -145,5 +146,5 @@ export async function build(): Promise<void> {
     fail(`Build failed: ${failed.join(", ")}`);
   }
 
-  console.log(`\nBuilt ${summary.successCount} package(s).`);
+  consola.log(`\nBuilt ${summary.successCount} package(s).`);
 }

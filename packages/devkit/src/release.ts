@@ -55,6 +55,7 @@
 // publishes work with zero `npm login` / `bun login` and the user's
 // real `~/.npmrc` is never touched.
 
+import { consola } from "consola";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
@@ -368,30 +369,34 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
 
       if (dryRun) {
         await sh(["bun", "pm", "pack", "--dry-run"], { cwd: stageDir });
-        console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
+        consola.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
         return;
       }
       const args = ["publish", "--access=public", `--registry=${registry}`];
       if (otp) args.push(`--otp=${otp}`);
-      await sh(["npm", ...args], { cwd: stageDir });
-      console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
+      // `npm publish` streams a long `npm notice` tarball manifest on
+      // success. Keep it quiet - the output is still captured and, on a
+      // non-zero exit, surfaced via the thrown error's detail - so a
+      // normal release prints just the per-package `✓ published` line.
+      await sh(["npm", ...args], { cwd: stageDir, quiet: true });
+      consola.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
     } finally {
       rmSync(stageDir, { recursive: true, force: true });
     }
   }
 
-  console.log(
+  consola.log(
     `${dryRun ? "Dry-run packing" : "Publishing"} ${packages.length} package(s) to ${registry}:`,
   );
-  for (const pkg of packages) console.log(`  - ${pkg.slug}`);
-  console.log();
+  for (const pkg of packages) consola.log(`  - ${pkg.slug}`);
+  consola.log("");
 
   let published = 0;
   let skipped = 0;
   let failed = 0;
   for (const pkg of packages) {
     if (!dryRun && (await isAlreadyPublished(pkg, registry))) {
-      console.log(
+      consola.log(
         `- skipping ${pkg.meta.name}@${pkg.meta.version}: already on registry`,
       );
       skipped++;
@@ -402,7 +407,7 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
       published++;
     } catch (err) {
       failed++;
-      console.error(
+      consola.error(
         `✗ publish failed for ${pkg.meta.name}@${pkg.meta.version}: ${errorMessage(err)}`,
       );
     }

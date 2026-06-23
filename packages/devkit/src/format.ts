@@ -14,6 +14,7 @@
 // finder rather than a hand-maintained glob, so a newly created
 // package is picked up automatically.
 
+import { consola } from "consola";
 import {
   discoverPackageJsons,
   discoverPackages,
@@ -85,7 +86,7 @@ export async function format(): Promise<void> {
     await writeJson(jsonPath, meta);
     regrouped.push(toRelative(jsonPath));
   }
-  console.log(
+  consola.log(
     regrouped.length > 0
       ? `Regrouped lifecycle scripts in:\n${regrouped.join("\n")}`
       : "No lifecycle scripts to regroup.",
@@ -102,5 +103,5 @@ export async function format(): Promise<void> {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.endsWith("(unchanged)"));
-  console.log(changed.length > 0 ? changed.join("\n") : "No files reformatted.");
+  consola.log(changed.length > 0 ? changed.join("\n") : "No files reformatted.");
 }

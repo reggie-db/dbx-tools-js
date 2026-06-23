@@ -59,6 +59,7 @@
 // into `generated/` without updating the ignore - codegen aborts
 // with a clear error rather than overwriting their work.
 
+import { consola } from "consola";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { generate } from "ts-to-zod";
@@ -364,7 +365,7 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
       fail(`${pkg.slug}: codegen input not found: ${input.source}`);
     }
 
-    console.log(`  ${input.name} <- ${input.source}`);
+    consola.log(`  ${input.name} <- ${input.source}`);
 
     const sourceText = preprocess(stripImports(sourcePath));
     const { getZodSchemasFile, getInferredTypes, errors } = generate({
@@ -377,7 +378,7 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
     });
     if (errors.length) {
       warnings += errors.length;
-      for (const err of errors) console.warn(`    ! ${err}`);
+      for (const err of errors) consola.warn(`    ! ${err}`);
     }
 
     // ts-to-zod only adds an `import { ... } from <typesImportPath>`
@@ -397,7 +398,7 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
     HEADER + indexLines.join("\n") + "\n",
   );
 
-  console.log(
+  consola.log(
     `${pkg.meta.name ?? pkg.slug}: ${inputs.length} module(s) -> ` +
       `${toRelative(generatedDir)}/` +
       (warnings ? ` (${warnings} warning(s))` : ""),
@@ -413,7 +414,7 @@ export async function codegen(): Promise<void> {
   );
 
   if (targets.length === 0) {
-    console.log("codegen: no workspace packages declare a `codegen` field");
+    consola.log("codegen: no workspace packages declare a `codegen` field");
     return;
   }
   for (const pkg of targets) {
