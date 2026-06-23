@@ -54,6 +54,24 @@ interface KnipReport {
 }
 
 /**
+ * Names of dependencies a package consumes through its `codegen.inputs`
+ * (paths shaped like `node_modules/<pkg>/<rest>`). knip can't see these
+ * - the dependency is referenced by a `package.json` field, not an
+ * `import` - so the prune step must treat them as used or it would
+ * delete the build input out from under codegen.
+ */
+function codegenReferencedDeps(meta: PackageJson): Set<string> {
+  const inputs = (meta as { codegen?: { inputs?: string[] } }).codegen?.inputs ?? [];
+  const names = new Set<string>();
+  for (const input of inputs) {
+    const source = input.split("=")[0] ?? "";
+    const match = source.match(/^node_modules\/(@[^/]+\/[^/]+|[^/]+)\//);
+    if (match) names.add(match[1]!);
+  }
+  return names;
+}
+
+/**
  * Run knip, parse its JSON report, and strip every devDependency it
  * flags as unused from the `package.json` that declared it. Deletes the
  * whole `devDependencies` block once it empties out (the repo keeps no
@@ -90,7 +108,9 @@ async function pruneUnusedDevDependencies(): Promise<number> {
     const meta = (await Bun.file(jsonPath).json()) as PackageJson;
     const devDeps = meta.devDependencies as Record<string, string> | undefined;
     if (!devDeps) continue;
+    const keep = codegenReferencedDeps(meta);
     const dropped = [...names].filter((name) => {
+      if (keep.has(name)) return false;
       if (!(name in devDeps)) return false;
       delete devDeps[name];
       return true;

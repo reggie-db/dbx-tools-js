@@ -106,6 +106,29 @@ function parseInputArg(value: string): CodegenInput {
   return { source: value.slice(0, eq), name: value.slice(eq + 1) };
 }
 
+/**
+ * Resolve a codegen input to an absolute path. A `node_modules/...`
+ * source is searched for in each `node_modules` from the consuming
+ * package up to the filesystem root, so it resolves whether the
+ * dependency is nested under the package or hoisted to the workspace
+ * root - the package manager's hoisting layout doesn't matter as long
+ * as the consuming package declares the dependency. Any other source
+ * (and the not-found fallback) is treated as repo-root-relative.
+ */
+function resolveInputSource(source: string, fromDir: string): string {
+  if (source.startsWith("node_modules/")) {
+    let dir = fromDir;
+    for (;;) {
+      const candidate = resolve(dir, source);
+      if (existsSync(candidate)) return candidate;
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return toAbsolute(source);
+}
+
 /* ------------------------- ts-to-zod prep ------------------------- */
 
 /**
@@ -360,7 +383,7 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
   const indexLines: string[] = [];
   let warnings = 0;
   for (const input of inputs) {
-    const sourcePath = toAbsolute(input.source);
+    const sourcePath = resolveInputSource(input.source, pkg.dir);
     if (!existsSync(sourcePath)) {
       fail(`${pkg.slug}: codegen input not found: ${input.source}`);
     }
