@@ -68,7 +68,10 @@ export function resetEmailRuntime(): void {
  * outbox embeds the rendered HTML in a document. In file mode the
  * returned `messageId` is the path written.
  */
-export async function sendEmail(message: EmailMessage, from: string): Promise<EmailResult> {
+export async function sendEmail(
+  message: EmailMessage,
+  from: string,
+): Promise<EmailResult> {
   const { config, transporter } = getEmailRuntime();
 
   if (config.mode === "file") {

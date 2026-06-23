@@ -12,6 +12,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@databricks/appkit-ui/react";
+import { EmailPreview, type EmailMessage } from "@dbx-tools/appkit-email-ui/react";
 import type { UIMessage } from "ai";
 import {
   CheckIcon,
@@ -24,7 +25,6 @@ import {
   XIcon,
 } from "lucide-react";
 import { useState } from "react";
-import { EmailPreview, type EmailMessage } from "@dbx-tools/appkit-email-ui/react";
 import { MarkdownWithEmbeds } from "./embed-slots.js";
 import { SuggestionPills } from "./suggestion-pills.js";
 import { collectSuggestions } from "./suggestions.js";

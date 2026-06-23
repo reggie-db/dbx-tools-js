@@ -23,16 +23,14 @@ function isPipeRow(line: string): boolean {
 
 /** A markdown table separator row, e.g. `| --- | :--: |`. */
 function isSeparatorRow(line: string): boolean {
-  return /^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$/.test(line);
+  return /^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$/.test(
+    line,
+  );
 }
 
 /** Column count of a pipe row (outer pipes optional). */
 function pipeColumns(line: string): number {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|").length;
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").length;
 }
 
 /** A GFM separator row with `columns` cells. */
@@ -88,5 +86,9 @@ export function normalizeMarkdown(src: string): string {
 
 /** Render a markdown body to an HTML fragment (GFM tables enabled). */
 export function markdownToHtml(body: string): string {
-  return marked.parse(normalizeMarkdown(body), { async: false, gfm: true, breaks: true });
+  return marked.parse(normalizeMarkdown(body), {
+    async: false,
+    gfm: true,
+    breaks: true,
+  });
 }

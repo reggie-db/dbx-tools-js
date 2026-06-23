@@ -13,11 +13,7 @@
  * unprefixed `SMTP_*` / `EMAIL_*` environment fallbacks.
  */
 
-import {
-  Plugin,
-  toPlugin,
-  type PluginManifest,
-} from "@databricks/appkit";
+import { Plugin, toPlugin, type PluginManifest } from "@databricks/appkit";
 import type { EmailMessage, EmailResult } from "@dbx-tools/appkit-email-shared";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import { EMAIL_CONFIG_SCHEMA, type EmailPluginConfig } from "./config.js";
@@ -57,7 +53,8 @@ export class EmailPlugin extends Plugin<EmailPluginConfig> {
     if (config.mode === "file") {
       this.log.warn("outbox:enabled", {
         dir: config.outDir,
-        reason: "no SMTP credentials configured; emails are written to disk instead of sent",
+        reason:
+          "no SMTP credentials configured; emails are written to disk instead of sent",
       });
       return;
     }

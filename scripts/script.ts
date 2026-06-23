@@ -17,6 +17,19 @@ export function fail(message: string): never {
   process.exit(1);
 }
 
+/** Narrow an unknown thrown value to its message string. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Split text on newlines, trimming each line and dropping blanks. */
+export function nonEmptyLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 /**
  * Run a script across the workspaces, streaming each output chunk under
  * its workspace tag and returning the run summary. A bare identifier in

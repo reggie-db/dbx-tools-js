@@ -13,6 +13,7 @@ import pMemoize from "p-memoize";
 import { z } from "zod";
 import { git } from "./git.js";
 import { getProject } from "./project.js";
+import { errorMessage } from "./script.js";
 import { sh } from "./shell.js";
 
 const root = (await getProject()).rootDirectory;
@@ -51,11 +52,6 @@ export const getWorkspaceClient = pMemoize(
     }
   },
 );
-
-/** Narrow an unknown thrown value to its message string. */
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * `execute_typescript` tool backed by a sandboxed container runtime

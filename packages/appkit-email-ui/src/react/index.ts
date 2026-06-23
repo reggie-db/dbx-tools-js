@@ -6,6 +6,7 @@
 //   preview for the `send_email` tool.
 // - `EmailMessage` / `EmailDraft`: the email contract types.
 
+export type { EmailMessage } from "@dbx-tools/appkit-email-shared";
 export {
   EmailApprovalCard,
   EmailPreview,
@@ -13,4 +14,3 @@ export {
   type EmailDraft,
   type EmailPreviewProps,
 } from "./email-approval-card.js";
-export type { EmailMessage } from "@dbx-tools/appkit-email-shared";

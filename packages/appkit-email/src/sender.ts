@@ -14,7 +14,10 @@ import type { ResolvedEmailConfig } from "./config.js";
  * Re-home the OBO user's local part on `domain`. Throws when no usable
  * local part is available (e.g. a service-context call with no user).
  */
-export function deriveSenderAddress(userEmail: string | undefined, domain: string): string {
+export function deriveSenderAddress(
+  userEmail: string | undefined,
+  domain: string,
+): string {
   const local = userEmail?.split("@")[0]?.trim();
   if (!local) {
     throw new Error(

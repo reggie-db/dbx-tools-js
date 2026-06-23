@@ -97,36 +97,34 @@ program
     "terminal chat CLI to launch (run via your shell)",
     process.env.PROXY_CHAT_CLIENT ?? DEFAULT_CHAT_CLIENT,
   )
-  .action(
-    async (opts: ServeOpts & { model?: string; client: string }) => {
-      const { backend, server, url } = await startProxy(opts);
-      const baseUrl = `${url}/v1`;
-      process.stderr.write(
-        `model-proxy -> ${backend.host}\n  OpenAI base URL: ${baseUrl}\n  launching: ${opts.client}\n`,
-      );
-      // Hand off to an off-the-shelf OpenAI-compatible client, pointing it
-      // at the proxy via the standard env vars (plus the provider switches
-      // a couple of popular CLIs read). `shell: true` lets `--client` carry
-      // its own args, e.g. `--client "bunx merlion"`.
-      const child = spawn(opts.client, {
-        stdio: "inherit",
-        shell: true,
-        env: {
-          ...process.env,
-          OPENAI_BASE_URL: baseUrl,
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "model-proxy",
-          ...(opts.model ? { OPENAI_MODEL: opts.model } : {}),
-          LLM_PROVIDER: "openai-compat",
-          CLAUDE_CODE_USE_OPENAI: "1",
-        },
-      });
-      child.on("exit", (code) => {
-        server.close();
-        process.exit(code ?? 0);
-      });
-      process.on("SIGINT", () => child.kill("SIGINT"));
-    },
-  );
+  .action(async (opts: ServeOpts & { model?: string; client: string }) => {
+    const { backend, server, url } = await startProxy(opts);
+    const baseUrl = `${url}/v1`;
+    process.stderr.write(
+      `model-proxy -> ${backend.host}\n  OpenAI base URL: ${baseUrl}\n  launching: ${opts.client}\n`,
+    );
+    // Hand off to an off-the-shelf OpenAI-compatible client, pointing it
+    // at the proxy via the standard env vars (plus the provider switches
+    // a couple of popular CLIs read). `shell: true` lets `--client` carry
+    // its own args, e.g. `--client "bunx merlion"`.
+    const child = spawn(opts.client, {
+      stdio: "inherit",
+      shell: true,
+      env: {
+        ...process.env,
+        OPENAI_BASE_URL: baseUrl,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "model-proxy",
+        ...(opts.model ? { OPENAI_MODEL: opts.model } : {}),
+        LLM_PROVIDER: "openai-compat",
+        CLAUDE_CODE_USE_OPENAI: "1",
+      },
+    });
+    child.on("exit", (code) => {
+      server.close();
+      process.exit(code ?? 0);
+    });
+    process.on("SIGINT", () => child.kill("SIGINT"));
+  });
 
 program
   .command("models")
@@ -154,6 +152,8 @@ program
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   if (err instanceof CommanderError) process.exit(err.exitCode);
-  process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  process.stderr.write(
+    `${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+  );
   process.exit(1);
 });

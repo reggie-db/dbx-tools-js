@@ -25,7 +25,10 @@ function subjectSlug(subject: string): string {
 }
 
 /** The envelope rows shown above the body in the preview file. */
-function headerRows(message: EmailMessage, from: string): Array<readonly [string, string]> {
+function headerRows(
+  message: EmailMessage,
+  from: string,
+): Array<readonly [string, string]> {
   const rows: Array<readonly [string, string | undefined]> = [
     ["From", from],
     ["To", message.to],
@@ -54,7 +57,8 @@ export async function writeOutboxEmail(
     subject: message.subject,
     headers: headerRows(message, from),
     body: message.body,
-    footer: "Local outbox preview - written to disk, not sent (no SMTP credentials configured).",
+    footer:
+      "Local outbox preview - written to disk, not sent (no SMTP credentials configured).",
   });
   await writeFile(path, html, "utf8");
   return path;

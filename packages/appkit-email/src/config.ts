@@ -142,14 +142,19 @@ function resolveSecure(flag: boolean | undefined, port: number): boolean {
  * outbox directory for local testing; in that mode a sender source is
  * optional (the outbox falls back to the OBO user's own address).
  */
-export function resolveEmailConfig(config: EmailPluginConfig = {}): ResolvedEmailConfig {
+export function resolveEmailConfig(
+  config: EmailPluginConfig = {},
+): ResolvedEmailConfig {
   const smtp = config.smtp ?? {};
   const host = smtp.host ?? process.env["SMTP_HOST"];
   const user = smtp.user ?? process.env["SMTP_USER"];
   const pass = smtp.password ?? process.env["SMTP_PASSWORD"];
   const domain = config.domain ?? process.env["EMAIL_DOMAIN"];
   const from = config.from ?? process.env["EMAIL_FROM"];
-  const sender: ResolvedSender = { ...(domain ? { domain } : {}), ...(from ? { from } : {}) };
+  const sender: ResolvedSender = {
+    ...(domain ? { domain } : {}),
+    ...(from ? { from } : {}),
+  };
 
   if (host && user && pass) {
     if (!domain && !from) {

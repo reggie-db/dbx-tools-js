@@ -62,7 +62,6 @@
     "codegen": "bun scripts/codegen.ts",
     "create": "bun scripts/create.ts",
     "dev": "bun run --cwd=demo dev",
-    "echo": "bun scripts/echo.ts",
     "format": "bun scripts/format.ts",
     "readme": "bun scripts/readme.ts",
     "release": "bun scripts/release.ts",

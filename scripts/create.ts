@@ -154,11 +154,11 @@ if (existsSync(pkgDir)) {
   process.exit(1);
 }
 
-const parts = dirSlug.split("-");
-const pascal = parts.map((s) => s[0]!.toUpperCase() + s.slice(1)).join("");
+const capitalized = dirSlug.split("-").map((s) => s[0]!.toUpperCase() + s.slice(1));
+const pascal = capitalized.join("");
 const camel = pascal[0]!.toLowerCase() + pascal.slice(1);
 const className = `${pascal}Plugin`;
-const displayName = parts.map((s) => s[0]!.toUpperCase() + s.slice(1)).join(" ");
+const displayName = capitalized.join(" ");
 const pkgName = `${SCOPE}/${dirSlug}`;
 
 // `package.json`: the bare minimum mastra-shared settled on. Bun reads

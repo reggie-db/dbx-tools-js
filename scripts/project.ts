@@ -1,76 +1,41 @@
+// Memoized pacwich project handle shared by every script. Under
+// `pacwich run` the project root comes from the injected workspace-script
+// metadata; run directly (`bun run <script>`) it falls back to pacwich's
+// own cwd-based discovery.
+
 import pMemoize from "p-memoize";
 import {
   createFileSystemProject,
-  CreateFileSystemProjectOptions,
-  FileSystemProject,
+  type CreateFileSystemProjectOptions,
+  type FileSystemProject,
   PacwichError,
 } from "pacwich";
-import {
-  getWorkspaceScriptMetadata as loadWorkspaceScriptMetadata,
-  WorkspaceScriptMetadataKey,
-} from "pacwich/script";
+import { getWorkspaceScriptMetadata } from "pacwich/script";
 
-const WORKSPACE_SCRIPT_METADATA_KEYS = Object.keys({
-  scriptName: true,
-  projectPath: true,
-  projectName: true,
-  workspacePath: true,
-  workspaceRelativePath: true,
-  workspaceName: true,
-} satisfies Record<WorkspaceScriptMetadataKey, true>) as WorkspaceScriptMetadataKey[];
+type ShellDefault = FileSystemProject["config"]["project"]["defaults"]["shell"];
 
-export type Project = FileSystemProject & {
-  workspaceScriptProject: boolean;
-};
-
-export const getProject = pMemoize(async (): Promise<Project> => {
-  const workspaceScriptMetadata = getWorkspaceScriptMetadata();
-  const projectPath = workspaceScriptMetadata?.projectPath;
+export const getProject = pMemoize(async (): Promise<FileSystemProject> => {
   const options: CreateFileSystemProjectOptions = {};
-  let workspaceScriptProject = false;
-  if (projectPath) {
-    options.rootDirectory = projectPath;
-    workspaceScriptProject = true;
-  }
-  const project = createProject(options);
-  (project as any).workspaceScriptProject = workspaceScriptProject;
-  return project as Project;
-});
-
-function createProject(options?: CreateFileSystemProjectOptions): FileSystemProject {
-  const project = createFileSystemProject(options ?? {});
-  const shell = process.env.PACWICH_SHELL_DEFAULT as
-    | FileSystemProject["config"]["project"]["defaults"]["shell"]
-    | undefined;
+  const projectPath = readProjectPath();
+  if (projectPath) options.rootDirectory = projectPath;
+  const project = createFileSystemProject(options);
+  const shell = process.env.PACWICH_SHELL_DEFAULT as ShellDefault | undefined;
   if (shell) project.config.project.defaults.shell = shell;
   return project;
-}
+});
 
-function getWorkspaceScriptMetadata(): Record<WorkspaceScriptMetadataKey, string> {
-  let metadata: Partial<Record<WorkspaceScriptMetadataKey, string>> | undefined;
-  for (const key of WORKSPACE_SCRIPT_METADATA_KEYS) {
-    const value = getWorkspaceScriptMetadataValue(key);
-    if (value) {
-      if (!metadata) metadata = {};
-      metadata[key] = value;
-    } else {
-      break;
-    }
-  }
-  if (!metadata) return undefined;
-  return metadata as Record<WorkspaceScriptMetadataKey, string>;
-}
-
-function getWorkspaceScriptMetadataValue(
-  key: WorkspaceScriptMetadataKey,
-): string | undefined {
+/**
+ * Project root pacwich reports when the script runs under `pacwich run`.
+ * Returns undefined when run directly (no workspace-script context), in
+ * which case pacwich discovers the root from the cwd instead. A
+ * {@link PacwichError} means "no metadata available" and is swallowed;
+ * anything else propagates.
+ */
+function readProjectPath(): string | undefined {
   try {
-    const value = loadWorkspaceScriptMetadata(key);
-    if (value) return value;
+    return getWorkspaceScriptMetadata("projectPath") || undefined;
   } catch (error) {
-    if (!(error instanceof PacwichError)) {
-      throw error;
-    }
+    if (error instanceof PacwichError) return undefined;
+    throw error;
   }
-  return undefined;
 }

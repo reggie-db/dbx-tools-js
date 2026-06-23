@@ -120,7 +120,10 @@ async function handleRequest(
     sendJson(
       res,
       404,
-      errorBody(`unsupported route ${req.method ?? "?"} ${path}`, "invalid_request_error"),
+      errorBody(
+        `unsupported route ${req.method ?? "?"} ${path}`,
+        "invalid_request_error",
+      ),
     );
   } catch (err) {
     const message = commonUtils.errorMessage(err);
@@ -158,7 +161,11 @@ async function handleProxy(
   const body = (await readJsonBody(req)) as Record<string, unknown>;
   const requested = typeof body.model === "string" ? body.model : undefined;
   if (!requested) {
-    sendJson(res, 400, errorBody("missing 'model' in request body", "invalid_request_error"));
+    sendJson(
+      res,
+      400,
+      errorBody("missing 'model' in request body", "invalid_request_error"),
+    );
     return;
   }
 
@@ -237,6 +244,9 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /** OpenAI-shaped error envelope. */
-function errorBody(message: string, type: string): { error: { message: string; type: string } } {
+function errorBody(
+  message: string,
+  type: string,
+): { error: { message: string; type: string } } {
   return { error: { message, type } };
 }

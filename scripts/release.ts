@@ -73,7 +73,7 @@ import {
   type PackageJson,
   type WorkspacePackage,
 } from "./package.js";
-import { fail } from "./script.js";
+import { errorMessage, fail } from "./script.js";
 import { bunRun, sh } from "./shell.js";
 
 /**
@@ -404,7 +404,7 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
     } catch (err) {
       failed++;
       console.error(
-        `✗ publish failed for ${pkg.meta.name}@${pkg.meta.version}: ${(err as Error).message}`,
+        `✗ publish failed for ${pkg.meta.name}@${pkg.meta.version}: ${errorMessage(err)}`,
       );
     }
   }

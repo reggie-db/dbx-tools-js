@@ -77,7 +77,10 @@ export interface EmailHtmlOptions {
 function metaBlock(headers: EmailHtmlOptions["headers"]): string {
   if (!headers || headers.length === 0) return "";
   const rows = headers
-    .map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`)
+    .map(
+      ([label, value]) =>
+        `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`,
+    )
     .join("");
   return `<table role="presentation" class="meta"><tbody>${rows}</tbody></table>`;
 }

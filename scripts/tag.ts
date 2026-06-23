@@ -71,7 +71,7 @@ import { git } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
 import { syncReadmes } from "./readme.js";
 import { DEFAULT_REGISTRY, release } from "./release.js";
-import { fail } from "./script.js";
+import { errorMessage, fail, nonEmptyLines } from "./script.js";
 import { sh } from "./shell.js";
 
 type Bump = "major" | "minor" | "patch";
@@ -208,15 +208,9 @@ async function buildReleaseNotesContext(
 ): Promise<ReleaseNotesContext> {
   const range = prevTag ? `${prevTag}..HEAD` : null;
   const commits = range
-    ? (await git(["log", "--no-merges", "--pretty=- %s", range])).stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
+    ? nonEmptyLines((await git(["log", "--no-merges", "--pretty=- %s", range])).stdout)
     : [];
-  const pendingFiles = (await gitStatus())
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const pendingFiles = nonEmptyLines(await gitStatus());
   const diffStat = prevTag ? (await git(["diff", "--stat", prevTag])).stdout : "";
 
   const prompt = [
@@ -377,7 +371,7 @@ console.log(`Packages:`);
 for (const p of pkgs) console.log(`  ${p.name}`);
 if (dirty) {
   console.log(`Dirty files (will be folded into the release commit):`);
-  for (const line of dirty.split("\n")) console.log(`  ${line}`);
+  for (const line of nonEmptyLines(dirty)) console.log(`  ${line}`);
 }
 if (ahead !== "0") {
   console.log(`Unpushed commits: ${ahead} (will be pushed with the release commit)`);
@@ -463,7 +457,7 @@ if (publish) {
     }
   } catch (err) {
     console.warn(
-      `  local publish to ${registry} failed: ${(err as Error).message}; rerun \`bun run release\`.`,
+      `  local publish to ${registry} failed: ${errorMessage(err)}; rerun \`bun run release\`.`,
     );
   }
 }

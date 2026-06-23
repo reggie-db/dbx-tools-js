@@ -1,7 +1,12 @@
 import { genie, lakebase, server } from "@databricks/appkit";
 import { createApp } from "@dbx-tools/appkit-config";
 import { email, emailTool } from "@dbx-tools/appkit-email";
-import { createAgent, GENIE_INSTRUCTIONS, mastra, tool } from "@dbx-tools/appkit-mastra";
+import {
+  createAgent,
+  GENIE_INSTRUCTIONS,
+  mastra,
+  tool,
+} from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
