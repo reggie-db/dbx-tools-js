@@ -58,6 +58,9 @@
       "path": "./packages/appkit-mastra/tsconfig.build.json"
     },
     {
+      "path": "./packages/devkit/tsconfig.json"
+    },
+    {
       "path": "./packages/genie-shared/tsconfig.build.json"
     },
     {

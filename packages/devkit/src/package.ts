@@ -1,5 +1,5 @@
 // Workspace package discovery and manifest editing, all sourced from
-// the pacwich project so no script re-walks the workspace tree itself.
+// the pacwich project so no command re-walks the workspace tree itself.
 
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { type Workspace } from "pacwich";
@@ -7,7 +7,7 @@ import { getProject } from "./project.js";
 
 const root = (await getProject()).rootDirectory;
 
-/** Minimal package.json shape the scripts care about. */
+/** Minimal package.json shape the commands care about. */
 export interface PackageJson {
   name?: string;
   version?: string;

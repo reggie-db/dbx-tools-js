@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-email-ui",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "dependencies": {
     "@dbx-tools/appkit-email-shared": "workspace:*",
     "lucide-react": "^0.554.0",

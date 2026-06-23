@@ -1,14 +1,13 @@
-#!/usr/bin/env bun
 // Build pipeline for the publishable workspace packages, run via
-// `bun run build`.
+// `devkit build`.
 //
 // A gate runs before anything is compiled:
 //   - codegen: regenerate the SDK-derived zod schemas.
 //   - format: syncpack + prettier across the workspace.
-//   - typecheck: workspace-wide `tsc --noEmit` (its `pretypecheck` hook
-//     re-syncs the root tsconfig references first).
-//   - verify: pacwich workspace integrity check (no undeclared
-//     cross-workspace imports).
+//   - typecheck: workspace-wide `tsc --noEmit` (re-syncs the root
+//     tsconfig references first).
+//   - verify: workspace integrity check (no undeclared cross-workspace
+//     imports).
 //   - prune: drop every devDependency knip reports as unused from the
 //     `package.json` that declared it (parses knip's JSON report
 //     directly, no jq).
@@ -19,11 +18,14 @@
 // the packages in workspace dependency order so a package that
 // consumes a sibling's `dist` builds after it. Packages without a
 // `tsconfig.build.json` or marked `"private": true` are skipped:
-// private packages (e.g. the demo) aren't shipped to npm and have
-// their own build pipelines.
+// private packages (e.g. a demo) aren't shipped to npm and have their
+// own build pipelines.
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { clean } from "./clean.js";
+import { codegen } from "./codegen.js";
+import { format } from "./format.js";
 import {
   discoverPackages,
   type PackageJson,
@@ -32,7 +34,9 @@ import {
   writeJson,
 } from "./package.js";
 import { fail, runScript } from "./script.js";
-import { bunRun, bunx } from "./shell.js";
+import { bunx } from "./shell.js";
+import { typecheck } from "./typecheck.js";
+import { verify } from "./verify.js";
 
 /**
  * Shape of the bits of knip's `--reporter json` output we consume. Each
@@ -99,45 +103,47 @@ async function pruneUnusedDevDependencies(): Promise<number> {
   return removed;
 }
 
-await bunRun("codegen");
-await bunRun("format");
-await bunRun("typecheck");
-await bunRun("verify");
-const removed = await pruneUnusedDevDependencies();
-console.log(
-  removed > 0
-    ? `Removed ${removed} unused devDependenc${removed === 1 ? "y" : "ies"}.`
-    : "No unused devDependencies found.",
-);
+/** Run the gate, then compile every publishable package in dependency order. */
+export async function build(): Promise<void> {
+  await codegen();
+  await format();
+  await typecheck();
+  await verify();
+  const removed = await pruneUnusedDevDependencies();
+  console.log(
+    removed > 0
+      ? `Removed ${removed} unused devDependenc${removed === 1 ? "y" : "ies"}.`
+      : "No unused devDependencies found.",
+  );
 
-// Every non-private package carrying a `tsconfig.build.json`. The
-// default `discoverPackages` filter already drops private workspaces
-// (the demo, the auth package), so this leaves only what ships to npm.
-const targets = (await discoverPackages()).filter((pkg) =>
-  existsSync(resolve(pkg.dir, "tsconfig.build.json")),
-);
+  // Every non-private package carrying a `tsconfig.build.json`. The
+  // default `discoverPackages` filter already drops private workspaces,
+  // so this leaves only what ships to npm.
+  const targets = (await discoverPackages()).filter((pkg) =>
+    existsSync(resolve(pkg.dir, "tsconfig.build.json")),
+  );
 
-console.log(`=== Building ${targets.length} package(s) ===`);
+  console.log(`=== Building ${targets.length} package(s) ===`);
 
-// Wipe every package's build output first (the `clean` task), so a
-// stale `tsconfig.build.tsbuildinfo` can't make tsc skip emit and leave
-// an empty `dist/`. Then let pacwich sequence the compile across the
-// targets, `dependencyOrder` holding each package until the siblings it
-// depends on have finished so a consumed `dist` always exists first.
-// `tsc` resolves from the hoisted root `node_modules/.bin` this script
-// already runs with.
-await bunRun("clean");
-const summary = await runScript({
-  script: "tsc -p tsconfig.build.json",
-  workspacePatterns: targets.map((pkg) => pkg.meta.name!),
-  dependencyOrder: true,
-});
+  // Wipe every package's build output first, so a stale
+  // `tsconfig.build.tsbuildinfo` can't make tsc skip emit and leave an
+  // empty `dist/`. Then let pacwich sequence the compile across the
+  // targets, `dependencyOrder` holding each package until the siblings
+  // it depends on have finished so a consumed `dist` always exists
+  // first. `tsc` resolves from the hoisted root `node_modules/.bin`.
+  await clean();
+  const summary = await runScript({
+    script: "tsc -p tsconfig.build.json",
+    workspacePatterns: targets.map((pkg) => pkg.meta.name!),
+    dependencyOrder: true,
+  });
 
-if (!summary.allSuccess) {
-  const failed = summary.scriptResults
-    .filter((entry) => !entry.success && !entry.skipped)
-    .map((entry) => entry.metadata.workspace.name);
-  fail(`Build failed: ${failed.join(", ")}`);
+  if (!summary.allSuccess) {
+    const failed = summary.scriptResults
+      .filter((entry) => !entry.success && !entry.skipped)
+      .map((entry) => entry.metadata.workspace.name);
+    fail(`Build failed: ${failed.join(", ")}`);
+  }
+
+  console.log(`\nBuilt ${summary.successCount} package(s).`);
 }
-
-console.log(`\nBuilt ${summary.successCount} package(s).`);

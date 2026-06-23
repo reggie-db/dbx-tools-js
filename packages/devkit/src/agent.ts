@@ -16,7 +16,9 @@ import { getProject } from "./project.js";
 import { errorMessage } from "./script.js";
 import { sh } from "./shell.js";
 
-const root = (await getProject()).rootDirectory;
+const project = await getProject();
+const root = project.rootDirectory;
+const projectName = project.name;
 const log = consola.withTag("agent");
 
 /** Env var holding the agent's model spec as `provider/model`. Unset means no agent. */
@@ -107,9 +109,9 @@ function resolveScopePath(base: string, relPath: string): string {
 /** Short, human-readable label for the agent's filesystem scope. */
 function scopeLabel(base: string): string {
   const rel = relative(root, base);
-  if (rel === "") return "the dbx-tools-js repo root";
+  if (rel === "") return `the ${projectName} repo root`;
   if (rel.startsWith("..")) return base;
-  return `${rel} (under the dbx-tools-js repo)`;
+  return `${rel} (under the ${projectName} repo)`;
 }
 
 /** `list_files` tool scoped to `base`: immediate children of a directory. */
@@ -243,7 +245,7 @@ function createGitTools() {
       id: "git_status",
       description:
         "Show working-tree status as `git status --porcelain` output. " +
-        "Use to discover which files in the dbx-tools-js repo " +
+        `Use to discover which files in the ${projectName} repo ` +
         "are modified, added, untracked, or staged.",
       inputSchema: z.object({}),
       outputSchema: execResultSchema,
@@ -298,7 +300,7 @@ function createGitTools() {
 /**
  * Read `.cursor/rules/*.mdc` once, strip frontmatter, and return them
  * as one markdown block for the system prompt (empty when missing).
- * Cached at module scope; rule edits need a script restart.
+ * Cached at module scope; rule edits need a process restart.
  */
 let cachedCursorRules: string | undefined;
 function loadCursorRules(): string {
@@ -332,7 +334,7 @@ function loadCursorRules(): string {
 }
 
 const DEFAULT_AGENT_INSTRUCTIONS = `
-You are a code-aware assistant for the dbx-tools-js monorepo (Bun + TypeScript, packages under packages/* and demo/).
+You are a code-aware assistant for the ${projectName} monorepo (Bun + TypeScript, packages under packages/* and demo/).
 
 Tools (use only when the answer materially benefits; don't read speculatively):
 - list_files / read_files: walk and read source inside the current scope.
@@ -448,7 +450,7 @@ export const getScriptAgent = pMemoize(
     const base = overrides.cwd ?? root;
     const gitTools = createGitTools();
     const sandbox = createExecuteTypescriptTool();
-    // Always append the .cursor/rules block so per-script overrides
+    // Always append the .cursor/rules block so per-command overrides
     // (release notes prompt, README generator prompt, ...) still get
     // the repo conventions without each caller gluing them in by hand.
     const rules = loadCursorRules();

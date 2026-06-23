@@ -7,7 +7,7 @@ alwaysApply: false
 
 Releases are **tag-driven**. Pushing a `v<version>` tag to `origin`
 fires `.github/workflows/release.yml`, which builds every publishable
-workspace and runs `scripts/release.ts` against npm.
+workspace and runs `devkit release` against npm.
 
 There is no PR-based versioning bot and no auto-publish on push to
 `main`. The tag push is the deliberate ship signal.
@@ -22,7 +22,8 @@ bun run tag --readme        # also sync package READMEs (off by default)
 bun run tag --dry-run       # preview without writing or pushing
 ```
 
-`scripts/tag.ts` handles the full sequence in one shot:
+`devkit tag` (the `tag()` function in `@dbx-tools/devkit`) handles the
+full sequence in one shot:
 
 1. Reads the shared version from the first publishable package and
    sanity-checks every other publishable package matches it
@@ -43,13 +44,13 @@ falls back to a bare `Release v<version>` message.
 ## Local publish (debugging / one-off)
 
 ```bash
-bun scripts/build.ts
-bun scripts/release.ts --dry-run    # npm pack --dry-run per package
+devkit build
+devkit release --dry-run            # bun pm pack --dry-run per package
 bun run release                     # build + real publish
 ```
 
-`scripts/release.ts` stages each package into
-`packages/<slug>/.npm-publish/` (gitignored), rewrites
+`devkit release` stages each package into
+`packages/<slug>/.publish/` (gitignored), rewrites
 `workspace:*` / `catalog:` specifiers to real version ranges, then
 runs `npm publish` from the stage. Source `package.json` files are
 never mutated.

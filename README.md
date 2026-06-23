@@ -64,6 +64,7 @@ linked alongside; every package's own README covers its usage in depth.
 | [`@dbx-tools/appkit-config`](packages/appkit-config) | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env). |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + a chat route + Lakebase memory; drop-in React chat UI. |
 | [`@dbx-tools/appkit-email`](packages/appkit-email) · [shared](packages/appkit-email-shared) · [ui](packages/appkit-email-ui) | AppKit plugin + approval-gated `send_email` Mastra tool (SMTP, OBO sender); Approve / Deny card UI. |
+| [`@dbx-tools/devkit`](packages/devkit) | The `devkit` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
 | [`@dbx-tools/appkit-demo`](demo) | Private, runnable Databricks App that wires everything together. |
 
 ## Develop
@@ -102,7 +103,7 @@ Publishable packages under `@dbx-tools/*` are configured as `fixed` in
 [`.changeset/config.json`](.changeset/config.json), so they version together.
 Releases are **tag-driven**: pushing a `v<version>` tag to `origin` fires the
 [release workflow](.github/workflows/release.yml), which builds every
-publishable workspace and runs `scripts/release.ts` against npm. No PR-based
+publishable workspace and runs `devkit release` against npm. No PR-based
 versioning bot, no auto-publish on push to `main` - the tag push is the
 deliberate signal that this commit ships.
 
@@ -116,14 +117,15 @@ bun run tag major          # major bump
 bun run tag --dry-run      # preview without writing or pushing
 ```
 
-`scripts/tag.ts` bumps the version in every publishable `packages/*/package.json`
+`devkit tag` bumps the version in every publishable `packages/*/package.json`
 (they're fixed, so they always bump together), commits the bump as
 `chore: release v<version>`, pushes the commit, then creates and pushes the
 `v<version>` tag.
 
 For the tag message it assembles the commit log + working-tree diff since
 the previous tag and runs it through the Mastra script agent
-(`scripts/agent.ts`) to generate markdown release notes; the agent can
+(in [`@dbx-tools/devkit`](packages/devkit)) to generate markdown
+release notes; the agent can
 open touched files to fill gaps. If no model/Databricks profile resolves
 (or the hook throws) it falls back to a bare `Release v<version>` message.
 After pushing the tag it also creates a GitHub Release (when `gh` is on
@@ -136,7 +138,7 @@ on `ubuntu-latest`.
 
 ### What the publish step does
 
-`scripts/release.ts` keeps the on-disk source tree read-only and instead
+`devkit release` keeps the on-disk source tree read-only and instead
 **stages** each package into `packages/<slug>/.publish/` (gitignored).
 Packages publish in workspace dependency order. For every publishable
 workspace it:

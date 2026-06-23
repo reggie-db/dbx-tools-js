@@ -1,7 +1,8 @@
-// Memoized pacwich project handle shared by every script. Under
+// Memoized pacwich project handle shared by every command. Under
 // `pacwich run` the project root comes from the injected workspace-script
-// metadata; run directly (`bun run <script>`) it falls back to pacwich's
-// own cwd-based discovery.
+// metadata; run directly it falls back to pacwich's own cwd-based
+// discovery, so the toolkit works the same whether it is invoked through
+// the `devkit` bin or imported as a library.
 
 import pMemoize from "p-memoize";
 import {
@@ -12,15 +13,18 @@ import {
 } from "pacwich";
 import { getWorkspaceScriptMetadata } from "pacwich/script";
 
+type PackageManager = CreateFileSystemProjectOptions["packageManager"];
 type ShellDefault = FileSystemProject["config"]["project"]["defaults"]["shell"];
 
 export const getProject = pMemoize(async (): Promise<FileSystemProject> => {
-  // Pin the package manager to bun rather than auto-detecting it from
-  // lockfiles. This repo is bun-only, and `bun.lock` is intentionally not
-  // committed; the install step regenerates it so pacwich can still read
-  // it for workspace discovery, but we don't want PM *selection* to hinge
-  // on which lockfiles happen to be on disk.
-  const options: CreateFileSystemProjectOptions = { packageManager: "bun" };
+  // Default the package manager to bun (the only one this toolkit's
+  // own repo uses, and the one its `bun.lock`-free CI relies on), but
+  // honor `PACWICH_PACKAGE_MANAGER` so a consuming repo on pnpm/npm can
+  // override without forking. Auto-detection is intentionally avoided:
+  // it hinges on which lockfiles happen to be on disk.
+  const packageManager =
+    (process.env.PACWICH_PACKAGE_MANAGER as PackageManager | undefined) ?? "bun";
+  const options: CreateFileSystemProjectOptions = { packageManager };
   const projectPath = readProjectPath();
   if (projectPath) options.rootDirectory = projectPath;
   const project = createFileSystemProject(options);
@@ -30,7 +34,7 @@ export const getProject = pMemoize(async (): Promise<FileSystemProject> => {
 });
 
 /**
- * Project root pacwich reports when the script runs under `pacwich run`.
+ * Project root pacwich reports when invoked under `pacwich run`.
  * Returns undefined when run directly (no workspace-script context), in
  * which case pacwich discovers the root from the cwd instead. A
  * {@link PacwichError} means "no metadata available" and is swallowed;

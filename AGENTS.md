@@ -7,8 +7,10 @@ rules under `.cursor/rules/`.
 ## Repo at a glance
 
 Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
-Databricks Apps. Nine publishable packages plus a runnable demo. See
-the root [`README.md`](README.md) for the full package table.
+Databricks Apps. The publishable packages plus a runnable demo. See
+the root [`README.md`](README.md) for the full package table. The
+workspace build/scaffold/release tooling itself ships as the
+`@dbx-tools/devkit` package (the `devkit` bin behind the root scripts).
 
 ```bash
 bun install                 # from repo root
@@ -42,13 +44,15 @@ a doc edit and the list rots); a symbol's own docstring may name what
 it documents. See
 [`.cursor/rules/docstring-style.mdc`](.cursor/rules/docstring-style.mdc).
 
-### 3. Workspace scripts
+### 3. Workspace tooling (`@dbx-tools/devkit`)
 
-- Always `await bunx(...)` and `await run(...)` from `scripts/util.ts`.
+- Always `await sh(...)` / `await bunx(...)` from `src/shell.ts`.
 - Use `discoverPackages()` / `discoverPackageJsons()` instead of
   re-implementing the workspace walk.
 - Use `writeJson()` instead of bare `Bun.write` for `package.json`
   edits (preserves trailing newline).
+- New commands export a function from `src/` and wire CLI options in
+  `bin/devkit.ts`.
 - See [`.cursor/rules/scripts-conventions.mdc`](.cursor/rules/scripts-conventions.mdc).
 
 ### 4. appkit-mastra specifics

@@ -3,8 +3,9 @@
 Zod schemas plus inferred TypeScript types for the Databricks SDK
 shapes the rest of the `@dbx-tools/*` packages consume. Everything
 under `./generated/` is regenerated from upstream
-`@databricks/sdk-experimental` `.d.ts` declarations by
-[`scripts/codegen.ts`](../../scripts/codegen.ts); nothing in here is
+`@databricks/sdk-experimental` `.d.ts` declarations by the
+`devkit codegen` command (see
+[`@dbx-tools/devkit`](../devkit)); nothing in here is
 hand-maintained.
 
 ```ts
@@ -63,7 +64,7 @@ Each consumer package declares its own `codegen.inputs` in
 }
 ```
 
-`bun scripts/codegen.ts` walks every package with a `codegen` field
+`devkit codegen` walks every package with a `codegen` field
 and, for each input:
 
 1. Reads the upstream `.d.ts`.
@@ -79,9 +80,9 @@ and, for each input:
 
 The whole `generated/` tree is gitignored (`generated/.gitignore`
 holds `*`); the hand-tracked top-level `./index.ts` re-exports it so
-the publish merge in [`scripts/release.ts`](../../scripts/release.ts)
-picks up the standard `package.default.json` `exports` map without
-any per-package wiring.
+the publish merge in `devkit release` (see
+[`@dbx-tools/devkit`](../devkit)) picks up the standard
+`package.default.json` `exports` map without any per-package wiring.
 
 ```ts
 // index.ts
@@ -92,8 +93,8 @@ export * from "./generated/index.js";
 
 ```bash
 bun run codegen          # runs codegen across every package with a codegen field
-# or, just sdk-shared:
-bun scripts/codegen.ts
+# or invoke the toolkit directly:
+devkit codegen
 ```
 
 Codegen refuses to write or delete any file inside `generated/` that

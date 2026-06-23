@@ -1,4 +1,5 @@
-// Script discovery + the `runScript` entry the small CLIs share.
+// Cross-workspace script runner plus the small shared text helpers the
+// commands lean on.
 
 import { consola } from "consola";
 import {
@@ -7,9 +8,6 @@ import {
   type RunScriptAcrossWorkspacesSummary,
 } from "pacwich";
 import { getProject } from "./project.js";
-
-/** This `scripts/` directory. */
-export const getScriptsDir = (): string => import.meta.dir;
 
 /** Log `message` and exit non-zero. */
 export function fail(message: string): never {
@@ -33,35 +31,26 @@ export function nonEmptyLines(text: string): string[] {
 /**
  * Run a script across the workspaces, streaming each output chunk under
  * its workspace tag and returning the run summary. A bare identifier in
- * `script` is resolved to a local `scripts/<name>` file; anything else
- * (an inline shell command) is passed straight through. Inline scripts
- * default to Bun's shell.
+ * `script` (e.g. `build`) is run as that workspace's `package.json`
+ * script; anything containing whitespace is treated as an inline shell
+ * command (run through Bun's shell by default).
  */
 export async function runScript(
   options: RunScriptAcrossWorkspacesOptions,
 ): Promise<RunScriptAcrossWorkspacesSummary> {
   const project = await getProject();
-  const inline: InlineScriptOptions =
-    typeof options.inline === "object" ? options.inline : { shell: "bun" };
+  const isInline = !/^[\w.-]+$/.test(options.script.trim());
+  const inline: InlineScriptOptions | undefined = isInline
+    ? typeof options.inline === "object"
+      ? options.inline
+      : { shell: "bun" }
+    : undefined;
   const { output, summary } = project.runScriptAcrossWorkspaces({
     ...options,
-    script: await resolveScript(options.script),
-    inline,
+    ...(inline ? { inline } : {}),
   });
   for await (const { chunk, metadata } of output.text()) {
     consola.withTag(metadata.workspace.name).log(chunk.trimEnd());
   }
   return summary;
-}
-
-/** Turn a bare script name into a `bun run <file>` command, else pass it through. */
-async function resolveScript(script: string): Promise<string> {
-  if (!/^[\w.-]+$/.test(script.trim())) return script;
-  const glob = new Bun.Glob(`${script.trim()}.{ts,js}`);
-  for (const dir of [(await getProject()).rootDirectory, getScriptsDir()]) {
-    for await (const filePath of glob.scan({ cwd: dir, absolute: true })) {
-      return `bun run ${filePath}`;
-    }
-  }
-  return script;
 }

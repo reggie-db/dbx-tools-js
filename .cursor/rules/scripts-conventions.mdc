@@ -1,28 +1,39 @@
 ---
-description: Conventions for workspace scripts under scripts/
-globs: scripts/**/*.ts
+description: Conventions for the @dbx-tools/devkit toolkit under packages/devkit
+globs: packages/devkit/**/*.ts
 alwaysApply: false
 ---
 
-# Workspace script conventions
+# devkit toolkit conventions
 
-Scripts run under `bun` (top of file: `#!/usr/bin/env bun`). Shared
-plumbing is split by concern - reach for it before pulling in new deps
-or rolling your own:
+The workspace build/scaffold/release toolkit lives in
+`packages/devkit` as the publishable `@dbx-tools/devkit` package. The
+`devkit` bin (`bin/devkit.ts`) is a thin commander dispatcher; each
+subcommand delegates to a function in `src/` that is also exported
+from the package root for programmatic use. Shared plumbing is split
+by concern - reach for it before pulling in new deps or rolling your
+own:
 
-- `shell.ts` - `sh` / `bunx` / `bunRun` wrap Bun's `$`. One home for
+- `src/shell.ts` - `sh` / `bunx` wrap Bun's `$`. One home for
   command running, output trimming, and exit-code handling.
-- `git.ts` - `git()` over `sh`.
-- `package.ts` - `discoverPackages*`, `orderByDependencies`,
+- `src/git.ts` - `git()` over `sh`.
+- `src/package.ts` - `discoverPackages*`, `orderByDependencies`,
   `writeJson`, `toAbsolute` / `toRelative`, `PackageJson` /
   `WorkspacePackage`.
-- `script.ts` - `runScript`, `getScriptsDir`, `fail`.
-- `agent.ts` - the Mastra script agent (`agentQuery`, `getScriptAgent`).
-- `project.ts` - `getProject` (the pacwich `FileSystemProject`).
+- `src/script.ts` - `runScript`, `fail`, `errorMessage`,
+  `nonEmptyLines`.
+- `src/agent.ts` - the Mastra script agent (`agentQuery`, `getScriptAgent`).
+- `src/project.ts` - `getProject` (the pacwich `FileSystemProject`).
+- `src/config.ts` - `getDevkitConfig` (auto-derived scope + repo,
+  overridable via a `devkit` key in the consuming repo's root
+  `package.json`).
+
+New command modules export a plain async function and are wired into
+`bin/devkit.ts`; keep CLI option parsing in the bin, not the module.
 
 ## Always await the shell helpers
 
-`sh()`, `bunx()`, `bunRun()` and `git()` are **async**. Awaiting them is
+`sh()`, `bunx()` and `git()` are **async**. Awaiting them is
 mandatory: errors only surface (and serial loops only stay serial)
 when the promise is awaited.
 

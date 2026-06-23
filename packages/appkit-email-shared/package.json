@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-email-shared",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "dependencies": {
     "zod": "catalog:"
   },

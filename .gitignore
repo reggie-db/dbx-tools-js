@@ -5,7 +5,7 @@ dist
 client/dist
 tmp
 
-# Per-package staging directory built by scripts/publish.ts when
+# Per-package staging directory built by `devkit release` when
 # packing each workspace package for npm. Holds the merged
 # (default + own + enforced) package.json plus copies of the files
 # matched by the publish-time `files` glob. Always recreated, always

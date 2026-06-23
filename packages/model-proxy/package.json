@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/model-proxy",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "bin": {
     "model-proxy": "dist/src/cli.js"
   },
@@ -8,7 +8,7 @@
     "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/model": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "commander": "^15.0.0"
+    "commander": "catalog:"
   },
   "module": "index.ts",
   "peerDependencies": {

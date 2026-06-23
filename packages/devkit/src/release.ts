@@ -1,23 +1,21 @@
-#!/usr/bin/env bun
 // Publish every non-private workspace package to npm.
 //
 // Exposed two ways:
-//   - CLI:      `bun run release` (this file run directly).
-//   - Library:  `import { release } from "./release.js"` - `tag.ts`
-//               calls it after the version bump so every `bun run tag`
-//               also lands the freshly-tagged versions on the local
-//               Verdaccio registry. That matters when the public-npm
-//               path is gated (e.g. a corp proxy that quarantines new
-//               versions for some days): local consumers pull the same
-//               package shape from Verdaccio immediately instead of
-//               waiting for the public copy to clear.
+//   - The `devkit release` command (builds first, then publishes).
+//   - Library: `import { release } from "@dbx-tools/devkit"` - `tag.ts`
+//     calls it after the version bump so every `devkit tag` also lands
+//     the freshly-tagged versions on the local Verdaccio registry. That
+//     matters when the public-npm path is gated (e.g. a corp proxy that
+//     quarantines new versions for some days): local consumers pull the
+//     same package shape from Verdaccio immediately instead of waiting
+//     for the public copy to clear.
 //
 // On-disk `packages/*/package.json` files are kept to the absolute
 // minimum needed for dev tooling (name / version / type / module /
-// deps, plus per-package custom fields like `@dbx-tools/shared`'s
-// dual-entry `exports` map). The publish-time shape - license, repo,
-// files, publishConfig, the standard single-entry exports map, and so
-// on - is split between two root-level files:
+// deps, plus per-package custom fields like a dual-entry `exports`
+// map). The publish-time shape - license, repo, files, publishConfig,
+// the standard single-entry exports map, and so on - is split between
+// two root-level files:
 //
 //   - `package.default.json`   fills in fields the package didn't
 //                               define (low-priority template).
@@ -28,15 +26,10 @@
 // `bun pm pack` and `npm publish` only ever read `package.json` from
 // the cwd - there's no `--manifest <path>` flag - so we can't just
 // hand them a `package.generated.json`. Mutating the source file in
-// place during publish would briefly dirty the working tree (a
-// SIGKILL between mutate and revert leaves the source modified). To
-// keep `git status` clean throughout, we stage each package into
+// place during publish would briefly dirty the working tree. To keep
+// `git status` clean throughout, we stage each package into
 // `<pkg>/.publish/` (gitignored), copy the publishable files in, and
-// run the publish command from inside the stage. The stage's
-// `package.json` is the "generated" file the user asked for; it's
-// just at `.publish/package.json` instead of
-// `package.generated.json`, because that's what npm/bun are willing
-// to read.
+// run the publish command from inside the stage.
 //
 // One catch: a stage dir isn't a workspace member, so the tooling
 // inside it can't rewrite `workspace:*` and `catalog:` specifiers on
@@ -60,9 +53,8 @@
 // refuses to upload without auth configured, but Verdaccio is set
 // to `publish: $$all` and accepts any token. Result: local
 // publishes work with zero `npm login` / `bun login` and the user's
-// real `~/.npmrc` (with real registry tokens) is never touched.
+// real `~/.npmrc` is never touched.
 
-import { Command, Option } from "commander";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
@@ -74,16 +66,15 @@ import {
   type WorkspacePackage,
 } from "./package.js";
 import { errorMessage, fail } from "./script.js";
-import { bunRun, sh } from "./shell.js";
+import { sh } from "./shell.js";
 
 /**
  * Default registry. Points at the local Verdaccio convention
- * (`http://localhost:4873`) so a stray `bun run release` on a dev
+ * (`http://localhost:4873`) so a stray `devkit release` on a dev
  * machine can never accidentally hit the public npm registry. Start
  * Verdaccio however you like (`npx verdaccio`, your own docker
  * compose, etc.); the publish flow only cares that the URL resolves.
- * CI enforced via the `NPM_REGISTRY` env var (see
- * `.github/workflows/release.yml`).
+ * CI enforced via the `NPM_REGISTRY` env var.
  */
 export const DEFAULT_REGISTRY = "http://localhost:4873";
 
@@ -320,10 +311,8 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
    * Merge default < own < enforced for one package, stamp in the
    * package-specific `repository.directory`, and rewrite all special
    * dep specifiers. Shallow merge is on purpose: when a package
-   * defines its own multi-condition `exports` map (e.g.
-   * `@dbx-tools/shared`'s dual server/browser entry), the
-   * default single-entry map is replaced wholesale instead of
-   * deep-merged into it.
+   * defines its own multi-condition `exports` map, the default
+   * single-entry map is replaced wholesale instead of deep-merged.
    */
   function mergeForRelease(pkg: WorkspacePackage): PackageJson {
     const merged: PackageJson = {
@@ -410,32 +399,4 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
   }
 
   return { published, skipped, failed, total: packages.length };
-}
-
-if (import.meta.main) {
-  const program = new Command()
-    .name("publish")
-    .description("Publish every public workspace package to npm via `npm publish`.")
-    .addOption(
-      new Option("-r, --registry <url>", "registry to publish to")
-        .env("NPM_REGISTRY")
-        .default(DEFAULT_REGISTRY),
-    )
-    .option("--dry-run", "pack each package without uploading", false)
-    .option("--otp <code>", "one-time password for 2FA-protected registries")
-    .parse(process.argv);
-
-  const { dryRun, registry, otp } = program.opts<{
-    dryRun: boolean;
-    registry: string;
-    otp?: string;
-  }>();
-
-  // Build every publishable package before publishing (formerly the
-  // `prerelease` npm hook). The publish flow stages each package's
-  // compiled `dist/`, so the build has to run first.
-  await bunRun("build");
-
-  const result = await release({ registry, dryRun, otp });
-  if (result.failed > 0) fail(`${result.failed} package(s) failed to publish`);
 }

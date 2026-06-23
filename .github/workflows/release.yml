@@ -12,14 +12,14 @@ name: Release
 #   bun run tag                           # create + push v<version>
 #
 # The tag push fires this workflow. `bun run release` runs
-# `bun scripts/build.ts && bun scripts/publish.ts`. Each package's
-# `package.json` already carries its full publish-ready fields
-# (main / types / exports / files / license / repository /
-# publishConfig). The publish script just iterates the workspace
-# packages, skips ones already on the registry, and runs
-# `bun publish` from each package directory. Bun rewrites
-# `workspace:*` and `catalog:` specifiers to real version ranges
-# at pack time, so no source-tree mutation happens during release.
+# `devkit release` (build, then publish) from `@dbx-tools/devkit`. The
+# publish step stages each package into a gitignored `.publish/` dir,
+# merges in the publish-ready fields (main / types / exports / files /
+# license / repository) from `package.default.json` /
+# `package.enforced.json`, resolves `workspace:*` and `catalog:`
+# specifiers to real version ranges, skips versions already on the
+# registry, and runs `npm publish` from each stage. Source
+# `package.json` files are never mutated.
 #
 # Registry: the publish script defaults to a local Verdaccio
 # (`http://localhost:4873`) so dev machines can never accidentally hit
@@ -68,11 +68,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           # Pinned to 24.x so `npm` is >= 11.5.1, the minimum for
-          # trusted publishing / OIDC auth. Bun does the actual
-          # publishing; we only need `npm` for the `npm view` lookup
-          # in `scripts/publish.ts` and for the `~/.npmrc` auth-token
-          # line that `setup-node` writes (which `bun publish` then
-          # reads).
+          # trusted publishing / OIDC auth. `devkit release` uses `npm`
+          # for both the `npm view` existence check and the actual
+          # `npm publish` upload, reading the `~/.npmrc` auth-token line
+          # that `setup-node` writes.
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org/"
 

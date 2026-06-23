@@ -55,8 +55,3 @@ export async function sh(
 export function bunx(args: string[], opts: ShellOptions = {}): Promise<ShellResult> {
   return sh(["bun", "x", ...args], opts);
 }
-
-/** `bun run <script>`, streaming live. Throws on non-zero. */
-export async function bunRun(script: string): Promise<void> {
-  await sh(["bun", "run", script]);
-}

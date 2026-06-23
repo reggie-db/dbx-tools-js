@@ -6,18 +6,19 @@ alwaysApply: true
 # dbx-tools-js
 
 Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
-Databricks Apps. Thirteen publishable packages plus a runnable demo.
+Databricks Apps. Fifteen publishable packages plus a runnable demo.
 
 ## Packages
 
 | Path | Package | Role |
 | --- | --- | --- |
 | `packages/shared` | `@dbx-tools/shared` | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper. Browser-safe surface via `index.client.ts`. |
-| `packages/sdk-shared` | `@dbx-tools/sdk-shared` | Zod schemas regenerated from Databricks SDK `.d.ts` (driven by `scripts/codegen.ts`). |
+| `packages/sdk-shared` | `@dbx-tools/sdk-shared` | Zod schemas regenerated from Databricks SDK `.d.ts` (driven by `devkit codegen`). |
 | `packages/genie-shared` | `@dbx-tools/genie-shared` | Wire-format types + `GenieChatEvent` union for Genie streaming. |
 | `packages/genie` | `@dbx-tools/genie` | `genieChat` (raw) + `genieEventChat` (semantic events) drivers. |
 | `packages/model-shared` | `@dbx-tools/model-shared` | Pure Model Serving capability tiers, score profile, endpoint descriptor, and tier classifier (browser-safe). |
 | `packages/model` | `@dbx-tools/model` | Node-side Model Serving access: cached `/serving-endpoints` listing, fuzzy name resolution, `resolveModel`. Re-exports `model-shared`. |
+| `packages/model-proxy` | `@dbx-tools/model-proxy` | OpenAI-compatible local proxy (`model-proxy` bin) over Databricks Model Serving, with auth + fuzzy model-name resolution via `@dbx-tools/model`. |
 | `packages/appkit-config` | `@dbx-tools/appkit-config` | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env) before delegating to AppKit's `createApp`. |
 | `packages/appkit-mastra` | `@dbx-tools/appkit-mastra` | AppKit plugin that mounts Mastra agents + chat route + Lakebase memory. |
 | `packages/appkit-mastra-shared` | `@dbx-tools/appkit-mastra-shared` | Dependency-free wire-format contract + URL helpers + Genie writer-event vocabulary. |
@@ -25,6 +26,7 @@ Databricks Apps. Thirteen publishable packages plus a runnable demo.
 | `packages/appkit-email` | `@dbx-tools/appkit-email` | AppKit `email` plugin + approval-gated `send_email` Mastra tool. Sends over SMTP (sender derived from the OBO user on a configured domain), or, with no SMTP credentials, writes each email as HTML to a local outbox dir for testing. |
 | `packages/appkit-email-shared` | `@dbx-tools/appkit-email-shared` | Dependency-free email message / result contract (zod schemas + inferred types). |
 | `packages/appkit-email-ui` | `@dbx-tools/appkit-email-ui` | React `EmailPreview` / `EmailApprovalCard` for the `send_email` approval flow (`./react`). |
+| `packages/devkit` | `@dbx-tools/devkit` | The `devkit` build/scaffold/release toolkit behind the root `build`/`typecheck`/`format`/`codegen`/`verify`/`create`/`readme`/`tag`/`release` scripts. Ships a `devkit` bin + library API; reusable as a dev dependency in other Bun monorepos. |
 | `demo` | `@dbx-tools/appkit-demo` | Private runnable Databricks App that wires everything up. |
 
 ## Package shape
