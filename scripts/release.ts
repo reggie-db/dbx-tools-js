@@ -64,17 +64,17 @@
 
 import { Command, Option } from "commander";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   discoverPackages,
-  exec,
-  execScript,
-  fail,
-  ROOT_DIR,
+  orderByDependencies,
+  toAbsolute,
   writeJson,
   type PackageJson,
   type WorkspacePackage,
-} from "./util.js";
+} from "./package.js";
+import { fail } from "./script.js";
+import { bunRun, sh } from "./shell.js";
 
 /**
  * Default registry. Points at the local Verdaccio convention
@@ -170,10 +170,9 @@ async function isAlreadyPublished(
 ): Promise<boolean> {
   const { name, version } = pkg.meta;
   if (!name || !version) return false;
-  const out = await exec(
-    "npm",
-    ["view", `${name}@${version}`, "version", `--registry=${registry}`],
-    { disableCheck: true },
+  const out = await sh(
+    ["npm", "view", `${name}@${version}`, "version", `--registry=${registry}`],
+    { nothrow: true, quiet: true },
   );
   return out.stdout === version;
 }
@@ -231,23 +230,25 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
   const { registry = DEFAULT_REGISTRY, dryRun = false, otp } = opts;
 
   const rootMeta = (await Bun.file(
-    resolve(ROOT_DIR, "package.json"),
+    toAbsolute("package.json"),
   ).json()) as PackageJson & {
     catalog?: Record<string, string>;
     catalogs?: Record<string, Record<string, string>>;
   };
   const defaultData = (await Bun.file(
-    resolve(ROOT_DIR, "package.default.json"),
+    toAbsolute("package.default.json"),
   ).json()) as PackageJson;
   const enforcedData = (await Bun.file(
-    resolve(ROOT_DIR, "package.enforced.json"),
+    toAbsolute("package.enforced.json"),
   ).json()) as PackageJson;
   const enforcedRepo = (enforcedData.repository ?? {}) as Record<string, unknown>;
 
   const DEFAULT_CATALOG = rootMeta.catalog ?? {};
   const NAMED_CATALOGS = rootMeta.catalogs ?? {};
 
-  const packages = await discoverPackages();
+  // Publish in workspace dependency order so a package is on the
+  // registry before anything that depends on it.
+  const packages = orderByDependencies(await discoverPackages());
   const workspaceVersions = new Map<string, string>();
   for (const pkg of packages) {
     if (pkg.meta.name && pkg.meta.version) {
@@ -331,7 +332,7 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
       ...enforcedData,
       repository: {
         ...enforcedRepo,
-        directory: relative(ROOT_DIR, pkg.dir).replace(/\\/g, "/"),
+        directory: pkg.slug.replace(/\\/g, "/"),
       },
     };
     rewriteSpecialDeps(merged);
@@ -367,13 +368,13 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
       }
 
       if (dryRun) {
-        await exec("bun", ["pm", "pack", "--dry-run"], { cwd: stageDir });
+        await sh(["bun", "pm", "pack", "--dry-run"], { cwd: stageDir });
         console.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
         return;
       }
       const args = ["publish", "--access=public", `--registry=${registry}`];
       if (otp) args.push(`--otp=${otp}`);
-      await exec("npm", args, { cwd: stageDir });
+      await sh(["npm", ...args], { cwd: stageDir });
       console.log(`✓ published ${pkg.meta.name}@${pkg.meta.version}`);
     } finally {
       rmSync(stageDir, { recursive: true, force: true });
@@ -433,7 +434,7 @@ if (import.meta.main) {
   // Build every publishable package before publishing (formerly the
   // `prerelease` npm hook). The publish flow stages each package's
   // compiled `dist/`, so the build has to run first.
-  await execScript("build");
+  await bunRun("build");
 
   const result = await release({ registry, dryRun, otp });
   if (result.failed > 0) fail(`${result.failed} package(s) failed to publish`);

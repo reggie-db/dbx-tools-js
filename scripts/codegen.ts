@@ -61,16 +61,17 @@
 // with a clear error rather than overwriting their work.
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { basename, dirname, relative, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { generate } from "ts-to-zod";
 import ts from "typescript";
+import { git } from "./git.js";
 import {
   discoverPackages,
-  fail,
-  ROOT_DIR,
+  toAbsolute,
   toRelative,
   type WorkspacePackage,
-} from "./util.js";
+} from "./package.js";
+import { fail } from "./script.js";
 
 interface CodegenInput {
   /** Absolute path to the source `.d.ts` file. */
@@ -275,16 +276,13 @@ function inlineInferredTypes(inferredFile: string): string {
  *     hard error - we can't safely decide, so refuse.
  */
 async function isGitIgnored(absPath: string): Promise<boolean> {
-  const proc = Bun.spawn(["git", "check-ignore", "--quiet", absPath], {
-    cwd: ROOT_DIR,
-    stdout: "ignore",
-    stderr: "ignore",
+  const { exitCode } = await git(["check-ignore", "--quiet", absPath], {
+    nothrow: true,
   });
-  const code = await proc.exited;
-  if (code === 0) return true;
-  if (code === 1) return false;
+  if (exitCode === 0) return true;
+  if (exitCode === 1) return false;
   fail(
-    `\`git check-ignore\` failed (exit ${code}) for ${toRelative(absPath)}; ` +
+    `\`git check-ignore\` failed (exit ${exitCode}) for ${toRelative(absPath)}; ` +
       `is the workspace inside a git worktree?`,
   );
 }
@@ -355,7 +353,7 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
   const indexLines: string[] = [];
   let warnings = 0;
   for (const input of inputs) {
-    const sourcePath = resolve(ROOT_DIR, input.source);
+    const sourcePath = toAbsolute(input.source);
     if (!existsSync(sourcePath)) {
       fail(`${pkg.slug}: codegen input not found: ${input.source}`);
     }
@@ -395,7 +393,7 @@ async function generatePackage(pkg: WorkspacePackage): Promise<void> {
 
   console.log(
     `${pkg.meta.name ?? pkg.slug}: ${inputs.length} module(s) -> ` +
-      `${relative(ROOT_DIR, generatedDir)}/` +
+      `${toRelative(generatedDir)}/` +
       (warnings ? ` (${warnings} warning(s))` : ""),
   );
 }

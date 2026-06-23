@@ -1,26 +1,27 @@
-// Keep root `tsconfig.json` in sync with the workspace.
+#!/usr/bin/env bun
+// Workspace-wide type check, run via `bun run typecheck` and as part of
+// the `bun run build` gate.
 //
-// Walks every workspace package's tsconfigs (via `pkg.tsconfigs()`) and
-// writes the deduped list back into the root config's `references`
-// array, preserving any non-string-path entries the developer added by
-// hand.
+// First syncs the root `tsconfig.json` with the workspace: walks every
+// workspace package's tsconfigs (via `pkg.tsconfigs()`) and writes the
+// deduped list back into the root config's `references` array,
+// preserving any non-string-path entries a developer added by hand.
+// Also enforces `"files": []` so a bare `tsc --noEmit` at the repo root
+// doesn't auto-glob the whole tree (which produces TS6305 once any
+// referenced project sets `composite: true`, and bogus errors against
+// demo client files that need the demo's `lib`/`paths`).
 //
-// Also enforces `"files": []` so a bare `tsc` / `tsc --noEmit` at the
-// repo root doesn't auto-glob the whole tree (which produces TS6305
-// once any referenced project sets `composite: true`, and bogus errors
-// against demo client files that need the demo's `lib`/`paths`).
-//
-// Run via the `pretypecheck` hook before `bun run typecheck` (and thus
-// during the `bun run build` gate). Idempotent.
+// Then runs `tsc --noEmit` over the synced project. Idempotent.
 
 import { applyEdits, modify, parse } from "jsonc-parser";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { discoverPackages, ROOT_DIR, toAbsolute, toRelative } from "./util.js";
+import { discoverPackages, toAbsolute, toRelative } from "./package.js";
+import { sh } from "./shell.js";
 
 const FORMAT = { insertSpaces: true, tabSize: 2 } as const;
 
-const rootTsconfigPath = `${ROOT_DIR}/tsconfig.json`;
+const rootTsconfigPath = toAbsolute("tsconfig.json");
 const original = await Bun.file(rootTsconfigPath).text();
 const parsed = parse(original) as {
   references?: ReadonlyArray<{ path?: unknown } | unknown>;
@@ -67,3 +68,5 @@ updated = applyEdits(
   modify(updated, ["files"], [], { formattingOptions: FORMAT }),
 );
 await Bun.write(rootTsconfigPath, updated);
+
+await sh(["bun", "x", "--bun", "tsc", "--noEmit"]);

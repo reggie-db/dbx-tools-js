@@ -7,12 +7,22 @@ alwaysApply: false
 # Workspace script conventions
 
 Scripts run under `bun` (top of file: `#!/usr/bin/env bun`). Shared
-plumbing lives in `scripts/util.ts` - reach for it before pulling in
-new deps or rolling your own.
+plumbing is split by concern - reach for it before pulling in new deps
+or rolling your own:
 
-## Always await `bunx` / `run`
+- `shell.ts` - `sh` / `bunx` / `bunRun` wrap Bun's `$`. One home for
+  command running, output trimming, and exit-code handling.
+- `git.ts` - `git()` over `sh`.
+- `package.ts` - `discoverPackages*`, `orderByDependencies`,
+  `writeJson`, `toAbsolute` / `toRelative`, `PackageJson` /
+  `WorkspacePackage`.
+- `script.ts` - `runScript`, `getScriptsDir`, `fail`.
+- `agent.ts` - the Mastra script agent (`agentQuery`, `getScriptAgent`).
+- `project.ts` - `getProject` (the pacwich `FileSystemProject`).
 
-`bunx()` and `run()` from `util.ts` are **async**. Awaiting them is
+## Always await the shell helpers
+
+`sh()`, `bunx()`, `bunRun()` and `git()` are **async**. Awaiting them is
 mandatory: errors only surface (and serial loops only stay serial)
 when the promise is awaited.
 
@@ -35,7 +45,7 @@ Don't re-implement the "scan `workspaces` glob → read each
 source of truth.
 
 ```ts
-import { discoverPackages } from "./util.js";
+import { discoverPackages } from "./package.js";
 
 // Default filter: skip private packages.
 const all = await discoverPackages();

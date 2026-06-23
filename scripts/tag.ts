@@ -41,7 +41,7 @@
 //   tag, hands them to `releaseNotes()`, and uses the returned text
 //   as the annotated tag's message body. The default
 //   `releaseNotes()` runs a Mastra agent via `agentQuery()` from
-//   `util.ts`; the agent can call a `read_files` tool to open
+//   `agent.ts`; the agent can call a `read_files` tool to open
 //   touched source files (in batches) if the diff stat alone
 //   doesn't tell the whole story. If it returns null (no AI available, no Databricks
 //   profile, etc.) the script falls back to a bare
@@ -64,24 +64,26 @@
 //   resulting edits get auto-staged and folded into the release
 //   commit, so the shipped READMEs match the tagged code.
 
-import { which } from "bun";
 import { Command, InvalidArgumentError, Option } from "commander";
 import semver from "semver";
+import { agentQuery } from "./agent.js";
+import { git } from "./git.js";
+import { discoverPackages, writeJson } from "./package.js";
 import { syncReadmes } from "./readme.js";
 import { DEFAULT_REGISTRY, release } from "./release.js";
-import { agentQuery, discoverPackages, fail, git, writeJson } from "./util.js";
+import { fail } from "./script.js";
+import { sh } from "./shell.js";
 
 type Bump = "major" | "minor" | "patch";
 
 /**
  * `git rev-parse <args>`, returning trimmed stdout. Tolerant by
- * design (`disableCheck`): rev-parse exits non-zero when a ref is
- * unknown (e.g. an unset `@{u}` upstream or a missing tag), and every
- * caller here treats "unknown" as an empty string rather than an
- * error.
+ * design (`nothrow`): rev-parse exits non-zero when a ref is unknown
+ * (e.g. an unset `@{u}` upstream or a missing tag), and every caller
+ * here treats "unknown" as an empty string rather than an error.
  */
 async function gitRevParse(...args: string[]): Promise<string> {
-  return (await git(["rev-parse", ...args], { disableCheck: true })).stdout;
+  return (await git(["rev-parse", ...args], { nothrow: true })).stdout;
 }
 
 /** `git status --porcelain` stdout (one entry per changed path). */
@@ -261,18 +263,14 @@ async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
  * (`gh release create ... --notes-file <file>`).
  */
 async function publishGithubRelease(tag: string, body: string): Promise<void> {
-  if (!which("gh")) {
+  if (!Bun.which("gh")) {
     console.log("(skipping GitHub Release: gh CLI not on PATH)");
     return;
   }
   console.log(`Publishing GitHub Release ${tag}...`);
   const gh = async (args: string[]): Promise<number> => {
-    const proc = Bun.spawn(["gh", ...args], {
-      stdout: "inherit",
-      stderr: "inherit",
-      stdin: "inherit",
-    });
-    return await proc.exited;
+    const { exitCode } = await sh(["gh", ...args], { nothrow: true });
+    return exitCode;
   };
   const createCode = await gh([
     "release",
@@ -366,8 +364,7 @@ if ((await git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`])).stdout) {
 }
 
 const prevTag =
-  (await git(["describe", "--tags", "--abbrev=0"], { disableCheck: true })).stdout ||
-  null;
+  (await git(["describe", "--tags", "--abbrev=0"], { nothrow: true })).stdout || null;
 
 console.log(`Bump:    ${bump}`);
 console.log(`Current: ${currentVersion}`);

@@ -17,14 +17,14 @@
 // directory (where this file lives) is appended explicitly.
 
 import {
-  bunx,
   discoverPackageJsons,
   discoverPackages,
   type PackageJson,
-  SCRIPTS_DIR,
   toRelative,
   writeJson,
-} from "./util.js";
+} from "./package.js";
+import { getScriptsDir } from "./script.js";
+import { bunx } from "./shell.js";
 
 /**
  * Build the single brace-glob prettier walks - a recursive
@@ -36,7 +36,7 @@ import {
  */
 async function sourceGlob(): Promise<string> {
   const packages = await discoverPackages(() => true);
-  const dirs = [...packages.map((pkg) => pkg.slug), SCRIPTS_DIR];
+  const dirs = [...packages.map((pkg) => pkg.slug), toRelative(getScriptsDir())];
   return `{${dirs.join(",")}}/**/*.{ts,tsx}`;
 }
 
@@ -67,7 +67,7 @@ function reorderLifecycleScripts(
 }
 
 // package.json hygiene.
-await bunx(["syncpack", "format"], { stdout: "inherit", stderr: "inherit" });
+await bunx(["syncpack", "format"]);
 
 // Regroup npm lifecycle hooks. syncpack just alpha-sorted every
 // `scripts` block, which separates `pre`/`post` hooks from their base
@@ -93,13 +93,12 @@ console.log(
     : "No lifecycle scripts to regroup.",
 );
 
-// prettier over every workspace package + scripts/. Capture
-// stdout (where prettier lists every visited file) so we can drop its
-// noisy "<file> (unchanged)" lines and report only the files it
-// actually rewrote. stderr (warnings / parse errors) still streams
-// through, and a non-zero exit still throws.
-const log = await bunx(["prettier", "--write", await sourceGlob()], {
-  stderr: "inherit",
+// prettier over every workspace package + scripts/. Capture stdout
+// (where prettier lists every visited file) so we can drop its noisy
+// "<file> (unchanged)" lines and report only the files it actually
+// rewrote. A non-zero exit still throws.
+const { stdout: log } = await bunx(["prettier", "--write", await sourceGlob()], {
+  quiet: true,
 });
 const changed = log
   .split("\n")
