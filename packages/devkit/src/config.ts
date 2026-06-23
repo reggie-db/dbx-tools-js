@@ -14,7 +14,7 @@
 // workspace packages; `repo` defaults to the `origin` git remote.
 
 import pMemoize from "p-memoize";
-import { git } from "./git.js";
+import { git, hasGit } from "./git.js";
 import { discoverPackages, toAbsolute, type PackageJson } from "./package.js";
 
 /** Optional `devkit` overrides read from the root `package.json`. */
@@ -25,7 +25,7 @@ interface DevkitConfigOverrides {
 
 /** Resolved toolkit configuration for the current repo. */
 export interface DevkitConfig {
-  /** npm scope (`@dbx-tools`) used when scaffolding new packages. */
+  /** npm scope (e.g. `@acme`) used when scaffolding new packages. */
   scope: string;
   /** `owner/name` slug used for release links, or null when undiscoverable. */
   repo: string | null;
@@ -77,6 +77,7 @@ function parseRepoSlug(remoteUrl: string): string | null {
 
 /** Resolve the `owner/name` slug from the `origin` remote, or null. */
 async function deriveRepo(): Promise<string | null> {
+  if (!hasGit()) return null;
   const { exitCode, stdout } = await git(["remote", "get-url", "origin"], {
     nothrow: true,
   });

@@ -108,6 +108,17 @@ const DEP_KEYS = [
   "optionalDependencies",
 ] as const;
 
+/**
+ * Read a JSON file, returning an empty object when it doesn't exist.
+ * Used for the optional `package.default.json` / `package.enforced.json`
+ * release-shaping templates so the publish flow works in repos that
+ * don't define them.
+ */
+async function readOptionalJson(path: string): Promise<PackageJson> {
+  if (!existsSync(path)) return {} as PackageJson;
+  return (await Bun.file(path).json()) as PackageJson;
+}
+
 /** Options accepted by {@link release}. */
 export interface ReleaseOptions {
   /** Registry to publish to. Defaults to {@link DEFAULT_REGISTRY}. */
@@ -226,12 +237,11 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
     catalog?: Record<string, string>;
     catalogs?: Record<string, Record<string, string>>;
   };
-  const defaultData = (await Bun.file(
-    toAbsolute("package.default.json"),
-  ).json()) as PackageJson;
-  const enforcedData = (await Bun.file(
-    toAbsolute("package.enforced.json"),
-  ).json()) as PackageJson;
+  // The release-shaping templates are optional: a consuming repo that
+  // doesn't split publish-time fields out into these files just
+  // publishes each package's own `package.json` as-is.
+  const defaultData = await readOptionalJson(toAbsolute("package.default.json"));
+  const enforcedData = await readOptionalJson(toAbsolute("package.enforced.json"));
   const enforcedRepo = (enforcedData.repository ?? {}) as Record<string, unknown>;
 
   const DEFAULT_CATALOG = rootMeta.catalog ?? {};

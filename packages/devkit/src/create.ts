@@ -102,9 +102,15 @@ export async function create(options: CreateOptions): Promise<void> {
   // group is currently on. Read straight off the publishable packages
   // and take the highest, so a freshly scaffolded package starts in
   // lockstep with the rest.
-  const publishedVersions = (await discoverPackages())
+  const existingPackages = await discoverPackages();
+  const publishedVersions = existingPackages
     .map((pkg) => pkg.meta.version)
     .filter((version): version is string => Boolean(version));
+
+  // Only wire the `<scope>/shared` utils dependency when such a package
+  // actually exists in this workspace, so scaffolding works in repos
+  // that don't follow the shared-helpers convention.
+  const hasSharedPkg = existingPackages.some((pkg) => pkg.meta.name === sharedPkg);
   const initialVersion = publishedVersions.reduce<string | undefined>(
     (highest, version) => (!highest || semver.gt(version, highest) ? version : highest),
     undefined,
@@ -147,11 +153,16 @@ export async function create(options: CreateOptions): Promise<void> {
     type: "module" as const,
   };
 
+  // Plugins and standard packages depend on `<scope>/shared` (workspace)
+  // out of the box so consumers get the logger / plugin helpers without
+  // wiring them - but only when that package exists in this workspace.
+  const sharedDep = hasSharedPkg
+    ? { dependencies: { [sharedPkg]: "workspace:*" } }
+    : {};
+
   const pluginPackageJson = {
     ...basePackageJson,
-    dependencies: {
-      [sharedPkg]: "workspace:*",
-    },
+    ...sharedDep,
     peerDependencies: {
       "@databricks/appkit": APPKIT_PEER_RANGE,
     },
@@ -165,13 +176,9 @@ export async function create(options: CreateOptions): Promise<void> {
     ...basePackageJson,
   };
 
-  // Standard packages depend on `<scope>/shared` (workspace) out of the
-  // box so consumers get the logger / plugin helpers without wiring them.
   const standardPackageJson = {
     ...basePackageJson,
-    dependencies: {
-      [sharedPkg]: "workspace:*",
-    },
+    ...sharedDep,
   };
 
   const packageJson =

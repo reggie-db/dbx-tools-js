@@ -25,7 +25,7 @@
 import semver from "semver";
 import { agentQuery } from "./agent.js";
 import { getDevkitConfig } from "./config.js";
-import { git } from "./git.js";
+import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
 import { syncReadmes } from "./readme.js";
 import { DEFAULT_REGISTRY, release } from "./release.js";
@@ -257,6 +257,10 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
     publish = true,
     registry = DEFAULT_REGISTRY,
   } = opts;
+
+  // Tagging commits, tags, and pushes - all of which need git and a
+  // repo. Fail upfront with a clear message rather than partway through.
+  await requireGitRepo("devkit tag");
 
   const { version: currentVersion, pkgs } = await findPublishables();
   const nextVersion = semver.inc(currentVersion, bump);

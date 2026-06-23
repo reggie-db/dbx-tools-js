@@ -8,7 +8,7 @@
 // own `package.json`:
 //
 //   {
-//     "name": "@dbx-tools/sdk-shared",
+//     "name": "@scope/sdk-shared",
 //     "codegen": {
 //       "inputs": [
 //         "node_modules/@databricks/sdk-experimental/dist/apis/dashboards/model.d.ts"
@@ -63,7 +63,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { generate } from "ts-to-zod";
 import ts from "typescript";
-import { git } from "./git.js";
+import { git, hasGit } from "./git.js";
 import {
   discoverPackages,
   toAbsolute,
@@ -275,6 +275,13 @@ function inlineInferredTypes(inferredFile: string): string {
  *     hard error - we can't safely decide, so refuse.
  */
 async function isGitIgnored(absPath: string): Promise<boolean> {
+  if (!hasGit()) {
+    fail(
+      `cannot verify ${toRelative(absPath)} is gitignored: no \`git\` executable on PATH. ` +
+        `codegen needs git to confirm it only overwrites files under \`generated/\`. ` +
+        `Install git, or move the file out of \`generated/\` before regenerating.`,
+    );
+  }
   const { exitCode } = await git(["check-ignore", "--quiet", absPath], {
     nothrow: true,
   });

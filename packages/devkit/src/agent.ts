@@ -11,7 +11,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import pMemoize from "p-memoize";
 import { z } from "zod";
-import { git } from "./git.js";
+import { git, isGitRepo } from "./git.js";
 import { getProject } from "./project.js";
 import { errorMessage } from "./script.js";
 import { sh } from "./shell.js";
@@ -121,7 +121,7 @@ function createListFilesTool(base: string) {
     description:
       `List files and directories under ${scopeLabel(base)}. ` +
       "`path` is an optional directory path relative to that scope " +
-      "(e.g. 'src' or 'packages/shared/src'). Defaults to the scope " +
+      "(e.g. 'src' or a nested subdirectory). Defaults to the scope " +
       "root. Returns immediate children with type metadata.",
     inputSchema: z.object({
       path: z.string().optional().describe("Scope-relative directory path"),
@@ -233,11 +233,12 @@ function createReadFilesTool(base: string) {
 
 /**
  * `git_status` / `git_diff` / `git_log` tool trio rooted at the repo
- * root. `undefined` when git isn't on PATH. Each accepts an optional
- * repo-relative path filter.
+ * root. `undefined` when git isn't installed or the root isn't a git
+ * repo (the tools are optional context for the agent, so we skip them
+ * rather than fail). Each accepts an optional repo-relative path filter.
  */
-function createGitTools() {
-  if (!Bun.which("git")) return undefined;
+async function createGitTools() {
+  if (!(await isGitRepo(root))) return undefined;
   const runGit = (args: string[]): Promise<ExecResult> =>
     git(args, { nothrow: true, cwd: root });
   return {
@@ -334,7 +335,7 @@ function loadCursorRules(): string {
 }
 
 const DEFAULT_AGENT_INSTRUCTIONS = `
-You are a code-aware assistant for the ${projectName} monorepo (Bun + TypeScript, packages under packages/* and demo/).
+You are a code-aware assistant for the ${projectName} monorepo (Bun + TypeScript workspaces).
 
 Tools (use only when the answer materially benefits; don't read speculatively):
 - list_files / read_files: walk and read source inside the current scope.
@@ -448,7 +449,7 @@ export const getScriptAgent = pMemoize(
     const model = await buildScriptModel(spec);
     if (!model) return null;
     const base = overrides.cwd ?? root;
-    const gitTools = createGitTools();
+    const gitTools = await createGitTools();
     const sandbox = createExecuteTypescriptTool();
     // Always append the .cursor/rules block so per-command overrides
     // (release notes prompt, README generator prompt, ...) still get
@@ -456,9 +457,10 @@ export const getScriptAgent = pMemoize(
     const rules = loadCursorRules();
     const baseInstructions = overrides.instructions ?? DEFAULT_AGENT_INSTRUCTIONS;
     const instructions = rules ? `${baseInstructions}\n\n${rules}` : baseInstructions;
+    const agentName = `${projectName}-script-agent`;
     return new Agent({
-      id: "dbx-tools-script-agent",
-      name: "dbx-tools-script-agent",
+      id: agentName,
+      name: agentName,
       instructions,
       model: model,
       tools: {
