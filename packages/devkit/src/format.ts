@@ -15,6 +15,7 @@
 // package is picked up automatically.
 
 import { consola } from "consola";
+import { fileURLToPath } from "node:url";
 import {
   discoverPackageJsons,
   discoverPackages,
@@ -22,7 +23,21 @@ import {
   toRelative,
   writeJson,
 } from "./package.js";
-import { bunx } from "./shell.js";
+import { bunx, sh } from "./shell.js";
+
+/**
+ * Resolve a bundled tool to an absolute path from devkit's own
+ * `node_modules`. devkit ships prettier and its organize-imports plugin
+ * as dependencies, but the consuming repo's package manager may nest
+ * them under `packages/devkit/node_modules` rather than hoisting them to
+ * the workspace root - so `bun x prettier` (which resolves from the repo
+ * root) can't see them and the root prettier config can't resolve the
+ * plugin by bare name. Resolving from this module instead works
+ * regardless of hoisting layout.
+ */
+function resolveTool(specifier: string): string {
+  return fileURLToPath(import.meta.resolve(specifier));
+}
 
 /**
  * Build the single brace-glob prettier walks - a recursive
@@ -92,13 +107,19 @@ export async function format(): Promise<void> {
       : "No lifecycle scripts to regroup.",
   );
 
-  // prettier over every workspace package. Capture stdout (where
-  // prettier lists every visited file) so we can drop its noisy
-  // "<file> (unchanged)" lines and report only the files it actually
-  // rewrote. A non-zero exit still throws.
-  const { stdout: log } = await bunx(["prettier", "--write", await sourceGlob()], {
-    quiet: true,
-  });
+  // prettier over every workspace package, run from devkit's pinned
+  // prettier with the organize-imports plugin supplied by absolute path
+  // (the root config carries options only; the plugin is injected here
+  // so it resolves no matter where the package manager installed it).
+  // Capture stdout (where prettier lists every visited file) so we can
+  // drop its noisy "<file> (unchanged)" lines and report only the files
+  // it actually rewrote. A non-zero exit still throws.
+  const prettierBin = resolveTool("prettier/bin/prettier.cjs");
+  const organizeImports = resolveTool("prettier-plugin-organize-imports");
+  const { stdout: log } = await sh(
+    ["bun", prettierBin, "--write", `--plugin=${organizeImports}`, await sourceGlob()],
+    { quiet: true },
+  );
   const changed = log
     .split("\n")
     .map((line) => line.trim())

@@ -8,8 +8,9 @@ export default {
   trailingComma: "all",
   bracketSpacing: true,
   arrowParens: "always",
-  // Runs TypeScript's "organize imports" on every formatted file:
-  // drops unused imports and sorts the rest. This is what lets
-  // `bun run format` prune dead imports (plain prettier won't).
-  plugins: ["prettier-plugin-organize-imports"],
+  // `prettier-plugin-organize-imports` (drops unused imports and sorts
+  // the rest) is injected by `devkit format` via an absolute path
+  // resolved from devkit's own install, so it isn't listed here by name
+  // - a bare name wouldn't resolve when the package manager nests the
+  // plugin under `packages/devkit/node_modules` instead of hoisting it.
 };
