@@ -1,9 +1,13 @@
 {
-  "name": "@dbx-tools/genie-shared",
+  "name": "@dbx-tools/appkit-email",
   "version": "0.1.44",
   "dependencies": {
-    "@dbx-tools/sdk-shared": "workspace:*",
+    "@dbx-tools/appkit-email-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
+    "@mastra/core": "catalog:",
+    "juice": "^12.1.1",
+    "marked": "^18.0.5",
+    "nodemailer": "^7.0.9",
     "zod": "catalog:"
   },
   "module": "index.ts",

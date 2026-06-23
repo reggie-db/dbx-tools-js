@@ -24,6 +24,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { useState } from "react";
+import { EmailPreview, type EmailMessage } from "@dbx-tools/appkit-email-ui/react";
 import { MarkdownWithEmbeds } from "./embed-slots.js";
 import { SuggestionPills } from "./suggestion-pills.js";
 import { collectSuggestions } from "./suggestions.js";
@@ -64,15 +65,6 @@ const RoleAvatar = ({ role }: { role: UIMessage["role"] }) => (
  * gated tool's id here to wire it into the same flow.
  */
 const APPROVAL_GATED_TOOLS = new Set<string>(["send_email"]);
-
-/** Args shape for `send_email`. Mirrors the server tool's input schema. */
-type EmailInput = {
-  to: string;
-  subject: string;
-  body: string;
-  cc?: string[];
-  bcc?: string[];
-};
 
 /**
  * Inline approval prompt rendered above the assistant's prose when
@@ -121,7 +113,7 @@ const ToolApprovalCard = ({
   // back to a generic JSON dump so a new approval-gated tool works
   // without touching this component.
   const isEmail = toolName === "send_email";
-  const email = isEmail ? (input as Partial<EmailInput>) : null;
+  const email = isEmail ? (input as Partial<EmailMessage>) : null;
 
   return (
     <div className="not-prose my-2 rounded-md border border-warning/40 bg-warning/5 p-3">
@@ -130,28 +122,7 @@ const ToolApprovalCard = ({
         <span>Approval needed: {humanizeToolName(toolName)}</span>
       </div>
       {email ? (
-        <dl className="space-y-1 text-xs">
-          {email.to && (
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-muted-foreground">To</dt>
-              <dd className="truncate">{email.to}</dd>
-            </div>
-          )}
-          {email.subject && (
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-muted-foreground">Subject</dt>
-              <dd className="truncate font-medium">{email.subject}</dd>
-            </div>
-          )}
-          {email.body && (
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-muted-foreground">Body</dt>
-              <dd className="whitespace-pre-wrap break-words text-foreground">
-                {email.body}
-              </dd>
-            </div>
-          )}
-        </dl>
+        <EmailPreview email={email} />
       ) : (
         <pre className="overflow-x-auto rounded bg-background/40 p-2 text-[11px]">
           {JSON.stringify(input, null, 2)}

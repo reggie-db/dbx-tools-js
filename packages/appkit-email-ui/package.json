@@ -1,20 +1,9 @@
 {
-  "name": "@dbx-tools/appkit-mastra-ui",
+  "name": "@dbx-tools/appkit-email-ui",
   "version": "0.1.44",
   "dependencies": {
-    "@dbx-tools/appkit-email-ui": "workspace:*",
-    "@dbx-tools/appkit-mastra-shared": "workspace:*",
-    "@dbx-tools/genie-shared": "workspace:*",
-    "@dbx-tools/shared": "workspace:*",
-    "@mastra/client-js": "catalog:",
-    "@tanstack/react-table": "^8.21.3",
-    "ai": "^5.0.0 || >=7.0.0-0 <8.0.0",
-    "echarts": "^6.1.0",
-    "echarts-for-react": "^3.0.6",
+    "@dbx-tools/appkit-email-shared": "workspace:*",
     "lucide-react": "^0.554.0",
-    "nanoid": "^5.1.11",
-    "shiki": "^4.2.0",
-    "sql-formatter": "^15.8.0",
     "streamdown": "^2.5.0"
   },
   "exports": {

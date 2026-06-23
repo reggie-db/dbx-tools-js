@@ -25,4 +25,3 @@ export {
   extractModelOverride,
   type ModelOverrideRequest,
 } from "./src/serving.js";
-export * from "./src/tools/email.js";

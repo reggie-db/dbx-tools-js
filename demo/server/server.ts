@@ -1,12 +1,7 @@
 import { genie, lakebase, server } from "@databricks/appkit";
 import { createApp } from "@dbx-tools/appkit-config";
-import {
-  buildEmailTool,
-  createAgent,
-  GENIE_INSTRUCTIONS,
-  mastra,
-  tool,
-} from "@dbx-tools/appkit-mastra";
+import { email, emailTool } from "@dbx-tools/appkit-email";
+import { createAgent, GENIE_INSTRUCTIONS, mastra, tool } from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
@@ -100,12 +95,13 @@ const support = createAgent({
         schema: z.object({ city: z.string() }),
         execute: async ({ city }) => `Sunny in ${city}`,
       }),
-      // Approval-gated email tool. The model can call this freely;
-      // execution is paused until the user clicks Approve in the
-      // chat UI. The default execute body just logs the would-be
-      // email to the server console (see `buildEmailTool`'s
-      // `send` option to swap in a real provider).
-      send_email: buildEmailTool(),
+      // Approval-gated email tool from `@dbx-tools/appkit-email`. The
+      // model can call this freely; execution pauses until the user
+      // clicks Approve in the chat UI, then the message is sent for
+      // real over SMTP. The sender is derived from the on-behalf-of
+      // user's email on the configured `EMAIL_DOMAIN`; SMTP host /
+      // credentials come from the `email()` plugin config / env.
+      send_email: emailTool(),
     };
   },
 });
@@ -124,6 +120,9 @@ await createApp({
     server({ host }),
     genie(),
     lakebase(),
+    // Validates SMTP config + verifies connectivity at startup, and
+    // primes the transport the approval-gated `send_email` tool reuses.
+    email(),
     mastra({
       storage: true,
       memory: true,

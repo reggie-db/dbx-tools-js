@@ -37,6 +37,15 @@
       "path": "./packages/appkit-config/tsconfig.build.json"
     },
     {
+      "path": "./packages/appkit-email-shared/tsconfig.build.json"
+    },
+    {
+      "path": "./packages/appkit-email-ui/tsconfig.build.json"
+    },
+    {
+      "path": "./packages/appkit-email/tsconfig.build.json"
+    },
+    {
       "path": "./packages/appkit-mastra-shared/tsconfig.build.json"
     },
     {
@@ -53,6 +62,9 @@
     },
     {
       "path": "./packages/genie/tsconfig.build.json"
+    },
+    {
+      "path": "./packages/model-proxy/tsconfig.build.json"
     },
     {
       "path": "./packages/model-shared/tsconfig.build.json"

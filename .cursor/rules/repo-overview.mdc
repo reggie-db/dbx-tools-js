@@ -6,7 +6,7 @@ alwaysApply: true
 # dbx-tools-js
 
 Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
-Databricks Apps. Nine publishable packages plus a runnable demo.
+Databricks Apps. Thirteen publishable packages plus a runnable demo.
 
 ## Packages
 
@@ -16,11 +16,32 @@ Databricks Apps. Nine publishable packages plus a runnable demo.
 | `packages/sdk-shared` | `@dbx-tools/sdk-shared` | Zod schemas regenerated from Databricks SDK `.d.ts` (driven by `scripts/codegen.ts`). |
 | `packages/genie-shared` | `@dbx-tools/genie-shared` | Wire-format types + `GenieChatEvent` union for Genie streaming. |
 | `packages/genie` | `@dbx-tools/genie` | `genieChat` (raw) + `genieEventChat` (semantic events) drivers. |
+| `packages/model-shared` | `@dbx-tools/model-shared` | Pure Model Serving capability tiers, score profile, endpoint descriptor, and tier classifier (browser-safe). |
+| `packages/model` | `@dbx-tools/model` | Node-side Model Serving access: cached `/serving-endpoints` listing, fuzzy name resolution, `resolveModel`. Re-exports `model-shared`. |
 | `packages/appkit-config` | `@dbx-tools/appkit-config` | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env) before delegating to AppKit's `createApp`. |
 | `packages/appkit-mastra` | `@dbx-tools/appkit-mastra` | AppKit plugin that mounts Mastra agents + chat route + Lakebase memory. |
 | `packages/appkit-mastra-shared` | `@dbx-tools/appkit-mastra-shared` | Dependency-free wire-format contract + URL helpers + Genie writer-event vocabulary. |
 | `packages/appkit-mastra-ui` | `@dbx-tools/appkit-mastra-ui` | React chat UI for the Mastra plugin (`./react` + `./styles.css`, AppKit-token styled). `MastraChat` drop-in + controlled `ChatView`. |
+| `packages/appkit-email` | `@dbx-tools/appkit-email` | AppKit `email` plugin + approval-gated `send_email` Mastra tool. Sends over SMTP (sender derived from the OBO user on a configured domain), or, with no SMTP credentials, writes each email as HTML to a local outbox dir for testing. |
+| `packages/appkit-email-shared` | `@dbx-tools/appkit-email-shared` | Dependency-free email message / result contract (zod schemas + inferred types). |
+| `packages/appkit-email-ui` | `@dbx-tools/appkit-email-ui` | React `EmailPreview` / `EmailApprovalCard` for the `send_email` approval flow (`./react`). |
 | `demo` | `@dbx-tools/appkit-demo` | Private runnable Databricks App that wires everything up. |
+
+## Package shape
+
+Capabilities follow a `<name>` / `<name>-shared` / `<name>-ui` trio
+(see `appkit-mastra*`, `appkit-email*`): server logic in the plugin
+package, a dependency-free wire contract in `-shared`, and React in
+`-ui`. Scaffold new packages with `bun run create [--plugin|--shared]
+<slug>` rather than hand-rolling `package.json` / `tsconfig`.
+
+A `-shared` (or any) package is a **single `index.ts`** by default. Only
+add the `index.ts` + `index.client.ts` browser/server split when the
+package genuinely contains server-only code (a `node:*` import, even
+transitive) that must be kept out of browser bundles - that is the sole
+reason `@dbx-tools/shared` carries the split. A pure types / zod /
+browser-safe package (e.g. `appkit-email-shared`, `appkit-mastra-shared`)
+stays single-entry.
 
 ## Daily commands
 

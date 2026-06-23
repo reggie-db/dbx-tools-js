@@ -1,0 +1,34 @@
+---
+description: When to split a package into a browser-safe index.client.ts vs a single index.ts
+alwaysApply: true
+---
+
+# Browser-safe entry split is opt-in, not the default
+
+Do **not** add an `index.client.ts` (browser-safe barrel) / `exports`
+map split to a package by default. A single `index.ts` is the norm.
+
+Only introduce the `index.client.ts` + `index.ts` split (the
+`@dbx-tools/shared` shape) when the package genuinely has a server-only
+surface that **cannot** run in the browser - i.e. something that imports
+`node:*`, pulls in a Node-only subtree (e.g. `@databricks/appkit`'s
+typegen / native bits), or otherwise breaks a client bundle. In that
+case, keep the browser-safe exports in `index.client.ts` and let
+`index.ts` re-export it plus the server-only namespaces.
+
+If everything in the package is browser-safe (pure types, sync helpers,
+isomorphic runtime), keep one `index.ts`. Don't create
+`index.client.ts`, a `browser` condition, or `*.browser.ts` variants
+speculatively.
+
+## Scaffolding
+
+- Every `bun run create` kind - standard, `--plugin`, and `--shared` -
+  produces a **single `index.ts`**. None of them emit `index.client.ts`
+  or an `exports` split.
+- `--shared` just seeds a dependency-free, browser-safe contract package
+  (`index.ts` re-exporting `src/protocol.ts`), like
+  `@dbx-tools/appkit-mastra-shared`.
+- If a package later grows a server-only (`node:*`) surface, add the
+  `index.client.ts` + `exports` split by hand (mirror
+  `@dbx-tools/shared`). Don't split pre-emptively.

@@ -6,7 +6,6 @@
 //     package.json         (name, version, module, type, optional deps)
 //     tsconfig.build.json  (one-liner extending the root build config)
 //     index.ts             (root barrel - what `module: "index.ts"` points at)
-//     index.client.ts      (shared only - browser-safe barrel)
 //     src/<dir>.ts          (plugin / standard) or src/protocol.ts (shared)
 //
 // For `plugin`, `<dir>` is always `appkit-<bare>` (the script
@@ -14,8 +13,8 @@
 // See "Naming derivations" below.
 //
 // Notable absences vs. typical npm scaffolds:
-//   - no `files`, `scripts`, `main`, `types` on package.json (shared
-//     does get an `exports` map for its browser/server split).
+//   - no `files`, `scripts`, `main`, `types`, or `exports` on
+//     package.json - `module: "index.ts"` is the only entry hint.
 //   - no per-package `tsconfig.json` (typecheck flows through the
 //     consumer's compile graph - currently the demo's tsconfigs).
 //   - no `src/index.ts`. The root `index.ts` IS the barrel; src/ holds
@@ -27,11 +26,12 @@
 //   - `--plugin`: AppKit Plugin subclass with an inline manifest. Lists
 //     `@databricks/appkit` as a peer dependency and depends on
 //     `@dbx-tools/shared` for logger / plugin helpers.
-//   - `--shared`: browser-safe package with a server entry (`index.ts`)
-//     and a browser entry (`index.client.ts`) wired through an
-//     `exports` map, mirroring `@dbx-tools/shared`. Seeds a
-//     `src/protocol.ts` types module. Zero runtime deps so the browser
-//     barrel is safe to import from client bundles.
+//   - `--shared`: dependency-free, browser-safe contract package with a
+//     single `index.ts` barrel re-exporting a `src/protocol.ts` seed,
+//     mirroring `@dbx-tools/appkit-mastra-shared`. Add an
+//     `index.client.ts` + `exports` split by hand only if the package
+//     later needs server-only (`node:*`) code kept out of browser
+//     bundles (the reason `@dbx-tools/shared` has the split).
 //   - none (default): a standard package with a single `index.ts`
 //     barrel re-exporting a `src/<slug>.ts` seed.
 //
@@ -182,36 +182,15 @@ const pluginPackageJson = {
   },
 };
 
-// Shared packages ship a browser/server split: the `exports` map points
-// browser-aware bundlers at `index.client.{ts,js}` and Node at
-// `index.{ts,js}`. `source` is listed FIRST and exposes the unbuilt
-// `.ts` entries so in-repo tooling (which activates the `source`
-// condition via the root tsconfig's `customConditions`) compiles
-// straight from source instead of stale `dist/*.d.ts`. Condition
-// matching is order-sensitive, so `source` must precede `types` /
-// `import` / `default`. Mirrors the `@dbx-tools/shared` package.json.
+// Shared packages are single-entry (`module: "index.ts"`) by default,
+// mirroring `@dbx-tools/appkit-mastra-shared`. The browser/server split
+// (`index.ts` + `index.client.ts` + an `exports` map) is added by hand
+// only when a package genuinely carries server-only code (a `node:*`
+// import, even transitive) that must stay out of browser bundles - the
+// sole reason `@dbx-tools/shared` has it. A pure types / zod package
+// does not.
 const sharedPackageJson = {
   ...basePackageJson,
-  exports: {
-    ".": {
-      source: {
-        browser: "./index.client.ts",
-        default: "./index.ts",
-      },
-      browser: {
-        types: "./dist/index.client.d.ts",
-        default: "./dist/index.client.js",
-      },
-      import: {
-        types: "./dist/index.d.ts",
-        default: "./dist/index.js",
-      },
-      default: {
-        types: "./dist/index.d.ts",
-        default: "./dist/index.js",
-      },
-    },
-  },
 };
 
 // Standard packages depend on `@dbx-tools/shared` (workspace) out of the
@@ -285,41 +264,25 @@ export const ${camel} = toPlugin(${className});
   );
   console.log(`Run \`bun install\` to link the workspace.`);
 } else if (kind === "shared") {
-  // Shared package: a server entry (`index.ts`) and a browser entry
-  // (`index.client.ts`), wired through the `exports` map above, both
-  // re-exporting from a single seed protocol module. Mirrors
-  // `@dbx-tools/shared`.
-  const indexClientTs = `/**
- * Browser-safe entry point for ${pkgName}. Pure types and browser-safe
- * runtime only - no \`node:*\` imports, even transitively, so this
- * barrel is safe to pull into a client bundle.
- *
- * Resolution: the package's \`exports\` map points the \`browser\` and
- * \`source.browser\` conditions at this file, so browser-aware bundlers
- * pick it up automatically while Node uses \`index.ts\`. Add new
- * browser-safe exports here.
- */
-export type {} from "./src/protocol.js";
-`;
-
+  // Shared package: one browser-safe `index.ts` barrel re-exporting a
+  // seed protocol module. If the package later needs server-only code,
+  // add an `index.client.ts` + `exports` map split by hand (see
+  // `@dbx-tools/shared`); don't split pre-emptively.
   const indexTs = `/**
- * Server-side entry point for ${pkgName}. Re-exports the browser-safe
- * \`index.client.ts\` barrel and is the place to add server-only
- * namespaces (anything that imports \`node:*\` or pulls in a node-only
- * subtree). Keeping those here keeps \`index.client.ts\` safe for client
- * bundles.
+ * ${pkgName}: a dependency-free, browser-safe wire-format contract.
+ * Pure types (and browser-safe runtime, e.g. zod) only - no \`node:*\`
+ * imports, even transitively - so any runtime can import it.
  */
-export * from "./index.client.js";
+export * from "./src/protocol.js";
 `;
 
   const protocolTs = `// Wire-format types for ${pkgName}. Pure types: no
-// runtime dependencies, no Node-only imports, safe for browser bundles.
+// Node-only imports, safe for browser bundles.
 //
-// Add your shared types below and re-export them from \`../index.client.ts\`.
+// Add your shared types below and re-export them from \`../index.ts\`.
 `;
 
   write(resolve(pkgDir, "index.ts"), indexTs);
-  write(resolve(pkgDir, "index.client.ts"), indexClientTs);
   write(resolve(pkgDir, "src", "protocol.ts"), protocolTs);
 
   console.log(`Scaffolded packages/${dirSlug}/ (shared, npm name ${pkgName})`);

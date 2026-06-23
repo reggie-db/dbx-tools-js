@@ -1,0 +1,29 @@
+/*
+ * @dbx-tools/appkit-email-ui stylesheet.
+ *
+ * Import once from the host app's Tailwind entry, after Tailwind and
+ * your AppKit-UI theme:
+ *
+ *   @import "tailwindcss";
+ *   @import "@databricks/appkit-ui/styles.css";
+ *   @import "@dbx-tools/appkit-email-ui/styles.css";
+ *
+ * Defines NO design tokens - the email preview styles exclusively with
+ * AppKit semantic tokens and inherits the host app's theme.
+ *
+ * Provides:
+ *   1. Streamdown's base stylesheet (the email body renders through it).
+ *   2. `@source` so the consumer's Tailwind scans this package's class
+ *      strings. The path is relative to this file and resolves against
+ *      the published `src/` tree, so it works in-repo and for installed
+ *      consumers.
+ *   3. The shiki token-paint shim (shared with the markdown renderer).
+ */
+
+@import "streamdown/styles.css";
+
+@source "./react";
+
+[data-streamdown="code-block-body"] code span {
+  color: var(--sdm-c, inherit);
+}
