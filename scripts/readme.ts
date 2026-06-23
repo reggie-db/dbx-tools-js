@@ -163,15 +163,13 @@ ${existing}`
       continue;
     }
 
-    // Defensive post-processing: the system prompt forbids analysis
-    // prose in the final message, but Claude occasionally relapses
-    // and prepends lines like "Now let me check ...". Strip
-    // everything before the first top-level `# ` heading so the
-    // file we write is always a clean README.
-    const cleaned = stripPreamble(md);
-    if (!cleaned) {
+    // The agent returns only the post-tool-call answer (see
+    // `streamOnce`), so the body is already commentary-free; just
+    // require it to be a real README (starts with a top-level heading).
+    const cleaned = md.trim();
+    if (!cleaned.startsWith("# ")) {
       failed++;
-      console.warn(`  agent output had no '# ' heading; skipping`);
+      console.warn(`  agent output didn't start with a '# ' heading; skipping`);
       continue;
     }
 
@@ -194,22 +192,6 @@ ${existing}`
     }.`,
   );
   return { wrote, skipped, failed, total: pkgs.length };
-}
-
-/**
- * Trim any leading "let me check..." / "now I will..." analysis the
- * agent occasionally prepends to the final message, by locating the
- * first top-level `# ` heading and slicing from there. Returns null
- * when there is no `# ` heading at all (treat as agent failure).
- */
-function stripPreamble(raw: string): string | null {
-  const lines = raw.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (/^# \S/.test(lines[i]!)) {
-      return lines.slice(i).join("\n").trim();
-    }
-  }
-  return null;
 }
 
 if (import.meta.main) {

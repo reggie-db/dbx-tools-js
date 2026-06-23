@@ -588,20 +588,36 @@ function summarizeApiError(err: unknown, maxLen = 240): string {
 
 /**
  * Run one `agent.stream()` pass, log tool activity, and return the
- * final text plus any error event. Mastra swallows upstream errors and
- * resolves `stream.text` to "", so we read `type: "error"` events from
- * `fullStream` to surface the underlying `AI_APICallError`.
+ * final answer plus any error event.
+ *
+ * Mastra streams the model's inter-step commentary (e.g. "Let me check
+ * the files first.") as `text-delta` chunks *before* each `tool-call`,
+ * in the same stream as the final answer. `stream.text` concatenates
+ * every text block, so the commentary ends up glued to the answer. We
+ * instead accumulate `text-delta` chunks and reset the buffer on every
+ * `tool-call`, leaving only the text emitted after the last tool call -
+ * the real answer.
+ *
+ * Errors are surfaced via `type: "error"` chunks because Mastra
+ * swallows upstream failures and resolves the text to "".
  */
 async function streamOnce(
   agent: Agent,
   content: string,
 ): Promise<{ text: string | null; error: unknown }> {
   let streamError: unknown = null;
+  let answer = "";
   // Bump `maxSteps` so the agent can chain several tool calls before
   // committing to a final answer.
   const stream = await agent.stream(content, { maxSteps: 32 });
   for await (const event of stream.fullStream) {
-    if (event.type === "tool-call") {
+    if (event.type === "text-delta") {
+      const delta = event.payload?.text;
+      if (typeof delta === "string") answer += delta;
+    } else if (event.type === "tool-call") {
+      // Anything streamed before a tool call is working commentary, not
+      // the answer; drop it and keep only what follows the last call.
+      answer = "";
       const { toolName, args } = event.payload;
       if (toolName) {
         log.info(`call ${toolName}(${summarizeArgs(args)})`);
@@ -619,7 +635,7 @@ async function streamOnce(
       log.warn(`${label}: ${summarizeApiError(err)}`);
     }
   }
-  const text = (await stream.text)?.trim() || null;
+  const text = answer.trim() || null;
   return { text, error: streamError };
 }
 
