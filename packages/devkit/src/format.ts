@@ -15,7 +15,6 @@
 // package is picked up automatically.
 
 import { consola } from "consola";
-import { fileURLToPath } from "node:url";
 import {
   discoverPackageJsons,
   discoverPackages,
@@ -24,20 +23,6 @@ import {
   writeJson,
 } from "./package.js";
 import { bunx, sh } from "./shell.js";
-
-/**
- * Resolve a bundled tool to an absolute path from devkit's own
- * `node_modules`. devkit ships prettier and its organize-imports plugin
- * as dependencies, but the consuming repo's package manager may nest
- * them under `packages/devkit/node_modules` rather than hoisting them to
- * the workspace root - so `bun x prettier` (which resolves from the repo
- * root) can't see them and the root prettier config can't resolve the
- * plugin by bare name. Resolving from this module instead works
- * regardless of hoisting layout.
- */
-function resolveTool(specifier: string): string {
-  return fileURLToPath(import.meta.resolve(specifier));
-}
 
 /**
  * Build the single brace-glob prettier walks - a recursive
@@ -114,13 +99,16 @@ export async function format(): Promise<void> {
   // Capture stdout (where prettier lists every visited file) so we can
   // drop its noisy "<file> (unchanged)" lines and report only the files
   // it actually rewrote. A non-zero exit still throws.
-  const prettierBin = resolveTool("prettier/bin/prettier.cjs");
-  const organizeImports = resolveTool("prettier-plugin-organize-imports");
-  const { stdout: log } = await sh(
-    ["bun", prettierBin, "--write", `--plugin=${organizeImports}`, await sourceGlob()],
+  const { stdout } = await sh(
+    [
+      "prettier",
+      "--write",
+      "--plugin=prettier-plugin-organize-imports",
+      await sourceGlob(),
+    ],
     { quiet: true },
   );
-  const changed = log
+  const changed = stdout
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.endsWith("(unchanged)"));
