@@ -65,6 +65,7 @@ const counters: Record<SubDir, number> = {
   query: 0,
   statement: 0,
   rows: 0,
+  question: 0,
   suggested_questions: 0,
   result: 0,
   "rows-data": 0,

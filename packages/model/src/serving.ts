@@ -109,10 +109,19 @@ export async function listServingEndpoints(
   );
 }
 
-async function fetchEndpoints(
+/**
+ * List the workspace's serving endpoints as minimal
+ * {@link ServingEndpointSummary} objects straight from the SDK: no
+ * caching, and none of the cache-load enrichment ({@link listServingEndpoints}
+ * adds the {@link ModelClass} stamp and the embedding-dimension probe).
+ * Use this for a one-shot, dependency-light listing - e.g. a CLI that
+ * only needs names/tasks for fuzzy resolution and doesn't want AppKit's
+ * `CacheManager` or the per-embedding ping cost. Prefer
+ * {@link listServingEndpoints} for the cached, enriched view.
+ */
+export async function listServingEndpointsUncached(
   client: WorkspaceClientLike,
 ): Promise<ServingEndpointSummary[]> {
-  const startedAt = Date.now();
   const out: ServingEndpointSummary[] = [];
   for await (const ep of client.servingEndpoints.list()) {
     if (!ep.name) continue;
@@ -125,6 +134,14 @@ async function fetchEndpoints(
       ...(profile ? { profile } : {}),
     });
   }
+  return out;
+}
+
+async function fetchEndpoints(
+  client: WorkspaceClientLike,
+): Promise<ServingEndpointSummary[]> {
+  const startedAt = Date.now();
+  const out = await listServingEndpointsUncached(client);
   stampModelClasses(out);
   await measureEmbeddingDimensions(client, out);
   log.debug("listed", { count: out.length, elapsedMs: Date.now() - startedAt });

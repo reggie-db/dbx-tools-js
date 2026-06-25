@@ -403,7 +403,7 @@ describe("poll", () => {
     const seen: number[] = [];
     let err: unknown;
     try {
-      for await (const value of poll(({ attempt }) => attempt, {
+      for await (const value of poll<number>(({ attempt }) => attempt, {
         intervalMs: 20,
         timeoutMs: 60,
       })) {
@@ -445,7 +445,7 @@ describe("poll", () => {
 
   it("does not fire the timeout when the loop finishes first", async () => {
     const seen: number[] = [];
-    for await (const value of poll(({ attempt }) => attempt, {
+    for await (const value of poll<number>(({ attempt }) => attempt, {
       intervalMs: 5,
       timeoutMs: 1_000,
       predicate: (v) => v < 2,

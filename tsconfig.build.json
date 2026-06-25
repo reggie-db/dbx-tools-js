@@ -2,6 +2,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "composite": true,
+    // The flat editor `tsconfig.json` carries `DOM` for the UI packages;
+    // node-side builds stay DOM-free (UI build configs re-add `DOM`).
+    "lib": ["ESNext"],
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": false,

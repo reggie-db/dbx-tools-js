@@ -104,6 +104,31 @@ Errors propagate by the generator throwing - there is no `error`
 variant. Wrap the `for await` in `try / catch` if you need to handle
 failures.
 
+## Space metadata
+
+Beyond the chat drivers, the package exposes two helpers for reading a
+space's definition (both re-exported from the package root):
+
+- `getGenieSpace(spaceId, options?)` - fetch a `GenieSpace` via
+  `GET /api/2.0/genie/spaces/<id>`. Includes the `serialized_space`
+  blob (catalogs, tables, sample questions, prompts) by default; pass
+  `{ serialized: false }` for the lighter title/description-only
+  payload. Takes the same `workspaceClient` / `context` options as the
+  drivers.
+- `genieSampleQuestions(space)` - pull the author-curated starter
+  questions out of a space's serialized blob
+  (`config.sample_questions[*].question`), order preserved and
+  duplicates dropped. Returns `[]` when the space carries no serialized
+  blob or no configured questions, so a missing/misconfigured space
+  degrades to "no suggestions" rather than throwing.
+
+```ts
+import { getGenieSpace, genieSampleQuestions } from "@dbx-tools/genie";
+
+const space = await getGenieSpace(spaceId);
+const prompts = genieSampleQuestions(space); // string[]
+```
+
 ## Options
 
 `GenieChatOptions` is the same shape for both drivers:

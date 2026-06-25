@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
@@ -22,64 +22,12 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "include": [
-    "${configDir}/index.ts",
-    "${configDir}/src",
-    "${configDir}/generated",
-    "${configDir}/test"
+    "packages/*/index.ts",
+    "packages/*/index.client.ts",
+    "packages/*/src",
+    "packages/*/generated",
+    "packages/*/test",
+    "packages/*/bin"
   ],
-  "exclude": ["**/node_modules", "**/dist", "**/build", "**/tmp"],
-  "files": [],
-  "references": [
-    {
-      "path": "./demo/tsconfig.json"
-    },
-    {
-      "path": "./packages/appkit-config/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/appkit-email-shared/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/appkit-email-ui/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/appkit-email/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/appkit-mastra-shared/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/appkit-mastra-ui/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/appkit-mastra-ui/tsconfig.json"
-    },
-    {
-      "path": "./packages/appkit-mastra/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/devkit/tsconfig.json"
-    },
-    {
-      "path": "./packages/genie-shared/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/genie/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/model-proxy/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/model-shared/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/model/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/sdk-shared/tsconfig.build.json"
-    },
-    {
-      "path": "./packages/shared/tsconfig.build.json"
-    }
-  ]
+  "exclude": ["**/node_modules", "**/dist", "**/build", "**/tmp"]
 }

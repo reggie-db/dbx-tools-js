@@ -2,6 +2,7 @@ import { usePluginClientConfig } from "@databricks/appkit-ui/react";
 import {
   ChartSchema,
   MASTRA_ROUTES,
+  MODEL_OVERRIDE_HEADER,
   MastraClearHistoryResponseSchema,
   MastraHistoryResponseSchema,
   MastraSuggestionsResponseSchema,
@@ -16,9 +17,6 @@ import {
 } from "@dbx-tools/appkit-mastra-shared";
 import { MastraClient } from "@mastra/client-js";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-/** HTTP header the Mastra plugin reads for a per-request model override. */
-const MODEL_OVERRIDE_HEADER = "X-Mastra-Model";
 
 /**
  * `@mastra/client-js` `MastraClient` extended with the Mastra plugin's

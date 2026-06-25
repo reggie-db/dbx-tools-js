@@ -20,6 +20,7 @@
 
 import { WorkspaceClient } from "@databricks/sdk-experimental";
 import {
+  listServingEndpointsUncached,
   resolveModelId,
   type ResolvedModel,
   type ServingEndpointSummary,
@@ -81,15 +82,7 @@ export class DatabricksBackend {
    */
   async models(force = false): Promise<ServingEndpointSummary[]> {
     if (this.endpoints && !force) return this.endpoints;
-    const out: ServingEndpointSummary[] = [];
-    for await (const ep of this.client.servingEndpoints.list()) {
-      if (!ep.name) continue;
-      out.push({
-        name: ep.name,
-        ...(ep.task !== undefined ? { task: ep.task } : {}),
-        ...(ep.state?.ready !== undefined ? { state: String(ep.state.ready) } : {}),
-      });
-    }
+    const out = await listServingEndpointsUncached(this.client);
     this.endpoints = out;
     log.debug("listed endpoints", { count: out.length });
     return out;

@@ -1,17 +1,14 @@
 /**
  * Databricks Statement Execution helpers for the Mastra plugin.
  *
- * Wraps `client.statementExecution.getStatement` with the shape,
- * size, and error handling the plugin's tools and the
- * `/embed/data/:id` route both need: a low-level fetch that returns a
- * raw `{columns, rows, rowCount}` shape and coerces numeric strings
- * to numbers so downstream charts and aggregations don't have to, a
+ * Wraps `client.statementExecution.getStatement` with the shape and
+ * size handling the plugin's tools and the `/embed/data/:id` route
+ * both need: a low-level fetch that returns a raw
+ * `{columns, rows, rowCount}` shape and coerces numeric strings to
+ * numbers so downstream charts and aggregations don't have to, plus a
  * hard row cap callers clamp `limit` to so a runaway result set can't
- * hose a response, and a structural not-found detector that
- * normalizes the SDK's error classes and loose `does not exist` /
- * `not found` message shapes into one boolean so the route can map
- * upstream 404s to a clean HTTP 404 without coupling to SDK
- * error-class identity.
+ * hose a response. Upstream 404s are detected via
+ * `apiUtils.isNotFoundError` at the call sites.
  *
  * Not Genie-specific: a Databricks `statement_id` is workspace
  * scoped and lives in the Statement Execution API regardless of
@@ -20,7 +17,7 @@
  * 404s without reaching into the Genie tool module.
  */
 
-import { ApiError, HttpError, WorkspaceClient } from "@databricks/sdk-experimental";
+import { WorkspaceClient } from "@databricks/sdk-experimental";
 import type { GenieDatasetData } from "@dbx-tools/appkit-mastra-shared";
 import { apiUtils } from "@dbx-tools/shared";
 
@@ -92,29 +89,4 @@ export async function fetchStatementData(
     rows,
     rowCount: r.manifest?.total_row_count ?? dataArray.length,
   };
-}
-
-/**
- * True when `err` looks like the Databricks SDK's "statement not
- * found" error. Matches the typed {@link ApiError} 404 /
- * `RESOURCE_DOES_NOT_EXIST` shape first, then falls back to the
- * lower-level {@link HttpError} 404, then to a loose `does not
- * exist` / `not found` message sniff for SDK shapes we haven't
- * catalogued.
- *
- * Pulled into its own helper so callers (notably the
- * `/embed/data/:id` route) stay decoupled from SDK
- * error-class identity, and the conversion logic stays testable
- * in isolation.
- */
-export function isStatementNotFoundError(err: unknown): boolean {
-  if (err instanceof ApiError) {
-    if (err.statusCode === 404) return true;
-    if (err.errorCode === "RESOURCE_DOES_NOT_EXIST") return true;
-  }
-  if (err instanceof HttpError && err.code === 404) return true;
-  if (err instanceof Error && /does not exist|not found/i.test(err.message)) {
-    return true;
-  }
-  return false;
 }

@@ -128,8 +128,6 @@ export interface ReleaseOptions {
   registry?: string;
   /** Pack each package without uploading. */
   dryRun?: boolean;
-  /** Skip building the packages before publishing. */
-  skipBuild?: boolean;
   /** One-time password for 2FA-protected registries. */
   otp?: string;
 }
@@ -277,6 +275,12 @@ async function copyPublishableFiles(
 export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult> {
   const { registry = DEFAULT_REGISTRY, dryRun = false, otp } = opts;
 
+  // Build once, up front. Everything below reads each package's `dist/`
+  // (the `files` glob, the `release.stage` copy), and `build()` wipes
+  // `dist` before recompiling - so it has to finish before any staging
+  // happens, otherwise the clean would delete freshly-staged assets.
+  await build();
+
   const project = await getProject();
   const rootWorkspace = project.rootWorkspace;
 
@@ -306,9 +310,9 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
     }
   }
 
-  // `build()` has run, so every package's `dist/` is in place: fold each
-  // package's declared `release.stage` assets into its tree before the
-  // pack/publish loop reads them via the `files` glob.
+  // `build()` ran at the top, so every package's `dist/` is in place:
+  // fold each package's declared `release.stage` assets into its tree
+  // before the pack/publish loop reads them via the `files` glob.
   for (const pkg of packages) stageReleaseAssets(pkg);
 
   /**
@@ -424,9 +428,6 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
         await sh(["bun", "pm", "pack", "--dry-run"], { cwd: stageDir });
         consola.log(`packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
         return;
-      }
-      if (!opts.skipBuild) {
-        await build();
       }
       const args = ["publish", "--access=public", `--registry=${registry}`];
       if (otp) args.push(`--otp=${otp}`);

@@ -1,5 +1,5 @@
 import type { CancellationToken } from "@databricks/sdk-experimental";
-import { Context } from "@databricks/sdk-experimental";
+import { ApiError, Context, HttpError } from "@databricks/sdk-experimental";
 
 // Direct import (not via the barrel). The package's NodeNext module
 // resolution wants explicit `.js` extensions on relative imports, and
@@ -90,4 +90,27 @@ function tieCancellationToken(
     return;
   }
   token.onCancellationRequested((reason) => controller.abort(reason));
+}
+
+/**
+ * True when `err` is a Databricks SDK "resource does not exist" error
+ * (a deleted/expired conversation, a missing statement id, etc.).
+ * Checks the typed {@link ApiError} 404 / `RESOURCE_DOES_NOT_EXIST`
+ * shape first, then the lower-level {@link HttpError} 404, then a loose
+ * message sniff for SDK shapes that surface as neither typed error.
+ *
+ * `messagePattern` (default `/does not exist|not found/i`) bounds that
+ * last fallback so callers can tighten it for a specific resource.
+ */
+export function isNotFoundError(
+  err: unknown,
+  messagePattern: RegExp = /does not exist|not found/i,
+): boolean {
+  if (err instanceof ApiError) {
+    if (err.statusCode === 404) return true;
+    if (err.errorCode === "RESOURCE_DOES_NOT_EXIST") return true;
+  }
+  if (err instanceof HttpError && err.code === 404) return true;
+  if (err instanceof Error && messagePattern.test(err.message)) return true;
+  return false;
 }

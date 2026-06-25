@@ -38,7 +38,7 @@ import {
   type PluginManifest,
   type ResourceRequirement,
 } from "@databricks/appkit";
-import { appkitUtils, commonUtils, logUtils } from "@dbx-tools/shared";
+import { apiUtils, appkitUtils, commonUtils, logUtils } from "@dbx-tools/shared";
 import type { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
 import express from "express";
@@ -67,11 +67,7 @@ import {
 import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import { resolveServingConfig } from "./serving.js";
-import {
-  fetchStatementData,
-  isStatementNotFoundError,
-  STATEMENT_ROW_CAP,
-} from "./statement.js";
+import { fetchStatementData, STATEMENT_ROW_CAP } from "./statement.js";
 
 const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;
@@ -357,7 +353,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
           // failure should leave the chat usable with a bare empty
           // state rather than surfacing a 500. Log and degrade.
           this.log.warn("suggestions:error", {
-            error: err instanceof Error ? err.message : String(err),
+            error: commonUtils.errorMessage(err),
           });
           res.json({ questions: [] });
         });
@@ -448,7 +444,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     } catch (err) {
       // The Databricks SDK throws on 404; surface as `undefined`
       // so the route maps to a clean HTTP 404 instead of a 500.
-      if (isStatementNotFoundError(err)) return undefined;
+      if (apiUtils.isNotFoundError(err)) return undefined;
       throw err;
     }
   }

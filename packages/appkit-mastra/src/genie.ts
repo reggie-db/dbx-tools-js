@@ -35,7 +35,7 @@
  */
 
 import { CacheManager, genie } from "@databricks/appkit";
-import { ApiError, HttpError, WorkspaceClient } from "@databricks/sdk-experimental";
+import { WorkspaceClient } from "@databricks/sdk-experimental";
 import {
   ChartSchema,
   type MastraWriter,
@@ -43,7 +43,13 @@ import {
 } from "@dbx-tools/appkit-mastra-shared";
 import { genieEventChat, genieSampleQuestions, getGenieSpace } from "@dbx-tools/genie";
 import { GenieMessageSchema, type GenieMessage } from "@dbx-tools/genie-shared";
-import { appkitUtils, commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
+import {
+  apiUtils,
+  appkitUtils,
+  commonUtils,
+  logUtils,
+  stringUtils,
+} from "@dbx-tools/shared";
 import type { RequestContext } from "@mastra/core/request-context";
 import { MASTRA_THREAD_ID_KEY } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
@@ -302,24 +308,6 @@ async function ensureConversationSeeded(
   if (cached) writeContextConversationId(requestContext, spaceId, cached);
 }
 
-/**
- * True when `err` is the SDK error Genie returns for a
- * conversation id that no longer exists (deleted, expired upstream,
- * or referenced from the wrong space). Matches the typed
- * {@link ApiError} 404 / `RESOURCE_DOES_NOT_EXIST` shape first, then
- * falls back to the lower-level {@link HttpError} 404, then to a
- * loose message sniff for SDK shapes we haven't catalogued.
- */
-function isConversationGoneError(err: unknown): boolean {
-  if (err instanceof ApiError) {
-    if (err.statusCode === 404) return true;
-    if (err.errorCode === "RESOURCE_DOES_NOT_EXIST") return true;
-  }
-  if (err instanceof HttpError && err.code === 404) return true;
-  if (err instanceof Error && /does not exist/i.test(err.message)) return true;
-  return false;
-}
-
 /* ------------------------ prepare_chart input ------------------------ */
 
 /**
@@ -506,7 +494,7 @@ function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string
         // and try once more. Only retry when we *had* a seeded id -
         // a fresh call that 404s shouldn't loop.
         const seeded = readContextConversationId(requestContext, spaceId);
-        if (seeded && isConversationGoneError(err)) {
+        if (seeded && apiUtils.isNotFoundError(err)) {
           log.warn("conversation-cache:stale, resetting", {
             spaceId,
             conversationId: seeded,

@@ -39,16 +39,6 @@ export class WorkspacePackage {
     const meta = (await Bun.file(join(dir, "package.json")).json()) as PackageJson;
     return new WorkspacePackage(meta, ws.dependencies, ws.dependents, dir);
   }
-
-  /** Yield this package's `tsconfig.build.json` then `tsconfig.json` if present. */
-  async *tsconfigs(): AsyncIterableIterator<string> {
-    for (const suffix of [".build", ""]) {
-      const glob = new Bun.Glob(`tsconfig${suffix}.json`);
-      for await (const tsconfig of glob.scan({ cwd: this.dir, absolute: true })) {
-        yield tsconfig;
-      }
-    }
-  }
 }
 
 /** Resolve `path` against the repo root. */

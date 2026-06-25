@@ -377,7 +377,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   // consume them right away. Best-effort: the tag is already pushed, so
   // an unreachable local registry is a warning, not a failure.
   if (publish) {
-    await release({ registry, skipBuild: true });
+    await release({ registry });
   }
 
   consola.log("");

@@ -19,9 +19,6 @@ export * from "./src/genie.js";
 export * from "./src/plugin.js";
 export {
   MASTRA_MODEL_OVERRIDE_KEY,
-  MODEL_OVERRIDE_BODY_FIELDS,
-  MODEL_OVERRIDE_HEADER,
-  MODEL_OVERRIDE_QUERY,
   extractModelOverride,
   type ModelOverrideRequest,
 } from "./src/serving.js";

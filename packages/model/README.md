@@ -62,14 +62,43 @@ rankModels(endpoints, { search: "opus", limit: 3 }); // ranked list
 resolveModel(endpoints, { modelClass: "chat-fast" }); // single id + source
 ```
 
+### Listing the catalogue directly
+
+`selectModel` / `searchModels` list endpoints for you, but you can also
+reach the catalogue functions:
+
+```ts
+import {
+  listServingEndpoints,
+  listServingEndpointsUncached,
+  searchServingEndpoints,
+  clearServingEndpointsCache,
+} from "@dbx-tools/model";
+
+// Cached + enriched (model-class stamp, embedding dimensions) through
+// AppKit's CacheManager. Keyed by `host`.
+const endpoints = await listServingEndpoints(client, host);
+
+// One-shot, dependency-light: straight from the SDK, no cache and no
+// enrichment. For CLIs / non-AppKit contexts that only need names.
+const raw = await listServingEndpointsUncached(client);
+
+// Fuzzy-rank a held list by name (the core resolveModelId builds on).
+searchServingEndpoints("claude sonnet", endpoints); // ScoredEndpoint[]
+
+// Force-evict one host's cache entry (or all when omitted).
+await clearServingEndpointsCache(host);
+```
+
 ## How resolution works
 
 1. **Explicit ask** - fuzzy-matched within the optional class ceiling
    (or returned verbatim when `fuzzy: false`).
-2. **No explicit ask** - an operator-pinned `fallback` that exists in
-   the live catalogue wins first, then the ranked live catalogue, then a
-   small static `FALLBACK_MODEL_IDS` floor when the catalogue yields
-   nothing in range (so a model id is always returned even offline).
+2. **No explicit ask** - the first operator-pinned `fallbacks` entry
+   that exists in the live catalogue wins first, then the ranked live
+   catalogue, then a small static `FALLBACK_MODEL_IDS` floor when the
+   catalogue yields nothing in range (so a model id is always returned
+   even offline).
 
 Capability bands are derived from the live workspace catalogue (the
 Foundation Model API quality/speed/cost scores), not a hand-maintained

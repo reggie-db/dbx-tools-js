@@ -4,19 +4,22 @@
 // A gate runs before anything is compiled:
 //   - codegen: regenerate the SDK-derived zod schemas.
 //   - format: syncpack + prettier across the workspace.
-//   - typecheck: workspace-wide `tsc --noEmit` (re-syncs the root
-//     tsconfig references first).
 //   - verify: workspace integrity check (no undeclared cross-workspace
 //     imports).
 //   - prune: drop every devDependency knip reports as unused from the
 //     `package.json` that declared it (parses knip's JSON report
 //     directly, no jq).
 //
-// Then every publishable package is compiled by handing pacwich a
-// single inline `tsc -p tsconfig.build.json` (each invocation first
-// wipes that package's own `dist/` and stale build cache), run across
-// the packages in workspace dependency order so a package that
-// consumes a sibling's `dist` builds after it. Packages without a
+// The gate does not run a standalone `typecheck`: each package's own
+// non-test sources are type-checked by the emitting `tsc` compile
+// below. Demo and test files are only covered by `devkit typecheck`.
+//
+// Then a single `clean()` wipes every package's `dist/` (and stale
+// build cache) so a leftover `tsconfig.build.tsbuildinfo` can't make
+// tsc skip emit. Each publishable package is then compiled by handing
+// pacwich an inline `tsc -p tsconfig.build.json`, run across the
+// packages in workspace dependency order so a package that consumes a
+// sibling's `dist` builds after it. Packages without a
 // `tsconfig.build.json` or marked `"private": true` are skipped:
 // private packages (e.g. a demo) aren't shipped to npm and have their
 // own build pipelines.

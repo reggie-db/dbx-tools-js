@@ -12,5 +12,6 @@
  */
 export * from "@dbx-tools/model-shared";
 export * from "./src/marker.js";
+export * from "./src/override.js";
 export * from "./src/protocol.js";
 export * from "./src/routes.js";

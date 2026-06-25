@@ -67,14 +67,14 @@ model-proxy resolve claude sonnet [--profile <name>]  # show how a name resolves
 
 `chat` starts the proxy and hands off to an off-the-shelf, OpenAI-compatible
 terminal client, pointing it at the proxy via `OPENAI_BASE_URL` /
-`OPENAI_API_KEY` / `OPENAI_MODEL`. The default client is launched with
-`bunx` (no global install needed); swap it with `--client` or the
-`PROXY_CHAT_CLIENT` env var. Because `--client` runs through your shell, it
-can carry its own args:
+`OPENAI_API_KEY` / `OPENAI_MODEL`. The default client is OpenHarness,
+launched with `bunx @alhazmiai/openharness` (no global install needed);
+swap it with `--client` or the `PROXY_CHAT_CLIENT` env var. Because
+`--client` runs through your shell, it can carry its own args:
 
 ```bash
 model-proxy chat --profile my-workspace --model "claude sonnet"
-model-proxy chat --client "bunx merlion"
+model-proxy chat --client "bunx @alhazmiai/openharness"  # the default, made explicit
 model-proxy chat --client "aichat"          # any installed OpenAI-compatible CLI
 ```
 

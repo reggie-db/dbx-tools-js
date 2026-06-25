@@ -8,12 +8,17 @@ Generated from the AppKit `app init` template, then adapted to:
 - Boot through [`@dbx-tools/appkit-config`](../packages/appkit-config)'s
   `createApp` (Lakebase env auto-discovery) and mount
   [`@dbx-tools/appkit-mastra`](../packages/appkit-mastra) alongside
-  `server`, `genie`, and `lakebase`.
+  `server`, `genie`, `lakebase`, and
+  [`@dbx-tools/appkit-email`](../packages/appkit-email).
 - Give the agent the plugin's Genie toolset and `GENIE_INSTRUCTIONS` so
   it can answer from the configured space (`DATABRICKS_GENIE_SPACE_ID`)
   with live streaming progress and inline Echarts charts - the contract
   for both lives in
   [`@dbx-tools/appkit-mastra`](../packages/appkit-mastra).
+- Give the agent the approval-gated `send_email` tool (`emailTool()`
+  from [`@dbx-tools/appkit-email`](../packages/appkit-email)); the
+  `email()` plugin primes the transport and `MastraChat` renders the
+  approval card before anything is sent.
 - Render the chat with the prebuilt `MastraChat` drop-in (`/stream`)
   from [`@dbx-tools/appkit-mastra-ui`](../packages/appkit-mastra-ui),
   with the model picker enabled. The demo is a consumer of that
@@ -34,13 +39,13 @@ demo/
   tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # createApp (appkit-config) -> autopg() then AppKit createApp({ plugins: [server(), genie(), lakebase(), mastra()] })
+    server.ts             # createApp (appkit-config) -> autopg() then AppKit createApp({ plugins: [server(), genie(), lakebase(), email(), mastra()] })
   client/
     index.html
     vite.config.ts        # React + Tailwind v4 + workspace `source` condition
     src/
-      main.tsx            # TanStack Router shell + ErrorBoundary
-      App.tsx             # router root
+      main.tsx            # createRoot + ErrorBoundary
+      App.tsx             # react-router-dom BrowserRouter root
       ErrorBoundary.tsx
       index.css           # @import appkit-ui/styles.css + tailwindcss + @dbx-tools/appkit-mastra-ui/styles.css
       pages/
@@ -55,7 +60,9 @@ without a publish or rebuild.
 ## Setup
 
 ```bash
-cp .env.example .env
+# .env.example lives at the repo root; `bun dev` loads `../.env`
+# (repo root) via --env-file-if-exists, so copy it there:
+cp .env.example .env                        # from the repo root
 # Fill in DATABRICKS_HOST, DATABRICKS_SERVING_ENDPOINT_NAME,
 # DATABRICKS_GENIE_SPACE_ID (genie() registers it as the `default`
 # alias automatically), and the LAKEBASE_* / PG* values, then:
@@ -67,6 +74,8 @@ bun run --filter '@dbx-tools/appkit-demo' dev
 bun dev
 ```
 
+`bun run start` (production) instead reads `./.env` from this folder.
+
 `bun dev` starts the AppKit Express server, which mounts Vite as
 middleware on the same port so the React UI hot-reloads against the
 live server.
@@ -76,12 +85,12 @@ live server.
 | Command                | What it does                                                     |
 | ---------------------- | ---------------------------------------------------------------- |
 | `bun dev`              | `tsx watch` over `server/server.ts` (also serves the client).    |
-| `bun run build`        | `tsdown` bundles the server, then Vite builds the client.        |
-| `bun run build:server` | Bundles `server/server.ts` -> `dist/server.js`.                  |
+| `bun run build`        | Builds the server then the client (Vite).                        |
+| `bun run build:server` | `tsc -b` the server project, then `tsdown` -> `dist/server.js`.  |
 | `bun run build:client` | Vite production build into `client/dist/`.                       |
-| `bun run start`        | Production entry: `node dist/server.js` against `.env`.          |
+| `bun run start`        | Production entry: `node dist/server.js` against `./.env`.        |
 | `bun run typecheck`    | Type-check both `server/` and `client/`.                         |
-| `bun run sync`         | `appkit plugin sync --write` to keep `app.yaml` in sync.         |
+| `bun run sync`         | `appkit plugin sync --write --silent` to keep `app.yaml` in sync. |
 | `bun run typegen`      | `appkit generate-types` based on `appkit.plugins.json`.          |
 | `bun run setup`        | `appkit setup --write` to scaffold any missing AppKit resources. |
 | `bun run clean`        | Remove build output.                                             |

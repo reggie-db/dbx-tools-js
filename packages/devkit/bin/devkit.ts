@@ -24,12 +24,12 @@ const program = new Command()
 
 program
   .command("build")
-  .description("Run the gate (codegen, format, typecheck, verify, prune) then compile.")
+  .description("Run the gate (codegen, format, verify, prune) then compile.")
   .action(build);
 
 program
   .command("typecheck")
-  .description("Sync the root tsconfig references, then `tsc --noEmit`.")
+  .description("Flat `tsc --noEmit` over all packages, then the demo's own check.")
   .action(typecheck);
 
 program

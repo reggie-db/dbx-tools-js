@@ -9,6 +9,11 @@
  * onto the knobs `buildModel` and the `/models` route share.
  */
 
+import {
+  MODEL_OVERRIDE_BODY_FIELDS,
+  MODEL_OVERRIDE_HEADER,
+  MODEL_OVERRIDE_QUERY,
+} from "@dbx-tools/appkit-mastra-shared";
 import { DEFAULT_FUZZY_THRESHOLD, DEFAULT_MODEL_CACHE_TTL_MS } from "@dbx-tools/model";
 import { stringUtils } from "@dbx-tools/shared";
 
@@ -20,15 +25,6 @@ import type { MastraPluginConfig } from "./config.js";
  * reads it before falling back to the agent / plugin default.
  */
 export const MASTRA_MODEL_OVERRIDE_KEY = "mastra__model_override";
-
-/** HTTP header inspected for a per-request model override. */
-export const MODEL_OVERRIDE_HEADER = "x-mastra-model";
-
-/** Query string parameter inspected for a per-request model override. */
-export const MODEL_OVERRIDE_QUERY = "model";
-
-/** Body fields (in priority order) inspected for a per-request model override. */
-export const MODEL_OVERRIDE_BODY_FIELDS = ["model", "modelId"] as const;
 
 /**
  * Minimal Express-ish request shape used by {@link extractModelOverride}.
