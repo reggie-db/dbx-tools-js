@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-email",
-  "version": "0.1.55",
+  "version": "0.1.56",
   "dependencies": {
     "@dbx-tools/appkit-email-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
