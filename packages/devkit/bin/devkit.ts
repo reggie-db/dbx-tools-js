@@ -14,7 +14,7 @@ import { format } from "../src/format.js";
 import { syncReadmes } from "../src/readme.js";
 import { DEFAULT_REGISTRY, release } from "../src/release.js";
 import { fail } from "../src/script.js";
-import { tag, type Bump } from "../src/tag.js";
+import { tag, type Bump, type TagOptions } from "../src/tag.js";
 import { typecheck } from "../src/typecheck.js";
 import { verify } from "../src/verify.js";
 
@@ -95,13 +95,13 @@ program
     },
     "patch" as Bump,
   )
-  .option("-n, --dry-run", "print everything, write nothing", false)
   .option(
     "--readme",
     "sync package READMEs with source before the release commit",
     false,
   )
   .option("--no-publish", "skip publishing the tagged versions to the local registry")
+
   .addOption(
     new Option(
       "-r, --registry <url>",
@@ -110,20 +110,12 @@ program
       .env("NPM_REGISTRY")
       .default(DEFAULT_REGISTRY),
   )
-  .action(
-    async (
-      bump: Bump,
-      opts: { dryRun: boolean; readme: boolean; publish: boolean; registry: string },
-    ) => {
-      await tag({
-        bump,
-        dryRun: opts.dryRun,
-        readme: opts.readme,
-        publish: opts.publish,
-        registry: opts.registry,
-      });
-    },
-  );
+  .action(async (bump: Bump, opts: TagOptions) => {
+    await tag({
+      bump,
+      ...opts,
+    });
+  });
 
 program
   .command("release")
@@ -136,13 +128,8 @@ program
   .option("--dry-run", "pack each package without uploading", false)
   .option("--otp <code>", "one-time password for 2FA-protected registries")
   .action(async (opts: { registry: string; dryRun: boolean; otp?: string }) => {
-    // Build every publishable package before publishing; the publish
-    // flow stages each package's compiled `dist/`.
-    await build();
     const result = await release({
-      registry: opts.registry,
-      dryRun: opts.dryRun,
-      otp: opts.otp,
+      ...opts,
     });
     if (result.failed > 0) fail(`${result.failed} package(s) failed to publish`);
   });

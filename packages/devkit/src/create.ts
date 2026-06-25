@@ -50,10 +50,25 @@
 // themselves (not hardcoded), keeping a freshly scaffolded package in
 // lockstep with the changesets `fixed` group so the next version bump
 // moves it alongside everyone else.
+//
+// Scaffolding also seeds the repo-root shaping files devkit's own
+// build/release commands rely on - `tsconfig.build.json` (each
+// package's `tsconfig.build.json` extends it) and `package.default.json`
+// (release.ts's low-priority manifest template). The repo-root files are
+// the single source of truth; devkit's `release.stage` manifest entry
+// copies them into devkit's `dist/` as `<name>.template` during release
+// (after `build()`), so they ride along in the published tarball, and
+// `create` reads those bundled copies at runtime to seed a consuming
+// repo. When the bundled template isn't present (e.g. running from the
+// source tree before a build), seeding is skipped. A consuming repo's
+// own values always win on merge; lists are replaced wholesale, never
+// element-merged.
 
 import { consola } from "consola";
+import deepmerge from "deepmerge";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { getDevkitConfig } from "./config.js";
 import { discoverPackages, toAbsolute, writeJson } from "./package.js";
@@ -79,6 +94,63 @@ const APPKIT_PEER_RANGE = "catalog:";
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
+}
+
+// Repo-root shaping files seeded on `create`, in the order they're
+// applied. Each filename is the destination at the consuming repo's
+// root; devkit's `release.stage` manifest entry stages a `<name>.template`
+// copy under {@link bundledTemplatesDir} at publish time.
+const ROOT_DEFAULTS = ["tsconfig.build.json", "package.default.json"] as const;
+
+// devkit's bundled template directory: `dist/` next to this module.
+// devkit's `release.stage` manifest entry copies each {@link ROOT_DEFAULTS}
+// file here as `<name>.template`, and the publish step ships `dist/`, so
+// the same resolution works whether devkit runs from the source tree or
+// from a consumer's `node_modules`.
+const bundledTemplatesDir = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "dist",
+);
+
+/**
+ * `deepmerge` array strategy that keeps the consumer's list verbatim:
+ * when both template and existing define an array for a key, the
+ * existing one wins outright. Lists are never concatenated or
+ * element-merged.
+ */
+function preferExistingArray(_template: unknown[], existing: unknown[]): unknown[] {
+  return existing;
+}
+
+/**
+ * Seed a bundled root template at the consuming repo's root. The bundled
+ * `<name>.template` is the source; when it isn't present (running from
+ * the source tree before a build has staged it), seeding is skipped.
+ * Otherwise an absent destination is written verbatim, and an existing
+ * one is kept as the source of truth - the template only fills in keys
+ * it hasn't set (nested objects deep-merge with the existing value
+ * winning, arrays and scalars left as the consumer wrote them). Returns
+ * a status for logging and skips the write when nothing changed.
+ */
+async function ensureRootDefault(
+  name: string,
+): Promise<"created" | "merged" | "unchanged" | "skipped"> {
+  const bundled = resolve(bundledTemplatesDir, `${name}.template`);
+  if (!existsSync(bundled)) return "skipped";
+  const template = (await Bun.file(bundled).json()) as Record<string, unknown>;
+  const dest = toAbsolute(name);
+  if (!existsSync(dest)) {
+    await writeJson(dest, template);
+    return "created";
+  }
+  const existing = (await Bun.file(dest).json()) as Record<string, unknown>;
+  // Template is the base, existing overrides it (so the consumer wins on
+  // every conflicting key); arrays fall back to the existing list.
+  const merged = deepmerge(template, existing, { arrayMerge: preferExistingArray });
+  if (JSON.stringify(merged) === JSON.stringify(existing)) return "unchanged";
+  await writeJson(dest, merged);
+  return "merged";
 }
 
 /** Scaffold a new workspace package under `packages/<slug>/`. */
@@ -189,6 +261,16 @@ export async function create(options: CreateOptions): Promise<void> {
         ? sharedPackageJson
         : standardPackageJson;
   const tsconfigBuild = { extends: "../../tsconfig.build.json" };
+
+  // Seed the repo-root shaping files devkit's build/release commands
+  // assume (the per-package `tsconfig.build.json` written below extends
+  // the root one). Bundled with devkit and merged in so a consuming repo
+  // gets a working baseline; the consumer's own values always win.
+  for (const name of ROOT_DEFAULTS) {
+    const status = await ensureRootDefault(name);
+    if (status === "created") consola.log(`Created ${name}`);
+    else if (status === "merged") consola.log(`Updated ${name} (kept existing values)`);
+  }
 
   // `Bun.write` (used inside `writeJson`) creates the parent dir for us,
   // but we touch siblings via `write()` (mkdirSync) below, so call

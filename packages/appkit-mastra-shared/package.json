@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra-shared",
-  "version": "0.1.58",
+  "version": "0.1.59",
   "dependencies": {
     "@dbx-tools/genie-shared": "workspace:*",
     "@dbx-tools/model-shared": "workspace:*",

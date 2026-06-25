@@ -30,7 +30,7 @@ import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
 import { syncReadmes } from "./readme.js";
 import { DEFAULT_REGISTRY, release } from "./release.js";
-import { errorMessage, fail, nonEmptyLines } from "./script.js";
+import { fail, nonEmptyLines } from "./script.js";
 import { sh } from "./shell.js";
 
 export type Bump = "major" | "minor" | "patch";
@@ -344,12 +344,9 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   consola.log(tagMessage);
   consola.log("-------------------");
   consola.log("");
-
   if (dryRun) {
     consola.log("--dry-run: skipping write, commit, tag, and push.");
     if (publish) {
-      consola.log("");
-      consola.log(`--dry-run: previewing local publish to ${registry}...`);
       await release({ registry, dryRun: true });
     }
     return;
@@ -380,24 +377,11 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   // consume them right away. Best-effort: the tag is already pushed, so
   // an unreachable local registry is a warning, not a failure.
   if (publish) {
-    consola.log("");
-    consola.log(`Publishing ${tagName} to local registry ${registry}...`);
-    try {
-      const result = await release({ registry });
-      if (result.failed > 0) {
-        consola.warn(
-          `  ${result.failed} package(s) failed to publish to ${registry}; rerun \`devkit release\` once it's reachable.`,
-        );
-      }
-    } catch (err) {
-      consola.warn(
-        `  local publish to ${registry} failed: ${errorMessage(err)}; rerun \`devkit release\`.`,
-      );
-    }
+    await release({ registry, skipBuild: true });
   }
 
   consola.log("");
-  consola.log(`✓ Released ${tagName}.`);
+  consola.log(`Released ${tagName}.`);
   const { repo } = await getDevkitConfig();
   if (repo) {
     consola.log("  The Release workflow will fire on the tag push:");

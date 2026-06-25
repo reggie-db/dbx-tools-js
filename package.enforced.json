@@ -1,5 +1,4 @@
 {
-  "files": ["bin", "dist", "index*.ts", "src"],
   "license": "Apache-2.0",
   "homepage": "https://github.com/reggie-db/dbx-tools-js#readme",
   "bugs": {

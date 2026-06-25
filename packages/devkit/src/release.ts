@@ -57,7 +57,8 @@
 
 import { consola } from "consola";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { build } from "./build.js";
 import {
   discoverPackages,
   orderByDependencies,
@@ -66,6 +67,7 @@ import {
   type PackageJson,
   type WorkspacePackage,
 } from "./package.js";
+import { getProject } from "./project.js";
 import { errorMessage, fail } from "./script.js";
 import { sh } from "./shell.js";
 
@@ -126,8 +128,23 @@ export interface ReleaseOptions {
   registry?: string;
   /** Pack each package without uploading. */
   dryRun?: boolean;
+  /** Skip building the packages before publishing. */
+  skipBuild?: boolean;
   /** One-time password for 2FA-protected registries. */
   otp?: string;
+}
+
+/**
+ * Per-package publish-time file staging, declared in a package's
+ * `package.json` under `release.stage` as a map of repo-root-relative
+ * source path to a package-relative destination. Copied in {@link
+ * release} once `build()` has run (so `dist/` is ready), letting a
+ * package fold repo-root or generated assets into its own tarball -
+ * e.g. devkit ships the root `tsconfig.build.json` / `package.default.json`
+ * as `dist/*.template` for its `create` command to seed downstream.
+ */
+interface ReleaseMeta {
+  stage?: Record<string, string>;
 }
 
 /** Per-run tally returned by {@link release}. */
@@ -178,6 +195,28 @@ async function isAlreadyPublished(
     { nothrow: true, quiet: true },
   );
   return out.stdout === version;
+}
+
+/**
+ * Copy a package's declared `release.stage` assets into its own tree.
+ * Each entry maps a repo-root-relative source to a package-relative
+ * destination (see {@link ReleaseMeta}); parent dirs are created as
+ * needed. A no-op for packages without a `release.stage` block. A
+ * declared source that doesn't exist is fatal - it almost always means
+ * a stale path in the manifest.
+ */
+function stageReleaseAssets(pkg: WorkspacePackage): void {
+  const stage = (pkg.meta as { release?: ReleaseMeta }).release?.stage;
+  if (!stage) return;
+  for (const [from, to] of Object.entries(stage)) {
+    const src = toAbsolute(from);
+    if (!existsSync(src)) {
+      fail(`${pkg.meta.name}: release.stage source not found: ${from}`);
+    }
+    const dest = resolve(pkg.dir, to);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(src, dest, { recursive: true });
+  }
 }
 
 /**
@@ -232,8 +271,11 @@ async function copyPublishableFiles(
 export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult> {
   const { registry = DEFAULT_REGISTRY, dryRun = false, otp } = opts;
 
+  const project = await getProject();
+  const rootWorkspace = project.rootWorkspace;
+
   const rootMeta = (await Bun.file(
-    toAbsolute("package.json"),
+    toAbsolute(join(rootWorkspace.path, "package.json")),
   ).json()) as PackageJson & {
     catalog?: Record<string, string>;
     catalogs?: Record<string, Record<string, string>>;
@@ -257,6 +299,11 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
       workspaceVersions.set(pkg.meta.name, pkg.meta.version);
     }
   }
+
+  // `build()` has run, so every package's `dist/` is in place: fold each
+  // package's declared `release.stage` assets into its tree before the
+  // pack/publish loop reads them via the `files` glob.
+  for (const pkg of packages) stageReleaseAssets(pkg);
 
   /**
    * Resolve a `workspace:` specifier (e.g. `workspace:*`,
@@ -369,8 +416,11 @@ export async function release(opts: ReleaseOptions = {}): Promise<ReleaseResult>
 
       if (dryRun) {
         await sh(["bun", "pm", "pack", "--dry-run"], { cwd: stageDir });
-        consola.log(`✓ packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
+        consola.log(`packed (dry-run) ${pkg.meta.name}@${pkg.meta.version}`);
         return;
+      }
+      if (!opts.skipBuild) {
+        await build();
       }
       const args = ["publish", "--access=public", `--registry=${registry}`];
       if (otp) args.push(`--otp=${otp}`);

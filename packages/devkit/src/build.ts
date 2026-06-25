@@ -151,10 +151,11 @@ export async function build(): Promise<void> {
   // empty `dist/`. Then let pacwich sequence the compile across the
   // targets, `dependencyOrder` holding each package until the siblings
   // it depends on have finished so a consumed `dist` always exists
-  // first. `tsc` resolves from the hoisted root `node_modules/.bin`.
+  // first. `tsc` is run through `bun x --bun` so it resolves from
+  // `node_modules` regardless of whether `node_modules/.bin` is on PATH.
   await clean();
   const summary = await runScript({
-    script: "tsc -p tsconfig.build.json",
+    script: "bun x --bun tsc -p tsconfig.build.json",
     workspacePatterns: targets.map((pkg) => pkg.meta.name!),
     dependencyOrder: true,
   });

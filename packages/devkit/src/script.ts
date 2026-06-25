@@ -54,3 +54,37 @@ export async function runScript(
   }
   return summary;
 }
+
+/**
+ * Run the `<phase><command>` script (e.g. `prerelease`, `postbuild`) in
+ * every workspace that defines it. `packages` (full names) narrows the
+ * candidate set; omitted or empty means the whole workspace.
+ *
+ * The workspaces that actually declare the script are resolved up front
+ * via pacwich's `listWorkspacesWithScript`, and the run is scoped to
+ * exactly those - `runScript` throws when asked to run a script no
+ * workspace has, so this stays a clean no-op when nothing matches.
+ * Aborts the command if any hook exits non-zero.
+ */
+export async function runHook(
+  phase: "pre" | "post",
+  command: string,
+  packages?: readonly string[],
+): Promise<void> {
+  const script = `${phase}${command}`;
+  const project = await getProject();
+  const scope = packages && packages.length > 0 ? new Set(packages) : null;
+  const targets = project
+    .listWorkspacesWithScript(script)
+    .map((workspace) => workspace.name)
+    .filter((name) => !scope || scope.has(name));
+  if (targets.length === 0) return;
+
+  const summary = await runScript({ script, workspacePatterns: targets });
+  const failed = summary.scriptResults
+    .filter((entry) => !entry.success && !entry.skipped)
+    .map((entry) => entry.metadata.workspace.name);
+  if (failed.length > 0) {
+    fail(`${script} hook failed in: ${failed.join(", ")}`);
+  }
+}
