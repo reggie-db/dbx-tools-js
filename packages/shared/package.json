@@ -1,7 +1,8 @@
 {
   "name": "@dbx-tools/shared",
-  "version": "0.1.54",
+  "version": "0.1.55",
   "dependencies": {
+    "@databricks/sdk-experimental": "catalog:",
     "fast-deep-equal": "catalog:",
     "lru-cache": "catalog:",
     "zod": "catalog:"

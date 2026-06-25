@@ -3,7 +3,7 @@
   "catalog": {
     "@databricks/appkit": "^0.41",
     "@databricks/appkit-ui": "^0.41",
-    "@databricks/sdk-experimental": "^0.17",
+    "@databricks/sdk-experimental": "^0.18",
     "@mastra/ai-sdk": "^1",
     "@mastra/client-js": "^1",
     "@mastra/core": "^1",
