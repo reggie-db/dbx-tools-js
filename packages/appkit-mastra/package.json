@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.57",
+  "version": "0.1.58",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
