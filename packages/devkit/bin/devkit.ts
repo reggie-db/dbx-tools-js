@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 // `devkit` CLI: a thin commander dispatcher over the toolkit's command
 // functions. Each subcommand parses its options and delegates to the
 // matching `src/*.ts` function, which is also exported from the package
