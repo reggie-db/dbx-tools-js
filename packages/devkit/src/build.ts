@@ -36,7 +36,6 @@ import {
 } from "./package.js";
 import { fail, runScript } from "./script.js";
 import { bunx } from "./shell.js";
-import { typecheck } from "./typecheck.js";
 import { verify } from "./verify.js";
 
 /**
@@ -128,7 +127,6 @@ async function pruneUnusedDevDependencies(): Promise<number> {
 export async function build(): Promise<void> {
   await codegen();
   await format();
-  await typecheck();
   await verify();
   const removed = await pruneUnusedDevDependencies();
   consola.log(
@@ -155,7 +153,7 @@ export async function build(): Promise<void> {
   // `node_modules` regardless of whether `node_modules/.bin` is on PATH.
   await clean();
   const summary = await runScript({
-    script: "bun x --bun tsc -p tsconfig.build.json",
+    script: "echo 'Building <workspaceName>' && bun x --bun tsc -p tsconfig.build.json",
     workspacePatterns: targets.map((pkg) => pkg.meta.name!),
     dependencyOrder: true,
   });
@@ -167,5 +165,5 @@ export async function build(): Promise<void> {
     fail(`Build failed: ${failed.join(", ")}`);
   }
 
-  consola.log(`\nBuilt ${summary.successCount} package(s).`);
+  consola.log(`Built ${summary.successCount} package(s).`);
 }

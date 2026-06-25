@@ -239,7 +239,13 @@ async function copyPublishableFiles(
     if (!existsSync(src)) return;
     const dest = resolve(stageDir, entry);
     mkdirSync(dirname(dest), { recursive: true });
-    cpSync(src, dest, { recursive: true });
+    // Drop tsc's incremental cache: `files` globs in `dist`, which
+    // otherwise drags `*.tsbuildinfo` (hundreds of KB of build state)
+    // into the tarball.
+    cpSync(src, dest, {
+      recursive: true,
+      filter: (from) => !from.endsWith(".tsbuildinfo"),
+    });
   };
 
   for (const entry of filesList) {

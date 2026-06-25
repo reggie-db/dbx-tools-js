@@ -5,12 +5,17 @@
 // workspace package's tsconfigs (via `pkg.tsconfigs()`) and writes the
 // deduped list back into the root config's `references` array,
 // preserving any non-string-path entries a developer added by hand.
-// Also enforces `"files": []` so a bare `tsc --noEmit` at the repo root
-// doesn't auto-glob the whole tree (which produces TS6305 once any
-// referenced project sets `composite: true`, and bogus errors against
-// demo client files that need the demo's `lib`/`paths`).
+// Also enforces `"files": []` so the root project itself contributes no
+// files - it exists purely as the solution entry point whose
+// `references` enumerate the real projects.
 //
-// Then runs `tsc --noEmit` over the synced project. Idempotent.
+// Then runs `tsc -b --noEmit` over that solution. Build mode is what
+// makes the `references` actually get type-checked: a plain
+// `tsc --noEmit` ignores project references entirely (the root program
+// is empty, so it checks nothing), whereas `-b` walks the whole
+// referenced graph - every package's `tsconfig.build.json` plus the
+// demo's client/server projects - and `--noEmit` keeps it a pure check
+// with no compiled output. Idempotent.
 
 import { applyEdits, modify, parse } from "jsonc-parser";
 import { existsSync } from "node:fs";
@@ -20,7 +25,7 @@ import { sh } from "./shell.js";
 
 const FORMAT = { insertSpaces: true, tabSize: 2 } as const;
 
-/** Sync the root tsconfig `references` to the live package set, then `tsc --noEmit`. */
+/** Sync the root tsconfig `references` to the live package set, then `tsc -b --noEmit`. */
 export async function typecheck(): Promise<void> {
   const rootTsconfigPath = toAbsolute("tsconfig.json");
   const original = await Bun.file(rootTsconfigPath).text();
@@ -70,5 +75,5 @@ export async function typecheck(): Promise<void> {
   );
   await Bun.write(rootTsconfigPath, updated);
 
-  await sh(["bun", "x", "--bun", "tsc", "--noEmit"]);
+  await sh(["bun", "x", "--bun", "tsc", "-b", "--noEmit"]);
 }
