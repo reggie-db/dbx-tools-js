@@ -95,6 +95,31 @@ for (const source of sources) {
   entry[entryKey(source)] = resolve(pkgDir, source);
 }
 
+// Non-TS asset exports (e.g. `"./styles.css": "./src/styles.css"`) aren't
+// build inputs - tsdown only compiles the `.ts` entries above - but they
+// still have to land in `dist` so the published, `dist`-only tarball can
+// resolve them. Collect every `exports` string that points under `src/`
+// and isn't a `.ts`/`.tsx`, and copy it into the matching `dist` location
+// (the publish step rewrites the export's `src/` path to `dist/` to match).
+const copyAssets: { from: string; to: string }[] = [];
+function collectAssets(node: unknown): void {
+  if (typeof node === "string") {
+    if (!TS_EXT.test(node) && node.startsWith("./src/")) {
+      // Absolute, like the entries/outDir: tsdown resolves a relative copy
+      // `from`/`to` against the shared config's dir (repo root), not the
+      // package build cwd, so spell both out against `pkgDir`.
+      const from = resolve(pkgDir, node.replace(/^\.\//, ""));
+      const to = resolve(pkgDir, dirname(node.replace(/^\.\/src\//, "dist/")));
+      copyAssets.push({ from, to });
+    }
+    return;
+  }
+  if (node && typeof node === "object") {
+    for (const value of Object.values(node)) collectAssets(value);
+  }
+}
+collectAssets(pkg.exports);
+
 // A `bin` target like `dist/cli.js` ships built JS, so find the source that
 // emits to it (`src/cli.ts`, `cli.ts`, ...) and build that too.
 const bins = typeof pkg.bin === "string" ? { default: pkg.bin } : (pkg.bin ?? {});
@@ -135,6 +160,9 @@ export default defineConfig({
   // "dist" would dump every package's output into `<root>/dist`.
   outDir: resolve(pkgDir, "dist"),
   clean: true,
+  // Copy non-TS asset exports (CSS, ...) into `dist` after the bundle, so
+  // the `dist`-only tarball can resolve them. Empty for most packages.
+  copy: copyAssets.length > 0 ? copyAssets : undefined,
   // Bundle only this package's own source: anything that isn't a relative or
   // absolute path (i.e. every bare specifier) stays external. Covers
   // `@dbx-tools/*` siblings, third-party deps, and `node:*` builtins.

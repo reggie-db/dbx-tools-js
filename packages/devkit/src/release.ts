@@ -18,6 +18,10 @@
 //     condition, and `files` is `dist`-only) - it's a dev/monorepo
 //     concern, where siblings resolve each other through workspace
 //     symlinks rather than the published tarball.
+//   - A non-`.ts` `exports` string under `src/` (e.g. a CSS bundle like
+//     `"./styles.css": "./src/styles.css"`) is a copied asset: the build
+//     copies it into `dist`, and the path is rewritten `src/` -> `dist/`
+//     here so the tarball resolves it.
 //   - An `exports` target that is already an object is hand-written and
 //     left verbatim - this is how a package opts a subpath out of the
 //     expansion (e.g. a bespoke browser/server conditional split that
@@ -80,6 +84,10 @@ function stampManifest(meta: PackageJson): PackageJson {
         nextExports[subpath] = { types: dist.dts, default: dist.js };
         if (subpath === ".") rootDist = dist;
         firstDist ??= dist;
+      } else if (typeof target === "string" && target.startsWith("./src/")) {
+        // A non-TS asset (e.g. a CSS bundle) - not compiled but copied
+        // into `dist` at build time, so point the export at `dist`.
+        nextExports[subpath] = target.replace(/^\.\/src\//, "./dist/");
       } else {
         nextExports[subpath] = target;
       }
