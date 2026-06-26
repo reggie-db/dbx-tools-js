@@ -2,7 +2,7 @@ name: Release
 
 # Tag-driven release. Push a `v<version>` tag (use `bun run tag` to
 # generate one from the current package.json versions) and this
-# workflow builds every publishable workspace and publishes to npm.
+# workflow publishes every publishable workspace to npm.
 #
 # Locally:
 #   bun changeset                         # record what's changing
@@ -12,28 +12,25 @@ name: Release
 #   bun run tag                           # create + push v<version>
 #
 # The tag push fires this workflow. `bun run release` runs
-# `devkit release` (build, then publish) from `@dbx-tools/devkit`. The
-# publish step stages each package into a gitignored `.publish/` dir,
-# merges in the publish-ready fields (main / types / exports / files /
-# license / repository) from `package.default.json` /
-# `package.enforced.json`, resolves `workspace:*` and `catalog:`
-# specifiers to real version ranges, skips versions already on the
-# registry, and runs `npm publish` from each stage. Source
-# `package.json` files are never mutated.
+# `devkit release` from `@dbx-tools/devkit`, which builds every
+# publishable package and then publishes each with `bun publish`. The
+# build step is intentionally not duplicated here: `release` already
+# builds before it publishes. Just before each `bun publish`, `release`
+# stamps the publish-ready fields (the expanded conditional `exports`,
+# `main`, `types`, `files`, `license`) into the manifest and restores
+# the slim source manifest immediately after, so committed
+# `package.json` files are never left mutated. `workspace:*` and
+# `catalog:` specifiers are resolved by `bun publish`.
 #
-# Registry: the publish script defaults to a local Verdaccio
-# (`http://localhost:4873`) so dev machines can never accidentally hit
-# real npm. CI overrides via `NPM_REGISTRY` (set on the publish step
-# below).
-#
-# Auth: NPM_TOKEN secret (Automation token from npmjs.com → Access
-# Tokens) is read by bun publish via the auth-token line emitted by
-# actions/setup-node when `NODE_AUTH_TOKEN` is set on the publish
-# step. Once trusted publishing is configured per-package on
+# Registry + auth: `bun publish` reads the `~/.npmrc` that
+# `actions/setup-node` writes from `registry-url` plus the
+# `NODE_AUTH_TOKEN` (the NPM_TOKEN automation secret from npmjs.com →
+# Access Tokens) on the publish step. Dev machines publish to whatever
+# their own `~/.npmrc` points at, so CI is the only place that targets
+# real npm. Once trusted publishing is configured per-package on
 # npmjs.com (Settings → Trusted Publishing → GitHub Actions →
-# `release.yml`), the workflow can swap to OIDC by removing the
-# NODE_AUTH_TOKEN env line; `id-token: write` is already granted
-# below.
+# `release.yml`), drop the `NODE_AUTH_TOKEN` env line to swap to OIDC;
+# `id-token: write` is already granted below.
 #
 # Manual trigger is also enabled (workflow_dispatch) for one-off
 # republishes that don't go through a tag - useful when retrying a
@@ -67,11 +64,11 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          # Pinned to 24.x so `npm` is >= 11.5.1, the minimum for
-          # trusted publishing / OIDC auth. `devkit release` uses `npm`
-          # for both the `npm view` existence check and the actual
-          # `npm publish` upload, reading the `~/.npmrc` auth-token line
-          # that `setup-node` writes.
+          # `setup-node` writes the `~/.npmrc` (registry + auth-token
+          # line) that `bun publish` reads; `release` itself shells out
+          # to `bun publish`, not `npm`. Node is pinned to 24.x so the
+          # bundled `npm` is >= 11.5.1, the minimum for trusted
+          # publishing / OIDC if this workflow swaps to it later.
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org/"
 
@@ -83,15 +80,10 @@ jobs:
         # to discover the workspaces.
         run: bun install
 
-      - name: Build
-        run: bun run build
-
       - name: Publish
+        # `release` builds every package and then publishes; no separate
+        # build step is needed.
         run: bun run release
         env:
-          # Override the script's local-Verdaccio default and target
-          # real npm. Must match `setup-node`'s `registry-url` above
-          # so the auth-token line in `~/.npmrc` is keyed correctly.
-          NPM_REGISTRY: "https://registry.npmjs.org/"
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
