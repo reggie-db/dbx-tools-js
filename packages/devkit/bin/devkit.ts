@@ -76,6 +76,11 @@ program
     "patch" as Bump,
   )
   .option("--no-publish", "skip publishing the tagged versions to the local registry")
+  .option(
+    "-n, --dry-run",
+    "print the plan and release-notes preview; write nothing, push nothing",
+    false,
+  )
   .action(async (bump: Bump, opts: TagOptions) => {
     await tag({
       bump,

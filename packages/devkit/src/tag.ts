@@ -3,6 +3,12 @@
 // the tag to origin. The tag push fires the repo's release workflow,
 // which builds every publishable workspace and runs the publish step.
 //
+// After pushing the tag, it creates a GitHub Release. The body is
+// written by `cursor-agent` (the Cursor CLI) from the commits + diff
+// stat since the previous tag when that CLI is installed; otherwise it
+// falls back to a deterministic grouping of the commits by
+// conventional-commit type. See `buildNotes` / `releaseNotes`.
+//
 // After pushing, the function can also run the workspace publish script
 // so local release flows use the same Bun-based package publishing path
 // as CI. Opt out with `publish: false`.
@@ -136,9 +142,168 @@ async function publishGithubRelease(tag: string, body: string): Promise<void> {
 }
 
 /**
+ * Conventional-commit type buckets, in the order they appear in the
+ * generated notes. Each subject line is matched against these prefixes
+ * (`feat:`, `fix(scope):`, `feat!:`, ...); anything unmatched lands in
+ * the trailing "Other" section.
+ */
+const NOTE_SECTIONS: readonly [title: string, match: RegExp][] = [
+  ["Features", /^feat(\(.+\))?!?:\s*/i],
+  ["Fixes", /^fix(\(.+\))?!?:\s*/i],
+  ["Performance", /^perf(\(.+\))?!?:\s*/i],
+  ["Refactors", /^refactor(\(.+\))?!?:\s*/i],
+  ["Documentation", /^docs(\(.+\))?!?:\s*/i],
+  ["Tests", /^test(\(.+\))?!?:\s*/i],
+  ["Build & CI", /^(build|ci)(\(.+\))?!?:\s*/i],
+  ["Chores", /^chore(\(.+\))?!?:\s*/i],
+];
+const OTHER_SECTION = "Other";
+
+/**
+ * Build a markdown release-notes body from the commits in
+ * `<prevTag>..HEAD` (or the whole history when there's no previous
+ * tag), grouped by conventional-commit type. The `chore: release
+ * v<x>` commit this run creates is filtered out, and a compare link is
+ * appended when the repo slug and a previous tag are both known.
+ *
+ * Used as the GitHub Release description (which renders markdown).
+ */
+async function releaseNotes(
+  prevTag: string | null,
+  tagName: string,
+  repo: string | null,
+): Promise<string> {
+  const range = prevTag ? `${prevTag}..HEAD` : "HEAD";
+  const raw = (
+    await git(["log", range, "--no-merges", "--pretty=format:%h\t%s"], {
+      nothrow: true,
+    })
+  ).stdout;
+
+  const buckets = new Map<string, string[]>();
+  for (const line of nonEmptyLines(raw)) {
+    const tab = line.indexOf("\t");
+    const hash = tab === -1 ? "" : line.slice(0, tab);
+    const subject = tab === -1 ? line : line.slice(tab + 1);
+    // Drop the release commit this run just created - it's noise.
+    if (/^chore: release v/i.test(subject)) continue;
+    const section =
+      NOTE_SECTIONS.find(([, re]) => re.test(subject))?.[0] ?? OTHER_SECTION;
+    const entry = hash ? `- ${subject} (${hash})` : `- ${subject}`;
+    (buckets.get(section) ?? buckets.set(section, []).get(section)!).push(entry);
+  }
+
+  const parts: string[] = [];
+  for (const [title] of [...NOTE_SECTIONS, [OTHER_SECTION] as const]) {
+    const lines = buckets.get(title);
+    if (lines?.length) parts.push(`### ${title}\n${lines.join("\n")}`);
+  }
+
+  let body: string;
+  if (parts.length > 0) {
+    body = parts.join("\n\n");
+  } else if (prevTag) {
+    // No descriptive commits (e.g. the work was folded straight into
+    // the `chore: release` commit). Fall back to a one-line diff summary
+    // so the note still says something concrete.
+    const stat = (
+      await git(["diff", "--shortstat", `${prevTag}..HEAD`], { nothrow: true })
+    ).stdout.trim();
+    body = stat
+      ? `No conventional-commit entries since ${prevTag}.\n\nChanges: ${stat}.`
+      : "_No changes since the previous tag._";
+  } else {
+    body = "_Initial release._";
+  }
+  if (repo && prevTag) {
+    body += `\n\n**Full changelog**: https://github.com/${repo}/compare/${prevTag}...${tagName}`;
+  }
+  return body;
+}
+
+/**
+ * Run `cursor-agent` in non-interactive print mode to turn `prompt`
+ * into text. Returns the trimmed final answer, or `null` when the CLI
+ * is absent, errors, times out, or produces nothing - so callers can
+ * fall back. Spawned via `Bun.spawn` with an `AbortSignal` timeout
+ * because print mode can otherwise hang and block the whole release.
+ */
+async function cursorSummary(
+  prompt: string,
+  timeoutMs = 120_000,
+): Promise<string | null> {
+  if (!Bun.which("cursor-agent")) return null;
+  try {
+    const proc = Bun.spawn(
+      ["cursor-agent", "-p", "--output-format", "text", "--force", prompt],
+      { stdout: "pipe", stderr: "ignore", signal: AbortSignal.timeout(timeoutMs) },
+    );
+    const text = (await new Response(proc.stdout).text()).trim();
+    const code = await proc.exited;
+    return code === 0 && text ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask `cursor-agent` to write the release notes for `<prevTag>..HEAD`,
+ * feeding it the commit subjects and per-file diff stat as context so
+ * it never has to explore the tree. Returns `null` (caller falls back
+ * to {@link releaseNotes}) when the CLI is unavailable, there's nothing
+ * to summarize, or the agent fails.
+ */
+async function cursorReleaseNotes(
+  prevTag: string | null,
+  tagName: string,
+  repo: string | null,
+): Promise<string | null> {
+  if (!Bun.which("cursor-agent")) return null;
+  const range = prevTag ? `${prevTag}..HEAD` : "HEAD";
+  const log = (
+    await git(["log", range, "--no-merges", "--pretty=format:- %s"], { nothrow: true })
+  ).stdout;
+  const stat = (await git(["diff", "--stat", range], { nothrow: true })).stdout;
+  if (!log && !stat) return null;
+
+  const prompt = [
+    `Write release notes in Markdown for version ${tagName} of this TypeScript monorepo`,
+    prevTag ? `, covering the changes since ${prevTag}.` : ".",
+    `\n\nRules:`,
+    `\n- Output ONLY the release-notes markdown - no preamble, no surrounding code fences, do not modify any files.`,
+    `\n- Group changes under short \`###\` headings (e.g. Features, Fixes, Internal).`,
+    `\n- One concise bullet per notable change, user-facing and in the present tense.`,
+    `\n- Ignore noise: version-bump / "chore: release" commits, lockfile churn, generated output.`,
+    `\n\nCommit subjects:\n${log || "(none)"}`,
+    `\n\nFile change summary:\n${stat || "(none)"}`,
+  ].join("");
+
+  const body = await cursorSummary(prompt);
+  if (!body) return null;
+  return repo && prevTag
+    ? `${body}\n\n**Full changelog**: https://github.com/${repo}/compare/${prevTag}...${tagName}`
+    : body;
+}
+
+/**
+ * Build the release-notes body, preferring a `cursor-agent`-written
+ * summary and falling back to the deterministic commit grouping. The
+ * returned `source` is just for logging which generator was used.
+ */
+async function buildNotes(
+  prevTag: string | null,
+  tagName: string,
+  repo: string | null,
+): Promise<{ body: string; source: "cursor-agent" | "commits" }> {
+  const ai = await cursorReleaseNotes(prevTag, tagName, repo);
+  if (ai) return { body: ai, source: "cursor-agent" };
+  return { body: await releaseNotes(prevTag, tagName, repo), source: "commits" };
+}
+
+/**
  * Version-bump every publishable workspace, commit, tag, push, create
- * the GitHub Release, and publish to the local registry. See the file
- * header for the full local-state policy.
+ * the GitHub Release (with generated notes), and publish to the local
+ * registry. See the file header for the full local-state policy.
  */
 export async function tag(opts: TagOptions = {}): Promise<void> {
   const { bump = "patch", dryRun = false, publish = true } = opts;
@@ -147,6 +312,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   // repo. Fail upfront with a clear message rather than partway through.
   await requireGitRepo("devkit tag");
 
+  const { repo } = await getDevkitConfig();
   const { version: currentVersion, pkgs } = await findPublishables();
   const nextVersion = semver.inc(currentVersion, bump);
   if (!nextVersion) {
@@ -204,6 +370,10 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
 
   if (dryRun) {
     consola.log("--dry-run: skipping write, commit, tag, and push.");
+    const preview = await buildNotes(prevTag, tagName, repo);
+    consola.log(`Release notes preview (${preview.source}):`);
+    consola.log(preview.body);
+    consola.log("");
     if (publish) {
       await sh(["bun", "run", "release", "--dry-run"], { nothrow: true });
     }
@@ -226,7 +396,11 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   consola.log(`Pushing ${tagName} to origin...`);
   await gitPush(tagName);
 
-  await publishGithubRelease(tagName, tagMessage);
+  const notes = await buildNotes(prevTag, tagName, repo);
+  consola.log(`Release notes (${notes.source}):`);
+  consola.log(notes.body);
+  consola.log("");
+  await publishGithubRelease(tagName, notes.body);
 
   // Publish via the repo's Bun-based release script. Best-effort: the tag
   // is already pushed, so a publish failure is a warning, not a failure.
@@ -236,7 +410,6 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
 
   consola.log("");
   consola.log(`Released ${tagName}.`);
-  const { repo } = await getDevkitConfig();
   if (repo) {
     consola.log("  The Release workflow will fire on the tag push:");
     consola.log(`  https://github.com/${repo}/actions/workflows/release.yml`);
