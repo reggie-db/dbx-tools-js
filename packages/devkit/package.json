@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/devkit",
-  "version": "0.1.69",
+  "version": "0.1.70",
   "bin": {
     "devkit": "./dist/bin/devkit.js"
   },
@@ -10,8 +10,8 @@
     "consola": "^3.4.2",
     "p-memoize": "^8.0.0",
     "pacwich": "^0.1.0",
-    "prettier": "catalog:",
-    "prettier-plugin-organize-imports": "catalog:",
+    "prettier": "^3.8.4",
+    "prettier-plugin-organize-imports": "^4.3.0",
     "semver": "^7.8.1",
     "ts-to-zod": "^5.1.0",
     "typescript": "catalog:"
@@ -19,5 +19,11 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "type": "module"
+  "type": "module",
+  "knip": {
+    "ignoreDependencies": [
+      "prettier",
+      "prettier-plugin-organize-imports"
+    ]
+  }
 }

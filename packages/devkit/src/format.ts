@@ -14,6 +14,8 @@
 // finder rather than a hand-maintained glob, so a newly created
 // package is picked up automatically.
 
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import { consola } from "consola";
 import {
   discoverPackageJsons,
@@ -22,20 +24,41 @@ import {
   toRelative,
   writeJson,
 } from "./package.js";
-import { bunx } from "./shell.js";
+import { bunx, sh } from "./shell.js";
+
+// Resolve against devkit's *own* install location (this module), so
+// `prettier` and its plugin always come from devkit's pinned deps -
+// not from a `bun x` temp download, where bare specifiers can't be
+// found. `import.meta.url` survives bundling and points at the shipped
+// dist file inside the consuming repo's node_modules.
+const require = createRequire(import.meta.url);
+
+/** Absolute path to a dependency's binary, read from its own `package.json`. */
+function resolveBin(pkg: string, binName: string): string {
+  const pkgJsonPath = require.resolve(`${pkg}/package.json`);
+  const meta = require(`${pkg}/package.json`) as { bin?: string | Record<string, string> };
+  const bin = typeof meta.bin === "string" ? meta.bin : meta.bin?.[binName];
+  if (!bin) throw new Error(`${pkg} declares no "${binName}" bin`);
+  return resolve(dirname(pkgJsonPath), bin);
+}
 
 /**
- * Build the single brace-glob prettier walks - a recursive
- * `.ts`/`.tsx` match rooted at each discovered package dir. One
- * combined pattern avoids prettier's per-pattern "no matching files"
- * error when an individual package happens to ship no `.tsx`.
- * `() => true` keeps private workspaces (e.g. a demo) that the default
- * filter drops.
+ * Build the single glob prettier walks - a recursive `.ts`/`.tsx` match
+ * rooted at each discovered package dir. One combined pattern avoids
+ * prettier's per-pattern "no matching files" error when an individual
+ * package happens to ship no `.tsx`. A brace alternation is only used
+ * for two-plus dirs: a single-element `{dir}` brace with a slash inside
+ * is left un-expanded by prettier's matcher, so the lone dir is emitted
+ * bare. Returns `null` when no packages were discovered (so the caller
+ * can skip prettier entirely). `() => true` keeps private workspaces
+ * (e.g. a demo) that the default filter drops.
  */
-async function sourceGlob(): Promise<string> {
+async function sourceGlob(): Promise<string | null> {
   const packages = await discoverPackages(() => true);
   const dirs = packages.map((pkg) => pkg.slug);
-  return `{${dirs.join(",")}}/**/*.{ts,tsx}`;
+  if (dirs.length === 0) return null;
+  const roots = dirs.length === 1 ? dirs[0] : `{${dirs.join(",")}}`;
+  return `${roots}/**/*.{ts,tsx}`;
 }
 
 /**
@@ -96,15 +119,22 @@ export async function format(): Promise<void> {
   // prettier with the organize-imports plugin supplied by absolute path
   // (the root config carries options only; the plugin is injected here
   // so it resolves no matter where the package manager installed it).
-  // Capture stdout (where prettier lists every visited file) so we can
-  // drop its noisy "<file> (unchanged)" lines and report only the files
-  // it actually rewrote. A non-zero exit still throws.
+  // Both binary and plugin are resolved from devkit's own install rather
+  // than via `bun x`, which would fetch a throwaway prettier into a temp
+  // dir that can't see the plugin. Capture stdout (where prettier lists
+  // every visited file) so we can drop its noisy "<file> (unchanged)"
+  // lines and report only the files it actually rewrote. A non-zero exit
+  // still throws.
   const sources = await sourceGlob();
-  const { stdout } = await bunx(
-    ["prettier", "--write", "--plugin=prettier-plugin-organize-imports", sources],
-    {
-      quiet: true,
-    },
+  if (!sources) {
+    consola.log("No packages to format.");
+    return;
+  }
+  const prettierBin = resolveBin("prettier", "prettier");
+  const pluginPath = require.resolve("prettier-plugin-organize-imports");
+  const { stdout } = await sh(
+    ["bun", prettierBin, "--write", `--plugin=${pluginPath}`, sources],
+    { quiet: true },
   );
   const changed = stdout
     .split("\n")
