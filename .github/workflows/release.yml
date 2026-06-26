@@ -22,15 +22,15 @@ name: Release
 # `package.json` files are never left mutated. `workspace:*` and
 # `catalog:` specifiers are resolved by `bun publish`.
 #
-# Registry + auth: `bun publish` reads the `~/.npmrc` that
-# `actions/setup-node` writes from `registry-url` plus the
-# `NODE_AUTH_TOKEN` (the NPM_TOKEN automation secret from npmjs.com →
-# Access Tokens) on the publish step. Dev machines publish to whatever
-# their own `~/.npmrc` points at, so CI is the only place that targets
-# real npm. Once trusted publishing is configured per-package on
-# npmjs.com (Settings → Trusted Publishing → GitHub Actions →
-# `release.yml`), drop the `NODE_AUTH_TOKEN` env line to swap to OIDC;
-# `id-token: write` is already granted below.
+# Registry + auth: `bun publish` authenticates from npm-config env
+# vars, not from setup-node's `~/.npmrc` - bun does not expand the
+# `${NODE_AUTH_TOKEN}` placeholder that setup-node writes into that
+# file, so the token has to be handed to bun directly. `NPM_CONFIG_TOKEN`
+# (the NPM_TOKEN automation secret from npmjs.com → Access Tokens) and
+# `NPM_CONFIG_REGISTRY` (real npm) are set on the publish step below.
+# Dev machines publish to whatever their own gitignored `~/.npmrc`
+# points at (e.g. a local Verdaccio), so CI is the only place that
+# targets real npm.
 #
 # Manual trigger is also enabled (workflow_dispatch) for one-off
 # republishes that don't go through a tag - useful when retrying a
@@ -64,11 +64,11 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          # `setup-node` writes the `~/.npmrc` (registry + auth-token
-          # line) that `bun publish` reads; `release` itself shells out
-          # to `bun publish`, not `npm`. Node is pinned to 24.x so the
-          # bundled `npm` is >= 11.5.1, the minimum for trusted
-          # publishing / OIDC if this workflow swaps to it later.
+          # Provides Node (and an `npm` >= 11.5.1) for any tooling that
+          # needs it and keeps the workflow OIDC/provenance-ready.
+          # `bun publish` does NOT read the `~/.npmrc` this writes - it
+          # authenticates from the `NPM_CONFIG_*` env on the publish step
+          # below - so the auth-token line here is unused by the upload.
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org/"
 
@@ -82,8 +82,11 @@ jobs:
 
       - name: Publish
         # `release` builds every package and then publishes; no separate
-        # build step is needed.
+        # build step is needed. `bun publish` reads these npm-config env
+        # vars for the registry + auth token (it does not pick up the
+        # token from setup-node's ~/.npmrc).
         run: bun run release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
