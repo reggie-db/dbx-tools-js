@@ -18,7 +18,6 @@
  * the derived sender's domain, `EMAIL_FROM` for an explicit override,
  * and `EMAIL_OUTBOX_DIR` for the outbox directory.
  */
-
 import type { BasePluginConfig } from "@databricks/appkit";
 import type { JSONSchema7 } from "json-schema";
 import { resolve } from "node:path";

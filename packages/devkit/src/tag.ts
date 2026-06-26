@@ -3,12 +3,9 @@
 // the tag to origin. The tag push fires the repo's release workflow,
 // which builds every publishable workspace and runs the publish step.
 //
-// After pushing, the function also publishes the tagged versions to
-// the local registry (Verdaccio by default) via `release()`. The
-// public-npm path runs in CI and can be gated for days (e.g. a corp
-// proxy that quarantines new versions), so the local copy is what
-// other projects on this machine install in the meantime. Best-effort
-// and opt-out with `publish: false`; point elsewhere with `registry`.
+// After pushing, the function can also run the workspace publish script
+// so local release flows use the same Bun-based package publishing path
+// as CI. Opt out with `publish: false`.
 //
 // All packages in the changesets `fixed` group share one version. The
 // function reads the shared version from the first publishable package,
@@ -24,12 +21,9 @@
 
 import { consola } from "consola";
 import semver from "semver";
-import { agentQuery } from "./agent.js";
 import { getDevkitConfig } from "./config.js";
 import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
-import { syncReadmes } from "./readme.js";
-import { DEFAULT_REGISTRY, release } from "./release.js";
 import { fail, nonEmptyLines } from "./script.js";
 import { sh } from "./shell.js";
 
@@ -41,12 +35,8 @@ export interface TagOptions {
   bump?: Bump;
   /** Print everything, write nothing. */
   dryRun?: boolean;
-  /** Sync package READMEs with source before the release commit. */
-  readme?: boolean;
   /** Publish the tagged versions to the local registry (default true). */
   publish?: boolean;
-  /** Local registry to publish the tagged versions to. */
-  registry?: string;
 }
 
 /**
@@ -104,106 +94,6 @@ async function writeVersion(jsonPath: string, nextVersion: string): Promise<void
   await writeJson(jsonPath, meta);
 }
 
-/** Context passed to the `releaseNotes()` hook. */
-interface ReleaseNotesContext {
-  /** Previous tag to diff against, or null if this is the first tag. */
-  prevTag: string | null;
-  /** The tag that will be created (e.g. `v0.2.0`). */
-  nextTag: string;
-  /** Git rev range used for log/diff (e.g. `v0.1.0..HEAD`), or null if no prev tag. */
-  range: string | null;
-  /** One-line commit subjects since `prevTag`, no merges. */
-  commits: string[];
-  /**
-   * `git status --porcelain` lines for the working tree. Captures
-   * dirty files that the release commit is about to fold in.
-   */
-  pendingFiles: string[];
-  /**
-   * `git diff --stat` between `prevTag` and the **working tree**
-   * (so committed + uncommitted changes are both visible). Empty
-   * string when no `prevTag` exists.
-   */
-  diffStat: string;
-  /** Ready-to-send prompt assembled from the fields above. */
-  prompt: string;
-}
-
-const NOTES_INSTRUCTIONS = `
-Generate markdown release notes for the following tag.
-
-The prompt already includes the commit log + working-tree stat. Use
-the agent's tools sparingly to fill gaps the summary can't capture:
-- read_files on a batch of touched source files when a refactor needs explanation
-- git_diff with a path filter to inspect a specific file's diff
-- git_log with a path filter to trace recent history of a subdir
-
-Skip the tools when commit subjects already tell the story.
-
-Requirements:
-- Be terse
-- Group by theme (Features, Fixes, Internals); skip empty sections
-- Describe what changed and why it matters, not how the diff looks
-- Never cite line counts, diff stats, churn, or file sizes (no
-  "~800 lines reworked", "+71 lines", "~1300 lines changed"); the
-  stat is context for you only, not content for the notes
-- A refactor entry should name the new behavior or structure, not
-  quantify the edit
-- No preamble
-- No closing remarks
-- No emojis
-- No em dashes
-
-Output the release notes only.`.trim();
-
-/**
- * Build the release-notes prompt from git history + working tree.
- * Captures three sources of change so the notes generator can see
- * everything the release commit is about to ship, even when HEAD
- * still points at the previous tag.
- */
-async function buildReleaseNotesContext(
-  prevTag: string | null,
-  nextTag: string,
-): Promise<ReleaseNotesContext> {
-  const range = prevTag ? `${prevTag}..HEAD` : null;
-  const commits = range
-    ? nonEmptyLines((await git(["log", "--no-merges", "--pretty=- %s", range])).stdout)
-    : [];
-  const pendingFiles = nonEmptyLines(await gitStatus());
-  const diffStat = prevTag ? (await git(["diff", "--stat", prevTag])).stdout : "";
-
-  const prompt = [
-    `Write release notes for ${nextTag}.`,
-    ``,
-    `Commits since ${prevTag ?? "(no previous tag)"}:`,
-    commits.length ? commits.join("\n") : "(none)",
-    ``,
-    `Uncommitted changes about to be folded into the release commit:`,
-    pendingFiles.length ? pendingFiles.join("\n") : "(none)",
-    ``,
-    `Changed files (committed + uncommitted vs ${prevTag ?? "(no previous tag)"}):`,
-    diffStat || "(none)",
-  ].join("\n");
-
-  return { prevTag, nextTag, range, commits, pendingFiles, diffStat, prompt };
-}
-
-/**
- * Hook for an AI-generated release summary. Runs the Mastra script
- * agent (which can call `read_files` to inspect touched source) via
- * `agentQuery()`. Returns null on any failure so the caller can
- * fall back to a default tag message.
- */
-async function releaseNotes(ctx: ReleaseNotesContext): Promise<string | null> {
-  try {
-    return await agentQuery(NOTES_INSTRUCTIONS, ctx);
-  } catch (error) {
-    consola.warn("Release notes hook failed, falling back:", error);
-    return null;
-  }
-}
-
 /**
  * Create (or, on retry, update) the GitHub Release for `tag` with
  * `body` as its markdown description. GitHub renders the Release
@@ -251,13 +141,7 @@ async function publishGithubRelease(tag: string, body: string): Promise<void> {
  * header for the full local-state policy.
  */
 export async function tag(opts: TagOptions = {}): Promise<void> {
-  const {
-    bump = "patch",
-    dryRun = false,
-    readme = false,
-    publish = true,
-    registry = DEFAULT_REGISTRY,
-  } = opts;
+  const { bump = "patch", dryRun = false, publish = true } = opts;
 
   // Tagging commits, tags, and pushes - all of which need git and a
   // repo. Fail upfront with a clear message rather than partway through.
@@ -316,38 +200,12 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   }
   consola.log("");
 
-  // Opt-in via `readme`: sync READMEs with current source before the
-  // release commit is built so the shipped docs match the tagged code.
-  if (readme) {
-    consola.log("Syncing READMEs with current source...");
-    await syncReadmes({ upgrade: true, dryRun });
-    consola.log("");
-  }
+  const tagMessage = `Release ${tagName}`;
 
-  const notesContext = await buildReleaseNotesContext(prevTag, tagName);
-  let aiSummary: string | null = null;
-  const hasChanges =
-    notesContext.commits.length > 0 || notesContext.pendingFiles.length > 0;
-  if (!hasChanges) {
-    consola.log(
-      "(skipping release notes: no commits or pending changes since previous tag)",
-    );
-  } else {
-    aiSummary = (await releaseNotes(notesContext))?.trim() || null;
-  }
-  const tagMessage = aiSummary
-    ? `Release ${tagName}\n\n${aiSummary}\n`
-    : `Release ${tagName}`;
-
-  consola.log("");
-  consola.log("--- tag message ---");
-  consola.log(tagMessage);
-  consola.log("-------------------");
-  consola.log("");
   if (dryRun) {
     consola.log("--dry-run: skipping write, commit, tag, and push.");
     if (publish) {
-      await release({ registry, dryRun: true });
+      await sh(["bun", "run", "release", "--dry-run"], { nothrow: true });
     }
     return;
   }
@@ -368,16 +226,12 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   consola.log(`Pushing ${tagName} to origin...`);
   await gitPush(tagName);
 
-  // The annotated tag message shows up as plaintext on GitHub's tag
-  // page. The Release object renders the same body as markdown.
-  await publishGithubRelease(tagName, aiSummary ?? `Release ${tagName}`);
+  await publishGithubRelease(tagName, tagMessage);
 
-  // Publish the freshly-tagged versions to the local registry
-  // (Verdaccio by default) so other projects on this machine can
-  // consume them right away. Best-effort: the tag is already pushed, so
-  // an unreachable local registry is a warning, not a failure.
+  // Publish via the repo's Bun-based release script. Best-effort: the tag
+  // is already pushed, so a publish failure is a warning, not a failure.
   if (publish) {
-    await release({ registry });
+    await sh(["bun", "run", "release"], { nothrow: true });
   }
 
   consola.log("");

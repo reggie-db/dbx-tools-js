@@ -17,9 +17,14 @@ export function git(
   return sh(["git", ...args], { quiet: true, ...opts });
 }
 
-/** True when the `git` executable is resolvable on PATH. */
+/**
+ * True when the `git` executable is resolvable on PATH. The PATH lookup
+ * is stable for the process, so memoize it - callers (`isGitRepo`,
+ * `requireGitRepo`, codegen's per-file ignore check) hit this repeatedly.
+ */
+let gitAvailable: boolean | undefined;
 export function hasGit(): boolean {
-  return Boolean(Bun.which("git"));
+  return (gitAvailable ??= Boolean(Bun.which("git")));
 }
 
 /**

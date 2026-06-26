@@ -9,9 +9,8 @@
   "dependencies": {
     "zod": "catalog:"
   },
-  "devDependencies": {
-    "@databricks/sdk-experimental": "catalog:"
+  "exports": {
+    ".": "./src/index.ts"
   },
-  "module": "index.ts",
   "type": "module"
 }

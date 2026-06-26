@@ -133,12 +133,12 @@ const prompts = genieSampleQuestions(space); // string[]
 
 `GenieChatOptions` is the same shape for both drivers:
 
-| Option            | Default                                    | Description                                                                                                          |
-| ----------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `conversationId`  | `undefined`                                | Seed conversation id. When set, this turn appends to the existing conversation via `createMessage`.                  |
-| `workspaceClient` | resolved (see below)                       | Explicit `WorkspaceClient`. Defaults to AppKit's per-request client when available; otherwise env-var auth.          |
-| `pollIntervalMs`  | `500`                                      | Cadence between successive `getMessage` calls.                                                                       |
-| `context`         | new internal `AbortController` per call    | External cancellation. Accepts an `AbortSignal` or a fully-built SDK `Context` (`apiUtils.ContextLike`).             |
+| Option            | Default                                 | Description                                                                                                 |
+| ----------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `conversationId`  | `undefined`                             | Seed conversation id. When set, this turn appends to the existing conversation via `createMessage`.         |
+| `workspaceClient` | resolved (see below)                    | Explicit `WorkspaceClient`. Defaults to AppKit's per-request client when available; otherwise env-var auth. |
+| `pollIntervalMs`  | `500`                                   | Cadence between successive `getMessage` calls.                                                              |
+| `context`         | new internal `AbortController` per call | External cancellation. Accepts an `AbortSignal` or a fully-built SDK `Context` (`apiUtils.ContextLike`).    |
 
 ### Workspace client resolution
 

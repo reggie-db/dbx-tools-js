@@ -11,7 +11,7 @@
  * every route from `basePath` + {@link MASTRA_ROUTES}.
  */
 export * from "@dbx-tools/model-shared";
-export * from "./src/marker.js";
-export * from "./src/override.js";
-export * from "./src/protocol.js";
-export * from "./src/routes.js";
+export * from "./marker.js";
+export * from "./override.js";
+export * from "./protocol.js";
+export * from "./routes.js";

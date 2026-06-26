@@ -6,7 +6,9 @@
     "@dbx-tools/shared": "workspace:*",
     "fuse.js": "^7.0.0"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "peerDependencies": {
     "@databricks/appkit": "catalog:"
   },

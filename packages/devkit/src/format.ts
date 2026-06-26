@@ -99,14 +99,12 @@ export async function format(): Promise<void> {
   // Capture stdout (where prettier lists every visited file) so we can
   // drop its noisy "<file> (unchanged)" lines and report only the files
   // it actually rewrote. A non-zero exit still throws.
+  const sources = await sourceGlob();
   const { stdout } = await bunx(
-    [
-      "prettier",
-      "--write",
-      "--plugin=prettier-plugin-organize-imports",
-      await sourceGlob(),
-    ],
-    { quiet: true },
+    ["prettier", "--write", "--plugin=prettier-plugin-organize-imports", sources],
+    {
+      quiet: true,
+    },
   );
   const changed = stdout
     .split("\n")

@@ -6,6 +6,8 @@
     "@dbx-tools/genie-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "type": "module"
 }

@@ -43,9 +43,7 @@ const lake = appkitUtils.instance(this.context, lakebase);
 const pool = lake?.exports().pool;
 
 // Throws "<caller>: required plugin not registered: lakebase" when missing.
-const pool2 = appkitUtils
-  .require(this.context, lakebase, "mastra")
-  .exports().pool;
+const pool2 = appkitUtils.require(this.context, lakebase, "mastra").exports().pool;
 ```
 
 `appkitUtils.data(factory)` caches the static `{ plugin, name }` descriptor
@@ -89,13 +87,11 @@ import { netUtils } from "@dbx-tools/shared";
 // Tolerant URL coercion into a chainable builder - bare hostnames,
 // path-only strings, or objects with a `.url` field all round-trip
 // through. Returns `null` on failure (matches WHATWG `URL.parse(...)`).
-const url = netUtils.urlBuilder("example.com");  // https://example.com/
+const url = netUtils.urlBuilder("example.com"); // https://example.com/
 
 // Copy-on-write path joins: segments are trimmed of boundary slashes,
 // blanks dropped, arrays flattened.
-netUtils
-  .urlBuilder("https://host")!
-  .withPathAppend("/api/", ["v2", "items"]); // https://host/api/v2/items
+netUtils.urlBuilder("https://host")!.withPathAppend("/api/", ["v2", "items"]); // https://host/api/v2/items
 
 // Segment-boundary prefix test (accepts any UrlLike, incl. a Request).
 netUtils.pathMatch("/api/cool?q=1", "/api"); // true
@@ -142,13 +138,10 @@ lower-case at the type level (the `lowerCase` option literal is fixed to
 import { stringUtils } from "@dbx-tools/shared";
 
 stringUtils.toIdentifier("My Cool Project!"); // "my-cool-project"
-stringUtils.toSlug("My Cool Project!");       // "my-cool-project"
+stringUtils.toSlug("My Cool Project!"); // "my-cool-project"
 
 // Custom delimiter via toIdentifierWithOptions:
-stringUtils.toIdentifierWithOptions(
-  { delimiter: "_" },
-  "My Cool Project!",
-); // "my_cool_project"
+stringUtils.toIdentifierWithOptions({ delimiter: "_" }, "My Cool Project!"); // "my_cool_project"
 
 stringUtils.toIdentifierWithOptions({ maxLength: 16 }, "very long project name");
 // "very-long-2m8wk4"  <- hash suffix when truncated
@@ -182,7 +175,7 @@ const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));
 // `length` for the first N hex chars of one (use for marker-
 // friendly typeable ids bounded to a single conversation /
 // batch).
-commonUtils.id();  // "123e4567-e89b-12d3-a456-426614174000"
+commonUtils.id(); // "123e4567-e89b-12d3-a456-426614174000"
 commonUtils.id(8); // "a3f1c92b"
 
 // Short, deterministic hash for cache keys / slug suffixes / etc.
@@ -195,10 +188,11 @@ commonUtils.fnvHashWithOptions({ length: 4 }, "user@example.com");
 // value; stops when `predicate` returns false or the signal aborts.
 // `timeoutMs` caps the total loop lifetime - when it elapses the
 // loop throws the `TimeoutError` from `AbortSignal.timeout(...)`.
-for await (const status of commonUtils.poll(
-  async ({ signal }) => fetchStatus(signal),
-  { intervalMs: 250, timeoutMs: 30_000, predicate: (s) => s !== "ready" },
-)) {
+for await (const status of commonUtils.poll(async ({ signal }) => fetchStatus(signal), {
+  intervalMs: 250,
+  timeoutMs: 30_000,
+  predicate: (s) => s !== "ready",
+})) {
   render(status);
 }
 
@@ -236,7 +230,7 @@ in this repo accept any matching shape.
 ### `LOG_LEVEL` filtering
 
 Each call checks `process.env.LOG_LEVEL` (case-insensitive, default
-`info`) and drops anything below the threshold *before* string
+`info`) and drops anything below the threshold _before_ string
 formatting, so leaving `log.debug({...heavy details})` calls in
 production code costs nothing as long as `LOG_LEVEL` isn't `debug`.
 

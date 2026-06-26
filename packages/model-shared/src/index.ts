@@ -11,5 +11,5 @@
  * response or validate a tier request themselves.
  */
 
-export * from "./src/classify.js";
-export * from "./src/protocol.js";
+export * from "./classify.js";
+export * from "./protocol.js";

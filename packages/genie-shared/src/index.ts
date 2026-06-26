@@ -13,5 +13,5 @@
  * themselves.
  */
 
-export * from "./src/event.js";
-export * from "./src/protocol.js";
+export * from "./event.js";
+export * from "./protocol.js";

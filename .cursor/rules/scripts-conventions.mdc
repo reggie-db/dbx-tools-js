@@ -17,16 +17,14 @@ own:
 - `src/shell.ts` - `sh` / `bunx` wrap Bun's `$`. One home for
   command running, output trimming, and exit-code handling.
 - `src/git.ts` - `git()` over `sh`.
-- `src/package.ts` - `discoverPackages*`, `orderByDependencies`,
-  `writeJson`, `toAbsolute` / `toRelative`, `PackageJson` /
-  `WorkspacePackage`.
+- `src/package.ts` - `discoverPackages*`, `writeJson`,
+  `toAbsolute` / `toRelative`, `PackageJson` / `WorkspacePackage`.
 - `src/script.ts` - `runScript`, `fail`, `errorMessage`,
   `nonEmptyLines`.
-- `src/agent.ts` - the Mastra script agent (`agentQuery`, `getScriptAgent`).
 - `src/project.ts` - `getProject` (the pacwich `FileSystemProject`).
-- `src/config.ts` - `getDevkitConfig` (auto-derived scope + repo,
-  overridable via a `devkit` key in the consuming repo's root
-  `package.json`).
+- `src/config.ts` - `getDevkitConfig` (auto-derived scope + repo +
+  shared-helpers package, overridable via a `devkit` key in the
+  consuming repo's root `package.json`).
 
 New command modules export a plain async function and are wired into
 `bin/devkit.ts`; keep CLI option parsing in the bin, not the module.
@@ -38,14 +36,14 @@ mandatory: errors only surface (and serial loops only stay serial)
 when the promise is awaited.
 
 ```ts
-// BAD: build failures get swallowed and packages build in parallel.
+// BAD: failures get swallowed and packages run in parallel.
 for (const pkg of packages) {
-  bunx(["tsc", "-p", "tsconfig.build.json"], { cwd: pkg.dir });
+  bunx(["tsdown"], { cwd: pkg.dir });
 }
 
 // GOOD
 for (const pkg of packages) {
-  await bunx(["tsc", "-p", "tsconfig.build.json"], { cwd: pkg.dir });
+  await bunx(["tsdown"], { cwd: pkg.dir });
 }
 ```
 
@@ -61,11 +59,9 @@ import { discoverPackages } from "./package.js";
 // Default filter: skip private packages.
 const all = await discoverPackages();
 
-// Extra criteria: must have a build config.
-const buildable = await discoverPackages(
-  (pkg) =>
-    pkg.meta.private !== true &&
-    existsSync(resolve(pkg.dir, "tsconfig.build.json")),
+// Extra criteria: must declare a codegen field.
+const generated = await discoverPackages(
+  (pkg) => pkg.meta.private !== true && Boolean(pkg.meta.codegen),
 );
 ```
 
@@ -77,16 +73,6 @@ Use `discoverPackageJsons(includeRoot?)` when you only need paths
 `writeJson()` preserves the trailing newline of the original file,
 preventing churn against `prettier --write`. Use it instead of
 `Bun.write(path, JSON.stringify(value, null, 2))`.
-
-## AI calls via `agentQuery`
-
-`agentQuery(prompt, ctx?, overrides?)` runs the prompt through a
-Mastra agent (with `read_files` / git / sandbox tools) and returns
-`null` on any failure (no resolvable model, empty response, exhausted
-retries). The model comes from the `SCRIPT_MODEL_PROVIDER` env var as
-a `provider/model` spec (`databricks/...`, `ollama/...`, or any
-Mastra-routed provider). Designed so callers can do
-`await agentQuery(...) ?? fallback` without try/catch boilerplate.
 
 ## File ops via `Bun.file` / `Bun.write`
 

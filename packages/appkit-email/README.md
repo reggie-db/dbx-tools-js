@@ -61,16 +61,16 @@ Set on the `email()` plugin config or via environment variables
 (explicit config wins, then env). Env names are unprefixed because the
 app talks to a single SMTP server.
 
-| Field | Env | Notes |
-| --- | --- | --- |
-| `smtp.host` | `SMTP_HOST` | SMTP server hostname |
-| `smtp.port` | `SMTP_PORT` | default `587` |
-| `smtp.secure` | `SMTP_SECURE` | TLS-on-connect; default `port === 465` |
-| `smtp.user` | `SMTP_USER` | auth username |
-| `smtp.password` | `SMTP_PASSWORD` | auth password / API key |
-| `domain` | `EMAIL_DOMAIN` | builds the sender as `<user-local-part>@<domain>` |
-| `from` | `EMAIL_FROM` | explicit `From`; skips per-user derivation |
-| `outDir` | `EMAIL_OUTBOX_DIR` | outbox directory (file mode) |
+| Field           | Env                | Notes                                             |
+| --------------- | ------------------ | ------------------------------------------------- |
+| `smtp.host`     | `SMTP_HOST`        | SMTP server hostname                              |
+| `smtp.port`     | `SMTP_PORT`        | default `587`                                     |
+| `smtp.secure`   | `SMTP_SECURE`      | TLS-on-connect; default `port === 465`            |
+| `smtp.user`     | `SMTP_USER`        | auth username                                     |
+| `smtp.password` | `SMTP_PASSWORD`    | auth password / API key                           |
+| `domain`        | `EMAIL_DOMAIN`     | builds the sender as `<user-local-part>@<domain>` |
+| `from`          | `EMAIL_FROM`       | explicit `From`; skips per-user derivation        |
+| `outDir`        | `EMAIL_OUTBOX_DIR` | outbox directory (file mode)                      |
 
 ### SMTP vs. outbox mode
 

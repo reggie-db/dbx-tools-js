@@ -2,51 +2,22 @@
   "name": "@dbx-tools/devkit",
   "version": "0.1.61",
   "bin": {
-    "devkit": "./bin/devkit.ts"
+    "devkit": "./dist/bin/devkit.js"
   },
   "dependencies": {
-    "@databricks/sdk-experimental": "catalog:",
-    "@mastra/core": "catalog:",
     "@types/semver": "^7.7.1",
     "commander": "catalog:",
     "consola": "^3.4.2",
-    "deepmerge": "^4.3.1",
-    "jsonc-parser": "^3.3.1",
-    "ollama-ai-provider-v2": "^3.5.1",
     "p-memoize": "^8.0.0",
     "pacwich": "^0.1.0",
-    "prettier": "^3.8.3",
-    "prettier-plugin-organize-imports": "^4.3.0",
+    "prettier": "catalog:",
+    "prettier-plugin-organize-imports": "catalog:",
     "semver": "^7.8.1",
     "ts-to-zod": "^5.1.0",
-    "typescript": "catalog:",
-    "zod": "catalog:"
+    "typescript": "catalog:"
   },
   "exports": {
-    ".": {
-      "source": "./index.ts",
-      "default": "./index.ts"
-    }
+    ".": "./src/index.ts"
   },
-  "files": [
-    "bin",
-    "dist",
-    "src",
-    "index.ts"
-  ],
-  "knip": {
-    "ignoreDependencies": [
-      "prettier-plugin-organize-imports"
-    ]
-  },
-  "main": "./index.ts",
-  "module": "index.ts",
-  "release": {
-    "stage": {
-      "tsconfig.build.json": "dist/tsconfig.build.json.template",
-      "package.default.json": "dist/package.default.json.template"
-    }
-  },
-  "type": "module",
-  "types": "./index.ts"
+  "type": "module"
 }

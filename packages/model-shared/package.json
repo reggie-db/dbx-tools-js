@@ -4,6 +4,8 @@
   "dependencies": {
     "zod": "catalog:"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "type": "module"
 }

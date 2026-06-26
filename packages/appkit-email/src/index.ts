@@ -10,11 +10,11 @@
  * nodemailer and AppKit server APIs and is Node-only.
  */
 export * from "@dbx-tools/appkit-email-shared";
-export * from "./src/config.js";
-export * from "./src/email-html.js";
-export * from "./src/markdown.js";
-export * from "./src/outbox.js";
-export * from "./src/plugin.js";
-export * from "./src/sender.js";
-export * from "./src/tool.js";
-export * from "./src/transport.js";
+export * from "./config.js";
+export * from "./email-html.js";
+export * from "./markdown.js";
+export * from "./outbox.js";
+export * from "./plugin.js";
+export * from "./sender.js";
+export * from "./tool.js";
+export * from "./transport.js";

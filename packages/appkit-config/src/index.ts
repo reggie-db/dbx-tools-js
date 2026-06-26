@@ -19,8 +19,8 @@
  * capability auto-config slots in behind its own plugin/env signal in
  * `createApp` without changing the call site.
  */
-export * from "./src/autopg.js";
-export * from "./src/create-app.js";
-export * from "./src/pgaddress.js";
-export * from "./src/provision.js";
-export * from "./src/resolver.js";
+export * from "./autopg.js";
+export * from "./create-app.js";
+export * from "./pgaddress.js";
+export * from "./provision.js";
+export * from "./resolver.js";

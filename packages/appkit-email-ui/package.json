@@ -3,25 +3,18 @@
   "version": "0.1.61",
   "dependencies": {
     "@dbx-tools/appkit-email-shared": "workspace:*",
-    "lucide-react": "^0.554.0",
-    "streamdown": "^2.5.0"
+    "lucide-react": "catalog:",
+    "streamdown": "catalog:"
   },
   "exports": {
-    "./react": {
-      "types": "./dist/react/index.d.ts",
-      "source": "./src/react/index.ts",
-      "default": "./dist/react/index.js"
-    },
+    "./react": "./src/react/index.ts",
     "./styles.css": "./src/styles.css",
     "./package.json": "./package.json"
   },
-  "main": "./dist/react/index.js",
-  "module": "./src/react/index.ts",
   "peerDependencies": {
     "@databricks/appkit-ui": "catalog:",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "react": "catalog:",
+    "react-dom": "catalog:"
   },
-  "type": "module",
-  "types": "./dist/react/index.d.ts"
+  "type": "module"
 }

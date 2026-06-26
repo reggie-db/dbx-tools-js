@@ -6,7 +6,9 @@
     "@dbx-tools/model-shared": "workspace:*",
     "zod": "catalog:"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "peerDependencies": {
     "@databricks/appkit": "catalog:"
   },

@@ -75,9 +75,10 @@ types). Existing code is not retroactively renamed. See
 ## Releases
 
 Tag-driven. `bun run tag` bumps every publishable package, commits
-+ pushes, then creates and pushes the `v<version>` annotated tag.
-Folds dirty files into the release commit. See
-[`.cursor/rules/release-workflow.mdc`](.cursor/rules/release-workflow.mdc).
+
+- pushes, then creates and pushes the `v<version>` annotated tag.
+  Folds dirty files into the release commit. See
+  [`.cursor/rules/release-workflow.mdc`](.cursor/rules/release-workflow.mdc).
 
 **Don't run `bun run tag`, `bun run release`, or any push command
 without explicit user consent in the current message.**

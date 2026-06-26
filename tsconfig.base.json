@@ -1,0 +1,38 @@
+{
+  // Shared compiler options for the bundler (tsdown) when it emits each
+  // publishable package's `.d.ts`. The flat root `tsconfig.json` is the
+  // editor + `tsc --noEmit` typecheck program; this is the build base.
+  //
+  // It carries `DOM`/`DOM.Iterable` + `jsx` for the browser/UI packages
+  // (`appkit-email-ui`, `appkit-mastra-ui`); the node packages tolerate
+  // the extra libs (the flat typecheck program already includes them).
+  // Bundler-style resolution + `customConditions: ["source"]` lets the
+  // declaration build follow each `@dbx-tools/*` dependency into its raw
+  // `.ts` source, so a build never reads a stale sibling `dist`.
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "types": ["bun"],
+    "moduleResolution": "bundler",
+    "customConditions": ["source"],
+    "paths": {
+      // See the note in `tsconfig.json`: the MCP SDK pulls in
+      // `eventsource`, whose `source` entry is `.ts` that doesn't
+      // type-check under our `lib`. Pin it to its shipped declarations.
+      "eventsource": [
+        "./node_modules/.bun/eventsource@3.0.7/node_modules/eventsource/dist/index.d.ts"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true
+  }
+}

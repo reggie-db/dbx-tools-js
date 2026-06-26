@@ -1,16 +1,22 @@
 node_modules
+
+# Build output. The bundler (tsdown) emits each publishable package's
+# JS + .d.ts into `<pkg>/dist`; the editor/typecheck program and the
+# IDE watchers (see .vscode/settings.json) exclude it.
 dist
-*.tsbuildinfo
-.env
 client/dist
+
+# Incremental tsc state. Demo's split build writes these under
+# node_modules/.tmp; anything else lands in node_modules/.cache. Either
+# way it stays out of the source tree and out of git.
+*.tsbuildinfo
+node_modules/.cache
+
+.env
 tmp
 
-# Per-package staging directory built by `devkit release` when
-# packing each workspace package for npm. Holds the merged
-# (default + own + enforced) package.json plus copies of the files
-# matched by the publish-time `files` glob. Always recreated, always
-# cleaned up; never commit it.
-.publish
+# Local AI tooling state (Claude Code, etc.) - machine-specific, never shared.
+.claude
 
 # bun.lock is uncommitted because it bakes in the registry URLs of whoever
 # ran `bun install` (e.g. a corporate npm proxy), which we don't want

@@ -23,12 +23,12 @@ The SDK shapes from `@dbx-tools/sdk-shared` are re-exported with a
 few fields Genie ships on the wire that the upstream `.d.ts` doesn't
 currently type:
 
-| Schema                       | Extension                                                                                                                                                                                                          |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GenieMessageSchema`         | Adds `auto_regenerate_count: number` and re-types `attachments` to the local `GenieAttachmentSchema`.                                                                                                              |
+| Schema                       | Extension                                                                                                                                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GenieMessageSchema`         | Adds `auto_regenerate_count: number` and re-types `attachments` to the local `GenieAttachmentSchema`.                                                                                                               |
 | `GenieAttachmentSchema`      | Re-types `query` to the thoughts-aware `GenieQueryAttachmentSchema`, adds `attachment_type` discriminator literal so consumers can `switch (att.attachment_type)` instead of probing which sub-object is populated. |
-| `GenieQueryAttachmentSchema` | Adds `thoughts: GenieThought[]` (the streamed reasoning payload).                                                                                                                                                  |
-| `GenieThoughtSchema`         | New: `{ thought_type, content }`. See [`GenieThoughtType`](#thought-types) for the known kinds.                                                                                                                    |
+| `GenieQueryAttachmentSchema` | Adds `thoughts: GenieThought[]` (the streamed reasoning payload).                                                                                                                                                   |
+| `GenieThoughtSchema`         | New: `{ thought_type, content }`. See [`GenieThoughtType`](#thought-types) for the known kinds.                                                                                                                     |
 
 ### Thought types
 
@@ -36,12 +36,12 @@ Open at the type level (`| (string & {})`) so a new server-side
 thought type doesn't break compilation; the four known types still
 narrow correctly under `switch`:
 
-| `thought_type`                  | Content                                                                                |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `THOUGHT_TYPE_DESCRIPTION`      | One-paragraph restatement of what the user asked.                                      |
-| `THOUGHT_TYPE_DATA_SOURCING`    | Markdown bullets of the fully-qualified `catalog.schema.table` sources Genie chose.    |
-| `THOUGHT_TYPE_STEPS`            | High-level plan Genie wrote before running SQL (one bullet per step).                  |
-| `THOUGHT_TYPE_UNDERSTANDING`    | Ambiguity / interpretation notes ("'revenue' could be gross, net, or recognized...").  |
+| `thought_type`               | Content                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| `THOUGHT_TYPE_DESCRIPTION`   | One-paragraph restatement of what the user asked.                                     |
+| `THOUGHT_TYPE_DATA_SOURCING` | Markdown bullets of the fully-qualified `catalog.schema.table` sources Genie chose.   |
+| `THOUGHT_TYPE_STEPS`         | High-level plan Genie wrote before running SQL (one bullet per step).                 |
+| `THOUGHT_TYPE_UNDERSTANDING` | Ambiguity / interpretation notes ("'revenue' could be gross, net, or recognized..."). |
 
 ### Attachment discriminator
 
@@ -53,8 +53,8 @@ discriminator literal (honoring a pre-set `att.attachment_type`).
 import { detectAttachmentType } from "@dbx-tools/genie-shared";
 
 switch (detectAttachmentType(att)) {
-  case "query":               // att.query is non-null
-  case "text":                // att.text is non-null
+  case "query": // att.query is non-null
+  case "text": // att.text is non-null
   case "suggested_questions": // att.suggested_questions is non-null
 }
 ```
@@ -62,7 +62,11 @@ switch (detectAttachmentType(att)) {
 ## Terminal-status helpers
 
 ```ts
-import { TERMINAL_STATUSES, isTerminalStatus, humanizeStatus } from "@dbx-tools/genie-shared";
+import {
+  TERMINAL_STATUSES,
+  isTerminalStatus,
+  humanizeStatus,
+} from "@dbx-tools/genie-shared";
 
 TERMINAL_STATUSES; // ["COMPLETED", "FAILED", "CANCELLED"] as const
 
@@ -86,19 +90,19 @@ stream of these. Each variant is a flat `{ type, ...fields }` object
 with `type` as the discriminator and snake_case payload fields hoisted
 to the top level - no `payload` wrapper.
 
-| `type`                | Source                                                                                            | Notable fields                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `question`            | Lifecycle. Fires once per turn, on the first `message` yield.                                     | `content`, `message_id`, `conversation_id`, `space_id`                        |
-| `message`             | Lifecycle. Fires once per poll yield.                                                             | `message: GenieMessage`                                                       |
-| `status`              | Top-level `message.status` transitioned.                                                          | `status`, `previous_status`                                                   |
-| `attachment`          | A new attachment slot appeared in `message.attachments[]`.                                        | `index`, `attachment_type`                                                    |
-| `thinking`            | A new `(thought_type, content)` tuple on a query attachment (value-based dedupe).                 | `text`, `thought_type`                                                        |
-| `text`                | Text-attachment `content` appeared or changed.                                                    | `text`                                                                        |
-| `query`               | SQL was finalized on a query attachment (transitioned undefined -> string or rewrote).            | `sql`, `title?`, `description?`                                               |
-| `statement`           | SQL submitted to a warehouse and a `statement_id` was assigned.                                   | `statement_id`                                                                |
-| `rows`                | Row count on a query attachment changed (fires for `undefined -> 0` and `0 -> N`).                | `row_count`, `previous_row_count`, `statement_id`                             |
-| `suggested_questions` | Follow-up suggested-questions array appeared or rewrote.                                          | `questions: string[]`                                                         |
-| `result`              | Lifecycle. Fires once on the terminal snapshot.                                                   | `status: TerminalStatus`, `message: GenieMessage`                             |
+| `type`                | Source                                                                                 | Notable fields                                         |
+| --------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `question`            | Lifecycle. Fires once per turn, on the first `message` yield.                          | `content`, `message_id`, `conversation_id`, `space_id` |
+| `message`             | Lifecycle. Fires once per poll yield.                                                  | `message: GenieMessage`                                |
+| `status`              | Top-level `message.status` transitioned.                                               | `status`, `previous_status`                            |
+| `attachment`          | A new attachment slot appeared in `message.attachments[]`.                             | `index`, `attachment_type`                             |
+| `thinking`            | A new `(thought_type, content)` tuple on a query attachment (value-based dedupe).      | `text`, `thought_type`                                 |
+| `text`                | Text-attachment `content` appeared or changed.                                         | `text`                                                 |
+| `query`               | SQL was finalized on a query attachment (transitioned undefined -> string or rewrote). | `sql`, `title?`, `description?`                        |
+| `statement`           | SQL submitted to a warehouse and a `statement_id` was assigned.                        | `statement_id`                                         |
+| `rows`                | Row count on a query attachment changed (fires for `undefined -> 0` and `0 -> N`).     | `row_count`, `previous_row_count`, `statement_id`      |
+| `suggested_questions` | Follow-up suggested-questions array appeared or rewrote.                               | `questions: string[]`                                  |
+| `result`              | Lifecycle. Fires once on the terminal snapshot.                                        | `status: TerminalStatus`, `message: GenieMessage`      |
 
 Every variant carries a `GenieChatLocation` mixin (`space_id`,
 `conversation_id?`, `message_id?`, `attachment_id?`) so subscribers

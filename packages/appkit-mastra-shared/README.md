@@ -13,7 +13,10 @@ The HTTP client that drives these routes (`MastraPluginClient`) ships
 from `@dbx-tools/appkit-mastra-ui`.
 
 ```ts
-import { MASTRA_ROUTES, type MastraClientConfig } from "@dbx-tools/appkit-mastra-shared";
+import {
+  MASTRA_ROUTES,
+  type MastraClientConfig,
+} from "@dbx-tools/appkit-mastra-shared";
 ```
 
 ## What the plugin publishes
@@ -30,9 +33,9 @@ shared between the server's route registration and the client.
 
 ```ts
 interface MastraClientConfig {
-  basePath: string;       // /api/<plugin name>
-  defaultAgent: string;   // agent the client talks to when no :agentId
-  agents: string[];       // every registered agent id
+  basePath: string; // /api/<plugin name>
+  defaultAgent: string; // agent the client talks to when no :agentId
+  agents: string[]; // every registered agent id
 }
 
 // Relative segments under basePath (single source of truth)
@@ -97,10 +100,14 @@ import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
 
 function handleEvent(event: GenieWriterEvent) {
   switch (event.type) {
-    case "status":   /* status transition */ break;
-    case "thinking": /* Genie thought */ break;
-    case "query":    /* SQL emitted */ break;
-    case "error":    /* terminal error */ break;
+    case "status":
+      /* status transition */ break;
+    case "thinking":
+      /* Genie thought */ break;
+    case "query":
+      /* SQL emitted */ break;
+    case "error":
+      /* terminal error */ break;
     // ...see src/protocol.ts for the complete union
   }
 }

@@ -24,8 +24,6 @@ export class WorkspacePackage {
 
   private constructor(
     readonly meta: PackageJson,
-    readonly dependencies: readonly string[],
-    readonly dependents: readonly string[],
     dir: string,
   ) {
     this.dir = dir;
@@ -37,7 +35,7 @@ export class WorkspacePackage {
   static async fromWorkspace(ws: Workspace): Promise<WorkspacePackage> {
     const dir = resolve(root, ws.path);
     const meta = (await Bun.file(join(dir, "package.json")).json()) as PackageJson;
-    return new WorkspacePackage(meta, ws.dependencies, ws.dependents, dir);
+    return new WorkspacePackage(meta, dir);
   }
 }
 
@@ -79,32 +77,6 @@ export async function discoverPackages(
     project.workspaces.map((ws) => WorkspacePackage.fromWorkspace(ws)),
   );
   return pkgs.filter(filter).sort((a, b) => a.slug.localeCompare(b.slug));
-}
-
-/** Topologically sort so each package follows the workspace deps it consumes. */
-export function orderByDependencies(pkgs: WorkspacePackage[]): WorkspacePackage[] {
-  const byName = new Map<string, WorkspacePackage>();
-  for (const pkg of pkgs) {
-    if (pkg.meta.name) byName.set(pkg.meta.name, pkg);
-  }
-  const ordered: WorkspacePackage[] = [];
-  const visited = new Set<WorkspacePackage>();
-  const onStack = new Set<WorkspacePackage>();
-  const visit = (pkg: WorkspacePackage): void => {
-    if (visited.has(pkg) || onStack.has(pkg)) return;
-    onStack.add(pkg);
-    for (const depName of [...pkg.dependencies].sort()) {
-      const dep = byName.get(depName);
-      if (dep) visit(dep);
-    }
-    onStack.delete(pkg);
-    visited.add(pkg);
-    ordered.push(pkg);
-  };
-  for (const pkg of [...pkgs].sort((a, b) => a.slug.localeCompare(b.slug))) {
-    visit(pkg);
-  }
-  return ordered;
 }
 
 /** Write `value` as JSON, preserving the file's trailing newline to avoid format churn. */

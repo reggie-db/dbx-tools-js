@@ -1,5 +1,4 @@
-// Workspace integrity check, run via `devkit verify` and as part of
-// the `devkit build` gate.
+// Workspace integrity check, run via `devkit verify`.
 //
 // Wraps pacwich's `verify`, which scans every workspace's source for
 // imports of sibling workspace packages that aren't declared as a

@@ -54,18 +54,18 @@ React component all validate the same payload) and a **`ui`** sibling
 table lists each primary package with its `shared` / `ui` siblings
 linked alongside; every package's own README covers its usage in depth.
 
-| Package | Role |
-| --- | --- |
-| [`@dbx-tools/shared`](packages/shared) | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper. Browser-safe surface via `index.client.ts`. |
-| [`@dbx-tools/sdk-shared`](packages/sdk-shared) | Zod schemas generated from the Databricks SDK `.d.ts` types. |
-| [`@dbx-tools/genie`](packages/genie) · [shared](packages/genie-shared) | Genie streaming drivers: `genieChat` (raw) + `genieEventChat` (semantic events). |
-| [`@dbx-tools/model`](packages/model) · [shared](packages/model-shared) | Workspace-aware model selection: fuzzy name resolution + capability-class ranking. |
-| [`@dbx-tools/model-proxy`](packages/model-proxy) | Local OpenAI-compatible proxy in front of Databricks Model Serving (ships a CLI). |
-| [`@dbx-tools/appkit-config`](packages/appkit-config) | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env). |
-| [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + a chat route + Lakebase memory; drop-in React chat UI. |
-| [`@dbx-tools/appkit-email`](packages/appkit-email) · [shared](packages/appkit-email-shared) · [ui](packages/appkit-email-ui) | AppKit plugin + approval-gated `send_email` Mastra tool (SMTP, OBO sender); Approve / Deny card UI. |
-| [`@dbx-tools/devkit`](packages/devkit) | The `devkit` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
-| [`@dbx-tools/appkit-demo`](demo) | Private, runnable Databricks App that wires everything together. |
+| Package                                                                                                                          | Role                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@dbx-tools/shared`](packages/shared)                                                                                           | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper. Browser-safe surface via `index.client.ts`.                                |
+| [`@dbx-tools/sdk-shared`](packages/sdk-shared)                                                                                   | Zod schemas generated from the Databricks SDK `.d.ts` types.                                                                                         |
+| [`@dbx-tools/genie`](packages/genie) · [shared](packages/genie-shared)                                                           | Genie streaming drivers: `genieChat` (raw) + `genieEventChat` (semantic events).                                                                     |
+| [`@dbx-tools/model`](packages/model) · [shared](packages/model-shared)                                                           | Workspace-aware model selection: fuzzy name resolution + capability-class ranking.                                                                   |
+| [`@dbx-tools/model-proxy`](packages/model-proxy)                                                                                 | Local OpenAI-compatible proxy in front of Databricks Model Serving (ships a CLI).                                                                    |
+| [`@dbx-tools/appkit-config`](packages/appkit-config)                                                                             | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env).                                                                |
+| [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + a chat route + Lakebase memory; drop-in React chat UI.                                                        |
+| [`@dbx-tools/appkit-email`](packages/appkit-email) · [shared](packages/appkit-email-shared) · [ui](packages/appkit-email-ui)     | AppKit plugin + approval-gated `send_email` Mastra tool (SMTP, OBO sender); Approve / Deny card UI.                                                  |
+| [`@dbx-tools/devkit`](packages/devkit)                                                                                           | The `devkit` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
+| [`@dbx-tools/appkit-demo`](demo)                                                                                                 | Private, runnable Databricks App that wires everything together.                                                                                     |
 
 ## Develop
 
@@ -103,9 +103,9 @@ Publishable packages under `@dbx-tools/*` are configured as `fixed` in
 [`.changeset/config.json`](.changeset/config.json), so they version together.
 Releases are **tag-driven**: pushing a `v<version>` tag to `origin` fires the
 [release workflow](.github/workflows/release.yml), which builds every
-publishable workspace and runs `devkit release` against npm. No PR-based
-versioning bot, no auto-publish on push to `main` - the tag push is the
-deliberate signal that this commit ships.
+publishable workspace and publishes with Bun. No PR-based versioning bot, no
+auto-publish on push to `main` - the tag push is the deliberate signal that
+this commit ships.
 
 ### Per-release flow
 
@@ -120,58 +120,23 @@ bun run tag --dry-run      # preview without writing or pushing
 `devkit tag` bumps the version in every publishable `packages/*/package.json`
 (they're fixed, so they always bump together), commits the bump as
 `chore: release v<version>`, pushes the commit, then creates and pushes the
-`v<version>` tag.
-
-For the tag message it assembles the commit log + working-tree diff since
-the previous tag and runs it through the Mastra script agent
-(in [`@dbx-tools/devkit`](packages/devkit)) to generate markdown
-release notes; the agent can
-open touched files to fill gaps. If no model/Databricks profile resolves
-(or the hook throws) it falls back to a bare `Release v<version>` message.
-After pushing the tag it also creates a GitHub Release (when `gh` is on
-`PATH`) and publishes the tagged versions to the local registry. Pass
-`--readme` to sync every package README with the source before the
-release commit is built.
+`v<version>` tag with a `Release v<version>` message. After pushing the tag it
+also creates a GitHub Release (when `gh` is on `PATH`).
 
 The tag push triggers the workflow. Build + publish typically takes ~2 minutes
 on `ubuntu-latest`.
 
-### What the publish step does
+### Build and publish shape
 
-`devkit release` keeps the on-disk source tree read-only and instead
-**stages** each package into `packages/<slug>/.publish/` (gitignored).
-Packages publish in workspace dependency order. For every publishable
-workspace it:
+Every publishable package owns its shipped `main`, `types`, `exports`, and
+`files` fields directly in `packages/<slug>/package.json`. The `source` export
+condition keeps editor/typecheck resolution pointed at raw `.ts` sources, while
+`types` and `default` point at the bundled artifacts in `packages/<slug>/dist/`.
 
-1. Asks the registry whether the current `name@version` already exists.
-   If so, it skips (so re-running after a partial failure is safe and
-   never trips `EPUBLISHCONFLICT`).
-2. Creates a fresh `.publish/` directory inside the package.
-3. Copies everything matched by the merged manifest's `files` glob, plus
-   the conventional `README` / `LICENSE` / `CHANGELOG` / `NOTICE` files,
-   into the stage.
-4. Writes the merged `package.json` into the stage. The shape is
-   `package.default.json` (low-priority template) < the package's own
-   manifest < `package.enforced.json` (org-wide constants), with
-   per-package `repository.directory` stamped in and every `workspace:*`
-   and `catalog:` specifier rewritten to a real version range (npm
-   understands neither).
-5. Runs `npm publish` from inside the stage. (`npm`, not `bun`, because
-   bun doesn't embed the README into the registry manifest, leaving an
-   empty package page.)
-6. Removes the stage in a `finally`.
-
-Because the source tree's `package.json` files are never mutated, a crash,
-Ctrl-C, or a `git add -A` from another process can't wedge the workspace.
-The worst-case recovery is `rm -rf packages/*/.publish` (and even that
-isn't needed - the next run wipes the directory before reusing it).
-
-The default registry is a local Verdaccio (`http://localhost:4873`) so a
-stray `bun run release` can't hit public npm; override with `--registry`
-or `NPM_REGISTRY` (CI sets it to the public registry). `bun run release
---dry-run` runs the same flow but swaps `npm publish` for `bun pm pack
---dry-run`, so you can inspect exactly what would ship without touching
-any registry.
+`bun run build` fans out with `bun run --filter='./packages/*' build`; each
+package runs the shared [`tsdown.config.ts`](tsdown.config.ts), which emits ESM
+JavaScript and `.d.ts` files. There is no publish-time manifest merge,
+`.publish/` staging directory, `package.default.json`, or `package.enforced.json`.
 
 ### Auth
 
@@ -180,27 +145,26 @@ with publish access to the `@dbx-tools` scope). After the very first publish
 of each package on npm, you can configure **trusted publishing** per package
 (`npmjs.com → @dbx-tools/<pkg> → Settings → Trusted Publishing → GitHub
 Actions → workflow `release.yml`, repo `reggie-db/dbx-tools-js``) and then
-drop the `NODE_AUTH_TOKEN:` env line from the workflow - `id-token: write` is
-already granted, and npm CLI 11.5.1+ on the runner (pinned via `node-version:
-24.x` in the workflow) will negotiate the OIDC publish token automatically.
-For maximum security, follow up with `Settings → Publishing access → Require
+drop the `NODE_AUTH_TOKEN:`env line from the workflow -`id-token: write`is
+already granted, and npm CLI 11.5.1+ on the runner (pinned via`node-version:
+24.x`in the workflow) will negotiate the OIDC publish token automatically.
+For maximum security, follow up with`Settings → Publishing access → Require
 2FA and disallow tokens` to lock out any future leaked token.
 
 ### Manual ad-hoc publish
 
 You can run the same publish flow locally - useful for one-off republishes or
-debugging the staged manifest. `bun run release` builds first, then publishes.
+debugging the package tarballs. `bun run release` builds first, then publishes.
 
 ```bash
-# Inspect the staged tarballs without uploading anything.
-bun run release --dry-run
+# Inspect tarballs without uploading anything.
+bun run publish:dry-run
 
-# Publish to the local Verdaccio (default; no npm login needed).
+# Publish all publishable packages with Bun.
 bun run release
 
-# Publish to public npm (auth: ~/.npmrc needs
-# //registry.npmjs.org/:_authToken=npm_xxx).
-bun run release --registry https://registry.npmjs.org
+# Publish to a specific registry.
+NPM_CONFIG_REGISTRY=https://registry.npmjs.org bun run release
 ```
 
 ## License

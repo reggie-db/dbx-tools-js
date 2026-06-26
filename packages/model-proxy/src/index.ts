@@ -9,6 +9,6 @@
  * the `model-proxy` bin drives the same pieces from the command line.
  */
 
-export * from "./src/backend.js";
-export * from "./src/defaults.js";
-export * from "./src/server.js";
+export * from "./backend.js";
+export * from "./defaults.js";
+export * from "./server.js";

@@ -12,14 +12,14 @@
  */
 export * from "@dbx-tools/appkit-mastra-shared";
 export * from "@dbx-tools/model";
-export * from "./src/agents.js";
-export * from "./src/chart.js";
-export * from "./src/config.js";
-export * from "./src/genie.js";
-export * from "./src/mcp.js";
-export * from "./src/plugin.js";
+export * from "./agents.js";
+export * from "./chart.js";
+export * from "./config.js";
+export * from "./genie.js";
+export * from "./mcp.js";
+export * from "./plugin.js";
 export {
   MASTRA_MODEL_OVERRIDE_KEY,
   extractModelOverride,
   type ModelOverrideRequest,
-} from "./src/serving.js";
+} from "./serving.js";

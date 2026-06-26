@@ -14,5 +14,5 @@
  */
 
 export * from "@dbx-tools/genie-shared";
-export * from "./src/chat.js";
-export * from "./src/space.js";
+export * from "./chat.js";
+export * from "./space.js";

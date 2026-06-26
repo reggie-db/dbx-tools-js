@@ -18,5 +18,26 @@
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "[toml]": {
     "editor.defaultFormatter": "tamasfe.even-better-toml"
+  },
+  "files.watcherExclude": {
+    "**/dist": true,
+    "**/.publish": true,
+    "**/*.tsbuildinfo": true,
+    "**/node_modules": true
+  },
+  "files.exclude": {
+    "**/dist": true,
+    "**/.publish": true,
+    "**/*.tsbuildinfo": true,
+    "**/node_modules": true
+  },
+  "search.exclude": {
+    "**/dist": true,
+    "**/.publish": true,
+    "**/*.tsbuildinfo": true,
+    "**/node_modules": true
+  },
+  "typescript.tsserver.watchOptions": {
+    "excludeDirectories": ["**/dist", "**/node_modules"]
   }
 }

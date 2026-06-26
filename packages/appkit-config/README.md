@@ -19,8 +19,8 @@ Auto-config runs BEFORE delegating (so plugins see a populated
 `process.env` during their synchronous `setup()`) and every step is
 self-gating, so apps pay nothing for capabilities they don't use:
 
-| Capability | Trigger | Effect |
-| --- | --- | --- |
+| Capability                   | Trigger                                 | Effect                                     |
+| ---------------------------- | --------------------------------------- | ------------------------------------------ |
 | Lakebase Postgres (`autopg`) | a `lakebase` plugin in `config.plugins` | resolves + writes `PG*` / `LAKEBASE_*` env |
 
 The package is intentionally broader than Postgres: new capability

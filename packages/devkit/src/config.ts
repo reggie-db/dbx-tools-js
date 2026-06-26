@@ -5,13 +5,15 @@
 //
 //   {
 //     "devkit": {
-//       "scope": "@acme",            // npm scope used by `create`
-//       "repo": "acme/widgets"       // owner/name for release links
+//       "scope": "@acme",                  // npm scope used by `create`
+//       "repo": "acme/widgets",            // owner/name for release links
+//       "sharedPackage": "@acme/shared"    // shared-helpers dep wired by `create`
 //     }
 //   }
 //
 // `scope` defaults to the most common scope among the publishable
-// workspace packages; `repo` defaults to the `origin` git remote.
+// workspace packages; `repo` defaults to the `origin` git remote;
+// `sharedPackage` defaults to `<scope>/shared`.
 
 import pMemoize from "p-memoize";
 import { git, hasGit } from "./git.js";
@@ -21,6 +23,7 @@ import { discoverPackages, toAbsolute, type PackageJson } from "./package.js";
 interface DevkitConfigOverrides {
   scope?: string;
   repo?: string;
+  sharedPackage?: string;
 }
 
 /** Resolved toolkit configuration for the current repo. */
@@ -29,6 +32,13 @@ export interface DevkitConfig {
   scope: string;
   /** `owner/name` slug used for release links, or null when undiscoverable. */
   repo: string | null;
+  /**
+   * Name of the shared-helpers package `create` wires as a dependency
+   * into new plugin / standard packages (when it exists in the
+   * workspace). Defaults to `<scope>/shared`, or null when no scope
+   * resolves.
+   */
+  sharedPackage: string | null;
 }
 
 /** Read the optional `devkit` block from the root `package.json`. */
@@ -94,5 +104,6 @@ export const getDevkitConfig = pMemoize(async (): Promise<DevkitConfig> => {
   const overrides = await readOverrides();
   const scope = overrides.scope ?? (await deriveScope()) ?? "";
   const repo = overrides.repo ?? (await deriveRepo());
-  return { scope, repo };
+  const sharedPackage = overrides.sharedPackage ?? (scope ? `${scope}/shared` : null);
+  return { scope, repo, sharedPackage };
 });

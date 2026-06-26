@@ -43,10 +43,10 @@ the package barrel at
 
 For each upstream type the generator emits two exports:
 
-| Export             | Shape                                       |
-| ------------------ | ------------------------------------------- |
-| `xxxSchema`        | `z.ZodType<X>` for runtime validation       |
-| `Xxx` (type alias) | `z.infer<typeof xxxSchema>` for static use  |
+| Export             | Shape                                      |
+| ------------------ | ------------------------------------------ |
+| `xxxSchema`        | `z.ZodType<X>` for runtime validation      |
+| `Xxx` (type alias) | `z.infer<typeof xxxSchema>` for static use |
 
 ## How codegen works
 
@@ -80,9 +80,7 @@ and, for each input:
 
 The whole `generated/` tree is gitignored (`generated/.gitignore`
 holds `*`); the hand-tracked top-level `./index.ts` re-exports it so
-the publish merge in `devkit release` (see
-[`@dbx-tools/devkit`](../devkit)) picks up the standard
-`package.default.json` `exports` map without any per-package wiring.
+the package manifest exposes the generated barrel without any generated-file wiring.
 
 ```ts
 // index.ts

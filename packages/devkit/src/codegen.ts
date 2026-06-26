@@ -38,9 +38,8 @@
 // exposed through the hand-written top-level `index.ts` re-export
 // (`export * from "./generated/index.js"`), which follows the same
 // convention the rest of the workspace packages use and lets the
-// publish merge in `release.ts` pick up the standard
-// `package.default.json` exports map without any per-package
-// wiring.
+// package manifest expose the generated barrel without any generated-file
+// manifest edits.
 //
 // Each input is preprocessed with the TypeScript compiler API
 // before ts-to-zod sees it: every `import` declaration is dropped,

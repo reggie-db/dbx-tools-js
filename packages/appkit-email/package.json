@@ -10,7 +10,9 @@
     "nodemailer": "^7.0.9",
     "zod": "catalog:"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "peerDependencies": {
     "@databricks/appkit": "catalog:"
   },

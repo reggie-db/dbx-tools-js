@@ -18,7 +18,6 @@ There is no PR-based versioning bot and no auto-publish on push to
 bun run tag                 # patch bump (default)
 bun run tag minor           # minor bump
 bun run tag major           # major bump
-bun run tag --readme        # also sync package READMEs (off by default)
 bun run tag --dry-run       # preview without writing or pushing
 ```
 
@@ -34,26 +33,28 @@ full sequence in one shot:
    release commit `chore: release v<version>`.
 4. Pushes the commit, creates an annotated `v<version>` tag, pushes
    the tag.
+5. Creates the GitHub Release (when `gh` is on `PATH`) and runs the
+   local publish path (`bun run release`) unless `--no-publish`.
 
-The release-notes context (commits in `prevTag..HEAD` + working-tree
-dirty files + `git diff --stat <prevTag>`) is handed to
-`releaseNotes()` which runs a Mastra agent via `agentQuery()` (model
-chosen by `SCRIPT_MODEL_PROVIDER`). Returns `null` on failure; the tag
-falls back to a bare `Release v<version>` message.
+The annotated tag and GitHub Release both use a plain
+`Release v<version>` message.
 
 ## Local publish (debugging / one-off)
 
 ```bash
 devkit build
-devkit release --dry-run            # bun pm pack --dry-run per package
+devkit release --dry-run            # bun publish --dry-run per package
 bun run release                     # build + real publish
 ```
 
-`devkit release` stages each package into
-`packages/<slug>/.publish/` (gitignored), rewrites
-`workspace:*` / `catalog:` specifiers to real version ranges, then
-runs `npm publish` from the stage. Source `package.json` files are
-never mutated.
+`devkit release` first runs `devkit build`, then for each publishable
+package it temporarily *stamps* a complete `package.json` (expands the
+slim `exports` source pointer into the `source`/`types`/`default`
+shape and fills in `main`, `types`, `files`, `license`, `type`), runs
+`bun publish` from the package dir, and restores the original slim
+manifest afterward - on success or failure. The committed
+`package.json` files stay slim; only the published tarballs are
+complete.
 
 ## Don't auto-deploy
 

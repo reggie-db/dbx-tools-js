@@ -8,7 +8,7 @@
  * Resolution: the package's `exports` map points the `browser`
  * condition at this file. Vite (and any other browser-aware bundler
  * that honors `exports.<entry>.browser`) picks it up automatically;
- * Node always uses `index.ts`. Don't import `./src/project.js` from
+ * Node always uses `index.ts`. Don't import `./project.js` from
  * here, even transitively - that's the entire point of the split.
  *
  * Other utility namespaces are re-exported as-is. `common.ts` ships a
@@ -25,8 +25,8 @@
  * tree (including ast-grep) into the client. They live only on
  * `index.ts` (the server entry).
  */
-export * as commonUtils from "./src/common.js";
-export * as httpUtils from "./src/http.js";
-export * as logUtils from "./src/log.js";
-export * as netUtils from "./src/net.browser.js";
-export * as stringUtils from "./src/string.js";
+export * as commonUtils from "./common.js";
+export * as httpUtils from "./http.js";
+export * as logUtils from "./log.js";
+export * as netUtils from "./net.browser.js";
+export * as stringUtils from "./string.js";

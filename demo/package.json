@@ -9,19 +9,10 @@
     "@dbx-tools/appkit-mastra": "workspace:*",
     "@dbx-tools/appkit-mastra-ui": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "react-router-dom": "^7",
     "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@types/express": "catalog:",
-    "@types/node": "catalog:",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "tsdown": "^0.20.3",
-    "tsx": "^4.20.0",
-    "vite": "^7.1.0"
   },
   "license": "Apache-2.0",
   "main": "dist/server.js",

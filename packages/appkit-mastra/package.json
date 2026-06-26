@@ -20,7 +20,9 @@
     "pg": "^8.20.0",
     "zod": "catalog:"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "peerDependencies": {
     "@databricks/appkit": "catalog:",
     "express": "catalog:"

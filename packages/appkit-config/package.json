@@ -4,7 +4,9 @@
   "dependencies": {
     "@dbx-tools/shared": "workspace:*"
   },
-  "module": "index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "peerDependencies": {
     "@databricks/appkit": "catalog:"
   },

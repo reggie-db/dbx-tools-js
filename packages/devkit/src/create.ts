@@ -2,10 +2,15 @@
 // the minimal shape this monorepo settled on:
 //
 //   packages/<dir>/
-//     package.json         (name, version, module, type, optional deps)
-//     tsconfig.build.json  (one-liner extending the root build config)
-//     index.ts             (root barrel - what `module: "index.ts"` points at)
+//     package.json         (name, version, type, one-line `exports`, deps)
+//     src/index.ts          (barrel - what `exports["."]` points at)
 //     src/<dir>.ts          (plugin / standard) or src/protocol.ts (shared)
+//
+// The slim manifest is filled out at publish time (`devkit release`
+// stamps `main`/`types`/`files`/`license` and expands the `exports`
+// pointer into its `source`/`types`/`default` shape); there is no
+// per-package `build`/`publish` script because `devkit build` /
+// `devkit release` drive every package through the shared tsdown config.
 //
 // For `plugin`, `<dir>` is always `appkit-<bare>` (the command
 // auto-prefixes `appkit-`). For `shared`, `<dir>` is the slug verbatim.
@@ -13,14 +18,15 @@
 //
 // Three kinds, selected by flag:
 //   - `--plugin`: AppKit Plugin subclass with an inline manifest. Lists
-//     `@databricks/appkit` as a peer dependency and depends on
-//     `<scope>/shared` for logger / plugin helpers.
+//     `@databricks/appkit` as a peer dependency and depends on the
+//     configured shared-helpers package (`devkit.sharedPackage`, default
+//     `<scope>/shared`) for logger / plugin helpers when it exists.
 //   - `--shared`: dependency-free, browser-safe contract package with a
-//     single `index.ts` barrel re-exporting a `src/protocol.ts` seed.
+//     single `src/index.ts` barrel re-exporting a `src/protocol.ts` seed.
 //     Add an `index.client.ts` + `exports` split by hand only if the
 //     package later needs server-only (`node:*`) code kept out of
 //     browser bundles.
-//   - none (default): a standard package with a single `index.ts`
+//   - none (default): a standard package with a single `src/index.ts`
 //     barrel re-exporting a `src/<slug>.ts` seed.
 //
 // `--plugin` and `--shared` are mutually exclusive (passing both is an
@@ -50,25 +56,10 @@
 // themselves (not hardcoded), keeping a freshly scaffolded package in
 // lockstep with the changesets `fixed` group so the next version bump
 // moves it alongside everyone else.
-//
-// Scaffolding also seeds the repo-root shaping files devkit's own
-// build/release commands rely on - `tsconfig.build.json` (each
-// package's `tsconfig.build.json` extends it) and `package.default.json`
-// (release.ts's low-priority manifest template). The repo-root files are
-// the single source of truth; devkit's `release.stage` manifest entry
-// copies them into devkit's `dist/` as `<name>.template` during release
-// (after `build()`), so they ride along in the published tarball, and
-// `create` reads those bundled copies at runtime to seed a consuming
-// repo. When the bundled template isn't present (e.g. running from the
-// source tree before a build), seeding is skipped. A consuming repo's
-// own values always win on merge; lists are replaced wholesale, never
-// element-merged.
 
 import { consola } from "consola";
-import deepmerge from "deepmerge";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { getDevkitConfig } from "./config.js";
 import { discoverPackages, toAbsolute, writeJson } from "./package.js";
@@ -96,63 +87,6 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-// Repo-root shaping files seeded on `create`, in the order they're
-// applied. Each filename is the destination at the consuming repo's
-// root; devkit's `release.stage` manifest entry stages a `<name>.template`
-// copy under {@link bundledTemplatesDir} at publish time.
-const ROOT_DEFAULTS = ["tsconfig.build.json", "package.default.json"] as const;
-
-// devkit's bundled template directory: `dist/` next to this module.
-// devkit's `release.stage` manifest entry copies each {@link ROOT_DEFAULTS}
-// file here as `<name>.template`, and the publish step ships `dist/`, so
-// the same resolution works whether devkit runs from the source tree or
-// from a consumer's `node_modules`.
-const bundledTemplatesDir = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "dist",
-);
-
-/**
- * `deepmerge` array strategy that keeps the consumer's list verbatim:
- * when both template and existing define an array for a key, the
- * existing one wins outright. Lists are never concatenated or
- * element-merged.
- */
-function preferExistingArray(_template: unknown[], existing: unknown[]): unknown[] {
-  return existing;
-}
-
-/**
- * Seed a bundled root template at the consuming repo's root. The bundled
- * `<name>.template` is the source; when it isn't present (running from
- * the source tree before a build has staged it), seeding is skipped.
- * Otherwise an absent destination is written verbatim, and an existing
- * one is kept as the source of truth - the template only fills in keys
- * it hasn't set (nested objects deep-merge with the existing value
- * winning, arrays and scalars left as the consumer wrote them). Returns
- * a status for logging and skips the write when nothing changed.
- */
-async function ensureRootDefault(
-  name: string,
-): Promise<"created" | "merged" | "unchanged" | "skipped"> {
-  const bundled = resolve(bundledTemplatesDir, `${name}.template`);
-  if (!existsSync(bundled)) return "skipped";
-  const template = (await Bun.file(bundled).json()) as Record<string, unknown>;
-  const dest = toAbsolute(name);
-  if (!existsSync(dest)) {
-    await writeJson(dest, template);
-    return "created";
-  }
-  const existing = (await Bun.file(dest).json()) as Record<string, unknown>;
-  // Template is the base, existing overrides it (so the consumer wins on
-  // every conflicting key); arrays fall back to the existing list.
-  const merged = deepmerge(template, existing, { arrayMerge: preferExistingArray });
-  if (JSON.stringify(merged) === JSON.stringify(existing)) return "unchanged";
-  await writeJson(dest, merged);
-  return "merged";
-}
-
 /** Scaffold a new workspace package under `packages/<slug>/`. */
 export async function create(options: CreateOptions): Promise<void> {
   const { slug, plugin, shared } = options;
@@ -163,13 +97,12 @@ export async function create(options: CreateOptions): Promise<void> {
     fail(`invalid slug "${slug}" (lowercase kebab-case, must start with a letter)`);
   }
 
-  const { scope } = await getDevkitConfig();
+  const { scope, sharedPackage } = await getDevkitConfig();
   if (!scope) {
     fail(
       "could not determine an npm scope; set `devkit.scope` in the root package.json",
     );
   }
-  const sharedPkg = `${scope}/shared`;
 
   // Canonical "main" version for the monorepo: the version the fixed
   // group is currently on. Read straight off the publishable packages
@@ -180,10 +113,13 @@ export async function create(options: CreateOptions): Promise<void> {
     .map((pkg) => pkg.meta.version)
     .filter((version): version is string => Boolean(version));
 
-  // Only wire the `<scope>/shared` utils dependency when such a package
-  // actually exists in this workspace, so scaffolding works in repos
-  // that don't follow the shared-helpers convention.
-  const hasSharedPkg = existingPackages.some((pkg) => pkg.meta.name === sharedPkg);
+  // Only wire the shared-helpers dependency (config `sharedPackage`,
+  // default `<scope>/shared`) when such a package actually exists in
+  // this workspace, so scaffolding works in repos that don't follow the
+  // shared-helpers convention.
+  const hasSharedPkg =
+    sharedPackage !== null &&
+    existingPackages.some((pkg) => pkg.meta.name === sharedPackage);
   const initialVersion = publishedVersions.reduce<string | undefined>(
     (highest, version) => (!highest || semver.gt(version, highest) ? version : highest),
     undefined,
@@ -215,23 +151,27 @@ export async function create(options: CreateOptions): Promise<void> {
   const displayName = capitalized.join(" ");
   const pkgName = `${scope}/${dirSlug}`;
 
-  // `package.json`: the bare minimum. Bun reads `module` to resolve the
-  // entry; nothing else is needed for workspace resolution. Plugins also
-  // pre-declare the AppKit peer + the shared utils dep so consumers
-  // don't have to wire them.
+  // `package.json`: the bare minimum. The one-line `exports` pointer at
+  // the package's own source is the single entry every tool (Node, tsc,
+  // Vite, bun, tsdown) resolves; everything else a published tarball
+  // needs is stamped in at release time. Plugins also pre-declare the
+  // AppKit peer + the shared utils dep so consumers don't have to wire
+  // them.
   const basePackageJson = {
     name: pkgName,
     version: initialVersion,
-    module: "index.ts",
     type: "module" as const,
+    exports: { ".": "./src/index.ts" },
   };
 
-  // Plugins and standard packages depend on `<scope>/shared` (workspace)
-  // out of the box so consumers get the logger / plugin helpers without
-  // wiring them - but only when that package exists in this workspace.
-  const sharedDep = hasSharedPkg
-    ? { dependencies: { [sharedPkg]: "workspace:*" } }
-    : {};
+  // Plugins and standard packages depend on the shared-helpers package
+  // (workspace) out of the box so consumers get the logger / plugin
+  // helpers without wiring them - but only when it exists in this
+  // workspace.
+  const sharedDep =
+    hasSharedPkg && sharedPackage
+      ? { dependencies: { [sharedPackage]: "workspace:*" } }
+      : {};
 
   const pluginPackageJson = {
     ...basePackageJson,
@@ -241,10 +181,11 @@ export async function create(options: CreateOptions): Promise<void> {
     },
   };
 
-  // Shared packages are single-entry (`module: "index.ts"`) by default.
-  // The browser/server split (`index.ts` + `index.client.ts` + an
-  // `exports` map) is added by hand only when a package genuinely
-  // carries server-only code that must stay out of browser bundles.
+  // Shared packages are single-entry (`exports["."] -> ./src/index.ts`)
+  // by default. The browser/server split (`index.client.ts` + a
+  // conditional `exports` map) is added by hand only when a package
+  // genuinely carries server-only code that must stay out of browser
+  // bundles.
   const sharedPackageJson = {
     ...basePackageJson,
   };
@@ -260,31 +201,19 @@ export async function create(options: CreateOptions): Promise<void> {
       : kind === "shared"
         ? sharedPackageJson
         : standardPackageJson;
-  const tsconfigBuild = { extends: "../../tsconfig.build.json" };
-
-  // Seed the repo-root shaping files devkit's build/release commands
-  // assume (the per-package `tsconfig.build.json` written below extends
-  // the root one). Bundled with devkit and merged in so a consuming repo
-  // gets a working baseline; the consumer's own values always win.
-  for (const name of ROOT_DEFAULTS) {
-    const status = await ensureRootDefault(name);
-    if (status === "created") consola.log(`Created ${name}`);
-    else if (status === "merged") consola.log(`Updated ${name} (kept existing values)`);
-  }
 
   // `Bun.write` (used inside `writeJson`) creates the parent dir for us,
   // but we touch siblings via `write()` (mkdirSync) below, so call
   // `mkdirSync` explicitly to make the writes order-independent.
   mkdirSync(pkgDir, { recursive: true });
   await writeJson(resolve(pkgDir, "package.json"), packageJson);
-  await writeJson(resolve(pkgDir, "tsconfig.build.json"), tsconfigBuild);
 
   if (kind === "plugin") {
-    // Root barrel: one line that re-exports the plugin and its factory
-    // from `src/<dirSlug>.js` (NodeNext-emitted `.js` extension - the
-    // tsconfig.build.json compiles src/ into dist/ so the runtime path
-    // is `.js`, even though the file on disk is `.ts`).
-    const indexTs = `export { ${className}, ${camel} } from "./src/${dirSlug}.js";\n`;
+    // `src/index.ts` barrel: one line that re-exports the plugin and its
+    // factory from `./<dirSlug>.js` (the source file is `.ts`, and
+    // bundler-style resolution follows the emitted `.js` specifier during
+    // typecheck/build).
+    const indexTs = `export { ${className}, ${camel} } from "./${dirSlug}.js";\n`;
 
     const pluginTs = `import {
   Plugin,
@@ -318,44 +247,45 @@ export class ${className} extends Plugin {
 export const ${camel} = toPlugin(${className});
 `;
 
-    write(resolve(pkgDir, "index.ts"), indexTs);
+    write(resolve(pkgDir, "src", "index.ts"), indexTs);
     write(resolve(pkgDir, "src", `${dirSlug}.ts`), pluginTs);
 
     consola.log(
       `Scaffolded packages/${dirSlug}/ (plugin, npm name ${pkgName}, manifest name "${bareSlug}")`,
     );
   } else if (kind === "shared") {
-    // Shared package: one browser-safe `index.ts` barrel re-exporting a
-    // seed protocol module.
+    // Shared package: one browser-safe `src/index.ts` barrel re-exporting
+    // a seed protocol module.
     const indexTs = `/**
  * ${pkgName}: a dependency-free, browser-safe wire-format contract.
  * Pure types (and browser-safe runtime, e.g. zod) only - no \`node:*\`
  * imports, even transitively - so any runtime can import it.
  */
-export * from "./src/protocol.js";
+export * from "./protocol.js";
 `;
 
     const protocolTs = `// Wire-format types for ${pkgName}. Pure types: no
 // Node-only imports, safe for browser bundles.
 //
-// Add your shared types below and re-export them from \`../index.ts\`.
+// Add your shared types below and re-export them from \`./index.ts\`.
 `;
 
-    write(resolve(pkgDir, "index.ts"), indexTs);
+    write(resolve(pkgDir, "src", "index.ts"), indexTs);
     write(resolve(pkgDir, "src", "protocol.ts"), protocolTs);
 
     consola.log(`Scaffolded packages/${dirSlug}/ (shared, npm name ${pkgName})`);
   } else {
-    // Standard package: a single barrel re-exporting a seed source module.
-    const indexTs = `export * from "./src/${dirSlug}.js";\n`;
+    // Standard package: a single `src/index.ts` barrel re-exporting a seed
+    // source module.
+    const indexTs = `export * from "./${dirSlug}.js";\n`;
 
     const sourceTs = `// Source module for ${pkgName}.
 //
-// Add your exports below and re-export them from \`../index.ts\`.
+// Add your exports below and re-export them from \`./index.ts\`.
 export {};
 `;
 
-    write(resolve(pkgDir, "index.ts"), indexTs);
+    write(resolve(pkgDir, "src", "index.ts"), indexTs);
     write(resolve(pkgDir, "src", `${dirSlug}.ts`), sourceTs);
 
     consola.log(`Scaffolded packages/${dirSlug}/ (standard, npm name ${pkgName})`);

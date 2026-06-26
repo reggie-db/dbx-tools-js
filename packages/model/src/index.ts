@@ -17,7 +17,7 @@
  */
 
 export * from "@dbx-tools/model-shared";
-export * from "./src/classes.js";
-export * from "./src/fallback.js";
-export * from "./src/resolve.js";
-export * from "./src/serving.js";
+export * from "./classes.js";
+export * from "./fallback.js";
+export * from "./resolve.js";
+export * from "./serving.js";

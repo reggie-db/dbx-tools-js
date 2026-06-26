@@ -189,7 +189,7 @@ fallbacks). Its exports are re-exported here, so `ModelClass` /
 `modelForClass` and friends are available straight off
 `@dbx-tools/appkit-mastra`.
 
-The plugin layers on the config sources for *which* model an agent asks
+The plugin layers on the config sources for _which_ model an agent asks
 for, in priority order: a per-request override, the per-agent `model`,
 the plugin `defaultModel`, then `DATABRICKS_SERVING_ENDPOINT_NAME`. With
 none set, resolution falls through to the dynamic class picker.

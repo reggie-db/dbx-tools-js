@@ -35,8 +35,6 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "include": [
-    "packages/*/index.ts",
-    "packages/*/index.client.ts",
     "packages/*/src",
     "packages/*/generated",
     "packages/*/test",

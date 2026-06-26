@@ -5,4 +5,4 @@
  * server-side sender, the Mastra tool, and the React approval UI all
  * validate and type against one definition.
  */
-export * from "./src/protocol.js";
+export * from "./protocol.js";
