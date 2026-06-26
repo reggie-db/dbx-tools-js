@@ -21,6 +21,7 @@
  * propagate so callers see the real SDK message.
  */
 
+import { getExecutionContext } from "@databricks/appkit";
 import { type ModelClass, parseModelClass, selectModel } from "@dbx-tools/model";
 import { commonUtils, logUtils, netUtils, stringUtils } from "@dbx-tools/shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
@@ -68,8 +69,13 @@ export async function buildModel(
   overrides: BuildModelOverrides = {},
 ): Promise<MastraModelConfig> {
   void setupFetchInterceptor();
-  const user = requestContext.get(MASTRA_USER_KEY) as User;
-  const clientConfig = user.executionContext.client.config;
+  // The chat path stamps the AppKit user on the request context via
+  // `MastraServer`. The MCP transport routes don't thread that context
+  // into tool execution, so fall back to the ambient execution context
+  // (the active OBO scope, or the service principal) when it's absent.
+  const user = requestContext.get(MASTRA_USER_KEY) as User | undefined;
+  const executionContext = user?.executionContext ?? getExecutionContext();
+  const clientConfig = executionContext.client.config;
   const host = (await clientConfig.getHost()).toString();
   const headers = new Headers();
   await clientConfig.authenticate(headers);
@@ -97,7 +103,7 @@ export async function buildModel(
   const explicit = requestedClass === null ? requested : undefined;
   const modelClass = requestedClass ?? overrides.modelClass;
 
-  const { modelId, source } = await selectModel(user.executionContext.client, host, {
+  const { modelId, source } = await selectModel(executionContext.client, host, {
     ...(explicit !== undefined ? { explicit } : {}),
     fuzzy: serving.fuzzy,
     threshold: serving.threshold,

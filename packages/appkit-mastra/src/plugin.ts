@@ -26,6 +26,11 @@
  *   (load + clear thread history), `/models`, `/suggestions`, and the
  *   generic `/embed/:type/:id` resolver for inline chart / data
  *   markers.
+ * - MCP: opt in with `config.mcp` to expose the agents (and optionally
+ *   tools) as a Mastra `MCPServer`. It is registered on the `Mastra`
+ *   instance via `mcpServers`, so `@mastra/express` serves the stock
+ *   MCP transport routes (`/mcp/<serverId>/...`) under the mount. See
+ *   `./mcp.js`.
  */
 
 import {
@@ -59,6 +64,7 @@ import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
+import { buildMcpServer, type ResolvedMcp } from "./mcp.js";
 import {
   createMemoryBuilder,
   createServicePrincipalPool,
@@ -127,6 +133,12 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   private mastra: Mastra | null = null;
   private mastraApp: express.Express | null = null;
   private mastraServer: MastraServer | null = null;
+  /**
+   * The optional MCP server exposing this plugin's agents / tools, or
+   * `null` when `config.mcp` is disabled (the default). Built in
+   * {@link buildAgentAndServer} and registered on the Mastra instance.
+   */
+  private mcp: ResolvedMcp | null = null;
   /**
    * Dedicated service-principal Lakebase pool backing Mastra memory /
    * storage. Built once in {@link buildAgentAndServer} (outside any
@@ -203,6 +215,26 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         (this.built && this.built.agents[this.built.defaultAgentId]) ?? null,
       /** Underlying Mastra instance for advanced use (custom routes etc.). */
       getMastra: () => this.mastra,
+      /**
+       * MCP endpoint info when `config.mcp` is enabled, else `null`.
+       * Paths are absolute (under the plugin mount), ready to hand to an
+       * MCP client. Streamable HTTP is `http`; the SSE pair is the
+       * legacy transport.
+       */
+      getMcp: (): {
+        serverId: string;
+        http: string;
+        sse: string;
+        messages: string;
+      } | null =>
+        this.mcp
+          ? {
+              serverId: this.mcp.serverId,
+              http: `/api/${this.name}${this.mcp.httpPath}`,
+              sse: `/api/${this.name}${this.mcp.ssePath}`,
+              messages: `/api/${this.name}${this.mcp.messagePath}`,
+            }
+          : null,
       /** Express subapp Mastra is mounted on; mostly for tests. */
       getMastraServer: () => this.mastraServer,
       /**
@@ -532,10 +564,24 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // `createApp`, so the OTLP endpoint / headers / sampling are
     // env-driven and shared with every other AppKit plugin.
     const observability = await buildObservability({ serviceName: this.name });
+    // Optional MCP exposure: build a Mastra MCP server from the
+    // registered agents (and, opt-in, the ambient tools) and register
+    // it on the Mastra instance. `@mastra/express` serves the stock MCP
+    // transport routes (`/mcp/<serverId>/...`) off `mcpServers`, so the
+    // catch-all dispatch below already routes MCP requests under OBO -
+    // no bespoke route needed. See `./mcp.js`.
+    this.mcp = buildMcpServer({
+      config: this.config,
+      pluginName: this.name,
+      displayName: MastraPlugin.manifest.displayName,
+      agents: this.built.agents,
+      ambientTools: this.built.ambientTools,
+    });
     this.mastra = new Mastra({
       agents: this.built.agents,
       ...(instanceStorage ? { storage: instanceStorage } : {}),
       ...(observability ? { observability } : {}),
+      ...(this.mcp ? { mcpServers: { [this.mcp.serverId]: this.mcp.server } } : {}),
     });
     this.mastraApp = express();
     attachRoutePatchMiddleware(this.mastraApp);
@@ -568,6 +614,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       routes: ["/route/history", "/models", "/suggestions", "/embed/:type/:id"],
       instanceStorage: instanceStorage !== undefined,
       observability: observability !== undefined ? "mlflow" : "off",
+      mcp: this.mcp ? `/api/${this.name}${this.mcp.httpPath}` : "off",
     });
   }
 }

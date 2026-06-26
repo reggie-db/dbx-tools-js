@@ -9,6 +9,7 @@
     "@mastra/core": "^1",
     "@mastra/express": "^1",
     "@mastra/fastembed": "^1",
+    "@mastra/mcp": "^1",
     "@mastra/memory": "^1",
     "@mastra/observability": "^1",
     "@mastra/otel-bridge": "^1",

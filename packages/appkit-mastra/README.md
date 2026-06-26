@@ -210,6 +210,46 @@ exposed at `GET ${basePath}/models` for model pickers; the same data is
 available in-process from a sibling plugin via
 `appkitUtils.require(this.context, mastra).exports()`.
 
+## MCP server
+
+Set `mcp` to expose the plugin's agents (and, opt-in, its tools) as a
+Mastra [`MCPServer`](https://mastra.ai/docs/tools-mcp/mcp-overview) so
+external MCP clients - Claude Desktop, Cursor, the Mastra playground, or
+another agent - can call them over the standard MCP transports. The
+server is registered on the Mastra instance via `mcpServers`, so
+`@mastra/express` serves the stock MCP routes under the plugin mount; no
+bespoke route is added.
+
+```ts
+import { mastra } from "@dbx-tools/appkit-mastra";
+
+// Expose every registered agent as an `ask_<agentId>` MCP tool.
+mastra({ mcp: true });
+
+// Or tune the server id / metadata and expose extra tools.
+mastra({
+  mcp: {
+    serverId: "analytics",
+    name: "Analytics MCP",
+    version: "2.1.0",
+    tools: true, // also expose ambient tools (off by default)
+  },
+});
+```
+
+With `mcp` enabled the transports mount under the plugin base path
+(`/api/<plugin>`):
+
+- Streamable HTTP: `POST /api/<plugin>/mcp/<serverId>/mcp`
+- SSE (legacy): `GET /api/<plugin>/mcp/<serverId>/sse` +
+  `POST /api/<plugin>/mcp/<serverId>/messages`
+
+`serverId` defaults to the plugin name. Requests run under the same
+AppKit OBO scope as the chat routes, so an agent invoked over MCP
+resolves its model and tools as the calling user. The resolved endpoint
+paths are available in-process via
+`appkitUtils.require(this.context, mastra).exports().getMcp()`.
+
 ## License
 
 Apache-2.0

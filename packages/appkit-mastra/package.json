@@ -12,6 +12,7 @@
     "@mastra/core": "catalog:",
     "@mastra/express": "catalog:",
     "@mastra/fastembed": "catalog:",
+    "@mastra/mcp": "catalog:",
     "@mastra/memory": "catalog:",
     "@mastra/observability": "catalog:",
     "@mastra/otel-bridge": "catalog:",

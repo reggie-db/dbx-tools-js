@@ -80,6 +80,45 @@ export type MastraMemoryConfig = PgVectorConfig & {
   id?: string;
 };
 
+/**
+ * Fine-grained control for the optional MCP server exposure
+ * ({@link MastraPluginConfig.mcp}). Every field is optional; the object
+ * form only needs to set what differs from the defaults.
+ */
+export interface MastraMcpConfig {
+  /**
+   * Server id used in the route path (`/mcp/<serverId>/...`) and as the
+   * MCP registry id. Defaults to the plugin's registered name.
+   */
+  serverId?: string;
+  /** Display name advertised over MCP. Defaults to `"<displayName> MCP"`. */
+  name?: string;
+  /** Semantic version advertised over MCP. Defaults to `"1.0.0"`. */
+  version?: string;
+  /** Optional human-readable description advertised over MCP. */
+  description?: string;
+  /**
+   * Expose every registered agent as an `ask_<agentId>` MCP tool.
+   * Defaults to `true` - this is the "leverage the Mastra agents over
+   * MCP" behavior most callers want.
+   */
+  agents?: boolean;
+  /**
+   * Also expose the plugin's ambient tools (the built-in `render_data`
+   * plus anything in `config.tools`) as MCP tools. Defaults to `false`:
+   * the ambient tools assume an in-process chat turn (they publish
+   * writer events the chat UI consumes), so they aren't useful to a
+   * standalone MCP client. Turn this on only when those tools are safe
+   * to call out-of-band.
+   */
+  tools?: boolean;
+  /**
+   * Extra tools to expose over MCP beyond the agent / ambient sets.
+   * Use this for tools written specifically for MCP consumers.
+   */
+  extraTools?: MastraTools;
+}
+
 /** Configuration accepted by the Mastra AppKit plugin. */
 export interface MastraPluginConfig extends BasePluginConfig {
   /** Mastra OpenAI-compatible provider id. Defaults to `"databricks"`. */
@@ -317,4 +356,29 @@ export interface MastraPluginConfig extends BasePluginConfig {
    * to drill deep into a dataset within a single turn.
    */
   agentMaxSteps?: number;
+  /**
+   * Expose the plugin's agents (and optionally tools) as a Mastra MCP
+   * server so external MCP clients - Claude Desktop, Cursor, the Mastra
+   * playground, or another agent - can call them over the standard MCP
+   * transports. Disabled by default.
+   *
+   * - `undefined` / `false`: no MCP endpoints.
+   * - `true`: expose every registered agent as an `ask_<agentId>` MCP
+   *   tool under a server whose id is the plugin name.
+   * - {@link MastraMcpConfig}: fine-grained control over the server id,
+   *   advertised metadata, and which agents / tools are exposed.
+   *
+   * When enabled, the stock Mastra MCP routes mount under the plugin's
+   * base path (no bespoke route is added - the server is handed to the
+   * `Mastra` instance via `mcpServers`, which `@mastra/express` serves):
+   *
+   * - Streamable HTTP: `POST /api/<plugin>/mcp/<serverId>/mcp`
+   * - SSE (legacy):    `GET  /api/<plugin>/mcp/<serverId>/sse`
+   *                    `POST /api/<plugin>/mcp/<serverId>/messages`
+   *
+   * Requests run under the same AppKit OBO scope as the chat routes, so
+   * an agent invoked over MCP resolves its model and tools as the
+   * calling user.
+   */
+  mcp?: boolean | MastraMcpConfig;
 }

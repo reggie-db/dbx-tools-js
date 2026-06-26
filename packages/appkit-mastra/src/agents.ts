@@ -319,6 +319,12 @@ export type MastraMemoryConfigOverride = DistributiveOmit<PgVectorConfig, "id"> 
 export interface BuiltAgents {
   agents: Record<string, Agent>;
   defaultAgentId: string;
+  /**
+   * Ambient tools shared across every agent (the built-in system tools
+   * spread with `config.tools`). Surfaced so the optional MCP server
+   * can re-expose them when {@link MastraMcpConfig.tools} is enabled.
+   */
+  ambientTools: MastraTools;
 }
 
 /** Fallback agent id used when `config.agents` is omitted entirely. */
@@ -477,7 +483,7 @@ export async function buildAgents(opts: {
   }
 
   log.info("agents ready", { ids, defaultAgentId });
-  return { agents, defaultAgentId };
+  return { agents, defaultAgentId, ambientTools };
 }
 
 /**

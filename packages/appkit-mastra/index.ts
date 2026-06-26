@@ -16,6 +16,7 @@ export * from "./src/agents.js";
 export * from "./src/chart.js";
 export * from "./src/config.js";
 export * from "./src/genie.js";
+export * from "./src/mcp.js";
 export * from "./src/plugin.js";
 export {
   MASTRA_MODEL_OVERRIDE_KEY,

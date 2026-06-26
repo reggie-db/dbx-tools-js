@@ -9,6 +9,19 @@
     "types": ["bun"],
     "moduleResolution": "bundler",
     "customConditions": ["source"],
+    "paths": {
+      // `customConditions: ["source"]` makes TS follow any package that
+      // ships a `source` export into its raw `.ts`. That's intentional
+      // for our `@dbx-tools/*` packages, but the MCP SDK pulls in
+      // `eventsource`, whose `source` entry is `.ts` that doesn't
+      // type-check under our `lib` (a DOM `AllowSharedBufferSource`
+      // mismatch). Pin it to its shipped declarations so `skipLibCheck`
+      // covers it. Only consumer is `@mastra/mcp`; bump the version
+      // segment if the resolved copy changes.
+      "eventsource": [
+        "./node_modules/.bun/eventsource@3.0.7/node_modules/eventsource/dist/index.d.ts"
+      ]
+    },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
