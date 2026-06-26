@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/devkit",
-  "version": "0.1.63",
+  "version": "0.1.64",
   "bin": {
     "devkit": "./dist/bin/devkit.js"
   },
