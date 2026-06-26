@@ -5,15 +5,19 @@
 // `type`, the deps, and a one-line `exports` pointer at the package's
 // own source (`{ ".": "./src/index.ts" }`, or a subpath pointer like
 // `{ "./react": "./src/react/index.ts" }`). Everything a published
-// tarball needs but a developer doesn't - the expanded conditional
-// `exports`, `main`, `types`, `files`, `license` - is *stamped in* here,
-// just before `bun publish`, and reverted immediately after. So the
-// committed manifests stay slim while the published ones are complete.
+// tarball needs but a developer doesn't - the expanded `exports`,
+// `main`, `types`, `files`, `license` - is *stamped in* here, just
+// before `bun publish`, and reverted immediately after. So the committed
+// manifests stay slim while the published ones are complete.
 //
 // Stamping is driven entirely by each manifest's own shape, never by
 // package name:
 //   - Any `exports` target that is a `.ts` source string (under any
-//     subpath) expands to the `source`/`types`/`default` shape.
+//     subpath) expands to a `{ types, default }` pair pointing at the
+//     built `dist`. The raw `.ts` source is not shipped (no `source`
+//     condition, and `files` is `dist`-only) - it's a dev/monorepo
+//     concern, where siblings resolve each other through workspace
+//     symlinks rather than the published tarball.
 //   - An `exports` target that is already an object is hand-written and
 //     left verbatim - this is how a package opts a subpath out of the
 //     expansion (e.g. a bespoke browser/server conditional split that
@@ -48,9 +52,9 @@ function distFromSource(source: string): { js: string; dts: string } {
 
 /**
  * Return a publishable copy of `meta`: expand any source `exports`
- * pointer into the full `source`/`types`/`default` shape and fill in
- * `main`, `types`, `files`, `license`, and `type` when absent. Any field
- * the manifest already sets is preserved.
+ * pointer into a `{ types, default }` pair pointing at the built `dist`,
+ * and fill in `main`, `types`, `files`, `license`, and `type` when
+ * absent. Any field the manifest already sets is preserved.
  */
 function stampManifest(meta: PackageJson): PackageJson {
   const stamped: PackageJson = { ...meta };
@@ -67,12 +71,13 @@ function stampManifest(meta: PackageJson): PackageJson {
     for (const [subpath, target] of Object.entries(
       exportsMap as Record<string, unknown>,
     )) {
-      // A bare `.ts` string is the slim source pointer: expand it so
-      // consumers load `dist` while source/monorepo resolution keeps the
-      // raw `.ts` via the `source` condition.
+      // A bare `.ts` string is the slim source pointer: expand it to the
+      // built `dist` outputs so published consumers load JS + `.d.ts`.
+      // No `source` condition (and no `src` in `files`) - the raw TS is
+      // a dev/monorepo concern and is kept out of the tarball.
       if (typeof target === "string" && /\.[cm]?tsx?$/.test(target)) {
         const dist = distFromSource(target);
-        nextExports[subpath] = { source: target, types: dist.dts, default: dist.js };
+        nextExports[subpath] = { types: dist.dts, default: dist.js };
         if (subpath === ".") rootDist = dist;
         firstDist ??= dist;
       } else {
@@ -87,9 +92,8 @@ function stampManifest(meta: PackageJson): PackageJson {
     stamped.main ??= mainDist.js;
     stamped.types ??= mainDist.dts;
   }
-  // Every published tarball ships its built `dist` plus the `src` that
-  // the `source` export condition points at.
-  stamped.files ??= ["dist", "src"];
+  // Every published tarball ships only its built `dist`.
+  stamped.files ??= ["dist"];
   stamped.license ??= DEFAULT_LICENSE;
   stamped.type ??= "module";
   return stamped;
