@@ -36,6 +36,30 @@ export type ToolProgress = GenieWriterEvent;
 /** Subset of a Model Serving endpoint surfaced in the model picker. */
 export type ChatModelOption = { name: string };
 
+/** Thumbs reaction a user can leave on an assistant turn. */
+export type FeedbackValue = "up" | "down";
+
+/**
+ * One feedback action from the user: a thumbs `value`, a freeform
+ * `comment`, or both. Emitted by {@link ChatViewProps.onFeedback}.
+ */
+export type FeedbackSubmission = {
+  value?: FeedbackValue;
+  comment?: string;
+};
+
+/**
+ * Feedback state for a single assistant message. `traceId` is the
+ * MLflow trace the feedback attaches to (captured from the stream
+ * response); its presence is what makes a bubble eligible for feedback
+ * controls. `value` mirrors the last thumbs the user chose so the
+ * active thumb stays highlighted.
+ */
+export type MessageFeedback = {
+  traceId: string;
+  value?: FeedbackValue;
+};
+
 /**
  * One conversation thread surfaced in the {@link ChatViewProps}
  * sidebar. A trimmed view of the wire `MastraThread`: only what the
@@ -198,6 +222,24 @@ export type ChatViewProps = {
    * provided, each assistant bubble shows a per-message export menu.
    */
   onExportMessage?: (message: UIMessage, format: ExportFormat) => void | Promise<void>;
+  /**
+   * Feedback state keyed by assistant message id. Only messages with an
+   * entry (i.e. a captured MLflow trace id) show feedback controls, so
+   * this doubles as the "is feedback available for this message" gate.
+   * `useMastraChat` populates it from each streamed turn's trace-id
+   * response header when MLflow logging is enabled.
+   */
+  feedbackByMessage?: Record<string, MessageFeedback>;
+  /**
+   * Submit thumbs / comment feedback for an assistant message. When
+   * provided (and the message has a {@link feedbackByMessage} entry),
+   * the bubble shows thumbs up/down plus a comment affordance. The
+   * handler logs the feedback to MLflow via the plugin's feedback route.
+   */
+  onFeedback?: (
+    message: UIMessage,
+    submission: FeedbackSubmission,
+  ) => void | Promise<void>;
 };
 
 /** Payload {@link ChatViewProps.onResolveToolApproval} receives. */

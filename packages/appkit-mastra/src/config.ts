@@ -390,6 +390,24 @@ export interface MastraPluginConfig extends BasePluginConfig {
    */
   agentMaxSteps?: number;
   /**
+   * Log user feedback (thumbs up/down + freeform comments) to MLflow as
+   * trace assessments, and surface the feedback controls in the chat UI.
+   *
+   * - `undefined` (default, auto): enabled only when MLflow tracing is
+   *   wired - an OTLP exporter endpoint is set and an MLflow experiment
+   *   is named (the same signals the observability pipeline needs to
+   *   ship traces to MLflow). Otherwise off, since there'd be no trace
+   *   to attach feedback to.
+   * - `true`: force on. Feedback controls show and writes are attempted
+   *   regardless of env detection (use when the env is configured in a
+   *   way the auto-probe doesn't recognize).
+   * - `false`: force off. No trace-id header, no feedback route, no UI.
+   *
+   * Feedback attaches to a turn's MLflow trace via the OpenTelemetry
+   * trace id the server stamps on each response; see `mlflow.ts`.
+   */
+  feedback?: boolean;
+  /**
    * Expose the plugin's agents (and optionally tools) as a Mastra MCP
    * server so external MCP clients - Claude Desktop, Cursor, the Mastra
    * playground, or another agent - can call them over the standard MCP

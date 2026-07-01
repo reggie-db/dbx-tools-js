@@ -5,6 +5,7 @@ import {
   MODEL_OVERRIDE_HEADER,
   MastraClearHistoryResponseSchema,
   MastraDeleteThreadResponseSchema,
+  MastraFeedbackResponseSchema,
   MastraHistoryResponseSchema,
   MastraSuggestionsResponseSchema,
   MastraThreadsResponseSchema,
@@ -15,6 +16,8 @@ import {
   type MastraClearHistoryResponse,
   type MastraClientConfig,
   type MastraDeleteThreadResponse,
+  type MastraFeedbackRequest,
+  type MastraFeedbackResponse,
   type MastraHistoryResponse,
   type MastraThread,
   type MastraThreadsResponse,
@@ -47,6 +50,13 @@ export class MastraPluginClient extends MastraClient {
   readonly defaultAgent: string;
   /** Registered agent ids, surfaced for pickers. */
   readonly agents: readonly string[];
+  /**
+   * Whether the server can log feedback to MLflow. When `false`, the
+   * chat UI hides thumbs / comment controls and {@link feedback} would
+   * be rejected server-side, so callers gate on this before offering
+   * feedback affordances.
+   */
+  readonly feedbackEnabled: boolean;
 
   constructor(config: MastraClientConfig) {
     super({
@@ -59,6 +69,7 @@ export class MastraPluginClient extends MastraClient {
     this.basePath = config.basePath;
     this.defaultAgent = config.defaultAgent;
     this.agents = config.agents;
+    this.feedbackEnabled = config.feedbackEnabled;
   }
 
   /**
@@ -233,6 +244,30 @@ export class MastraPluginClient extends MastraClient {
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return MastraDeleteThreadResponseSchema.parse(await res.json());
+  }
+
+  /**
+   * Log user feedback for a turn to `POST ${basePath}/route/feedback`.
+   * `traceId` is the `tr-<hex>` value the server sent on the stream
+   * response (via `MLFLOW_TRACE_ID_HEADER`) for that assistant message;
+   * `value` carries a thumbs (boolean) / rating, and/or `comment`
+   * carries freeform text. The server logs it as a HUMAN assessment on
+   * the trace, attributed to the signed-in user.
+   *
+   * Resolves with `{ ok: false }` (not a throw) when the assessment
+   * couldn't be recorded yet - most often because the trace is still
+   * exporting to MLflow - so callers can prompt a retry. Throws only on
+   * a transport / HTTP-level failure.
+   */
+  async feedback(input: MastraFeedbackRequest): Promise<MastraFeedbackResponse> {
+    const res = await fetch(`${this.basePath}${MASTRA_ROUTES.feedback}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { ...this.#defaultHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return MastraFeedbackResponseSchema.parse(await res.json());
   }
 
   /**

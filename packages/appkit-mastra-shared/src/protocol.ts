@@ -58,11 +58,17 @@ import { z } from "zod";
  *   - `defaultAgent`: agent id the client converses with when it
  *     doesn't name one.
  *   - `agents`: every registered agent id in registration order.
+ *   - `feedbackEnabled`: whether the server can log user feedback to
+ *     MLflow (MLflow tracing is configured). Drives whether the chat UI
+ *     surfaces thumbs / comment controls. Defaults to `false` so a
+ *     config published by an older server (without the field) parses
+ *     cleanly to "off".
  */
 export const MastraClientConfigSchema = z.object({
   basePath: z.string(),
   defaultAgent: z.string(),
   agents: z.array(z.string()),
+  feedbackEnabled: z.boolean().default(false),
 });
 export type MastraClientConfig = z.infer<typeof MastraClientConfigSchema>;
 

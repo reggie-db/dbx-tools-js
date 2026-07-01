@@ -6,7 +6,7 @@ import {
   TooltipTrigger,
   cn,
 } from "@databricks/appkit-ui/react";
-import { MessageSquarePlusIcon, Trash2Icon } from "lucide-react";
+import { MessageSquarePlusIcon, PanelLeftIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 import type { ThreadSummary } from "./types.js";
 
@@ -29,6 +29,8 @@ export interface ThreadSidebarProps {
   onNew?: () => void;
   /** Delete a thread. Per-row trash affordance hidden when omitted. */
   onDelete?: (threadId: string) => void;
+  /** Collapse the sidebar. Renders the hide button in the header when provided. */
+  onHide?: () => void;
   /** Extra classes merged onto the sidebar root. */
   className?: string;
 }
@@ -48,6 +50,7 @@ export const ThreadSidebar = ({
   onSelect,
   onNew,
   onDelete,
+  onHide,
   className,
 }: ThreadSidebarProps) => {
   // Thread id armed for deletion (first trash click). A second click on
@@ -72,18 +75,37 @@ export const ThreadSidebar = ({
         className,
       )}
     >
-      {onNew && (
-        <div className="p-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onNew}
-            className="w-full justify-start gap-2"
-          >
-            <MessageSquarePlusIcon className="size-4" />
-            New chat
-          </Button>
+      {(onNew || onHide) && (
+        <div className="flex items-center gap-2 p-2">
+          {onNew && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onNew}
+              className="flex-1 justify-start gap-2"
+            >
+              <MessageSquarePlusIcon className="size-4" />
+              New chat
+            </Button>
+          )}
+          {onHide && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={onHide}
+                  aria-label="Hide conversations"
+                  className={cn("size-8 shrink-0", !onNew && "ml-auto")}
+                >
+                  <PanelLeftIcon className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Hide conversations</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 [scrollbar-gutter:stable]">

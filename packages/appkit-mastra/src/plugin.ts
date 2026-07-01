@@ -52,7 +52,9 @@ import type { Pool } from "pg";
 
 import {
   MASTRA_ROUTES,
+  MastraFeedbackRequestSchema,
   type MastraClientConfig,
+  type MastraFeedbackRequest,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
 import {
@@ -72,6 +74,7 @@ import {
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { buildMcpServer, type ResolvedMcp } from "./mcp.js";
+import { logFeedback, mlflowEnabled } from "./mlflow.js";
 import {
   createMemoryBuilder,
   createServicePrincipalPool,
@@ -278,8 +281,19 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       basePath: `/api/${this.name}`,
       defaultAgent: this.built?.defaultAgentId ?? FALLBACK_AGENT_ID,
       agents: Object.keys(this.built?.agents ?? {}),
+      feedbackEnabled: this.feedbackEnabled(),
     };
     return config as unknown as Record<string, unknown>;
+  }
+
+  /**
+   * Whether user feedback can be logged to MLflow. The explicit
+   * `config.feedback` override wins; otherwise auto-detect from the
+   * MLflow tracing env ({@link mlflowEnabled}). Gates both the client
+   * config flag and the feedback route so the two never disagree.
+   */
+  private feedbackEnabled(): boolean {
+    return this.config.feedback ?? mlflowEnabled();
   }
 
   override injectRoutes(router: IAppRouter): void {
@@ -401,6 +415,37 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     router.get(MASTRA_ROUTES.suggestions, handleSuggestions);
     router.get(`${MASTRA_ROUTES.suggestions}/:agentId`, handleSuggestions);
 
+    // `POST /route/feedback` logs a thumbs / comment assessment against
+    // a turn's MLflow trace (the `traceId` the client captured from the
+    // stream response's trace-id header). Registered on the AppKit
+    // router (like `/models`) rather than the Mastra subapp so it runs
+    // under the same OBO scope - the feedback is attributed to the
+    // signed-in user. Returns 404 when feedback is disabled so the
+    // client treats the capability as absent; 400 on a malformed body.
+    // A recorded assessment yields `{ ok: true }`; a soft failure (most
+    // often the trace hasn't finished exporting to MLflow yet) yields
+    // `{ ok: false }` without a 5xx so the UI can prompt a retry.
+    router.post(MASTRA_ROUTES.feedback, (req, res, next) => {
+      if (!this.feedbackEnabled()) {
+        res.status(404).json({ ok: false });
+        return;
+      }
+      const parsed = MastraFeedbackRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ ok: false, error: parsed.error.message });
+        return;
+      }
+      this.userScopedSelf(req)
+        .logFeedback(parsed.data)
+        .then((assessmentId) =>
+          res.json({
+            ok: assessmentId !== undefined,
+            ...(assessmentId ? { assessmentId } : {}),
+          }),
+        )
+        .catch(next);
+    });
+
     router.use((req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
       // Dispatch through a real method, NOT the `mastraApp` property. The
@@ -450,6 +495,30 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       spaces,
       client,
       ...(signal ? { signal } : {}),
+    });
+  }
+
+  /**
+   * Implementation backing the `/route/feedback` route. Runs inside the
+   * AppKit user-context proxy so `getExecutionContext()` returns the
+   * OBO-scoped client and the assessment is attributed to the signed-in
+   * user (their email / id as the assessment source). Returns the
+   * created assessment id on success, or `undefined` on a soft failure
+   * (see {@link logFeedback} in `./mlflow.js`).
+   */
+  private async logFeedback(
+    feedback: MastraFeedbackRequest,
+  ): Promise<string | undefined> {
+    const ctx = getExecutionContext();
+    const sourceId =
+      "userEmail" in ctx && ctx.userEmail
+        ? ctx.userEmail
+        : "userId" in ctx
+          ? ctx.userId
+          : ctx.serviceUserId;
+    return logFeedback(ctx.client, {
+      ...feedback,
+      ...(sourceId ? { sourceId } : {}),
     });
   }
 

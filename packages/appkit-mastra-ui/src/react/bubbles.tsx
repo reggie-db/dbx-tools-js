@@ -27,6 +27,7 @@ import {
 import { useState } from "react";
 import { MarkdownWithEmbeds } from "./embed-slots.js";
 import { ExportMenu } from "./export-menu.js";
+import { FeedbackControls } from "./feedback-controls.js";
 import { SuggestionPills } from "./suggestion-pills.js";
 import { collectSuggestions } from "./suggestions.js";
 import { ToolSessionPill, humanizeToolName } from "./tool-pill.js";
@@ -34,6 +35,8 @@ import type {
   ApprovalDecision,
   ChatStatus,
   ExportFormat,
+  FeedbackSubmission,
+  FeedbackValue,
   PendingApproval,
   ToolEvent,
 } from "./types.js";
@@ -234,6 +237,14 @@ type AssistantBubbleProps = {
    * action row shows a per-message export menu (charts / tables inlined).
    */
   onExport?: (format: ExportFormat) => void;
+  /**
+   * Submit thumbs / comment feedback for this message. When set, the
+   * action row shows the feedback controls; only wired by the parent
+   * when MLflow logging is enabled and the turn has a captured trace id.
+   */
+  onFeedback?: (submission: FeedbackSubmission) => void | Promise<void>;
+  /** Last thumbs the user left on this message, for highlighting. */
+  feedbackValue?: FeedbackValue;
 };
 
 export const AssistantBubble = ({
@@ -246,6 +257,8 @@ export const AssistantBubble = ({
   onResolveToolApproval,
   externalApprovals,
   onExport,
+  onFeedback,
+  feedbackValue,
 }: AssistantBubbleProps) => {
   const reasoning = getReasoningText(message.parts);
   const isReasoningStreaming =
@@ -327,7 +340,7 @@ export const AssistantBubble = ({
             />
           ) : null,
         )}
-        {hasText && (isLast || onExport) && (
+        {hasText && (isLast || onExport || onFeedback) && (
           <div className="flex items-center gap-1">
             {isLast && regenerate && (
               <Tooltip>
@@ -362,6 +375,12 @@ export const AssistantBubble = ({
               </Tooltip>
             )}
             {onExport && <ExportMenu onExport={onExport} iconOnly tooltip="Export message" />}
+            {onFeedback && (
+              <FeedbackControls
+                onSubmit={onFeedback}
+                {...(feedbackValue ? { value: feedbackValue } : {})}
+              />
+            )}
           </div>
         )}
         <SuggestionPills

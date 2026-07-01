@@ -10,10 +10,16 @@
  * segment. Conversation streaming itself rides the standard Mastra
  * agent routes (`@mastra/client-js`'s `getAgent(id).stream()`), so
  * there's no chat segment here.
+ *
+ * `feedback` is the plugin-owned POST endpoint the chat UI calls to
+ * log a thumbs / comment assessment against a turn's MLflow trace (see
+ * `feedback.ts`); it is not agent-scoped (a trace id identifies the
+ * turn on its own).
  */
 export const MASTRA_ROUTES = {
   history: "/route/history",
   threads: "/route/threads",
+  feedback: "/route/feedback",
   suggestions: "/suggestions",
   models: "/models",
   embed: "/embed",

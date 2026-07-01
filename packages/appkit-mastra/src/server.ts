@@ -6,7 +6,11 @@
  */
 
 import { getExecutionContext } from "@databricks/appkit";
-import { THREAD_ID_HEADER, THREAD_ID_QUERY } from "@dbx-tools/appkit-mastra-shared";
+import {
+  MLFLOW_TRACE_ID_HEADER,
+  THREAD_ID_HEADER,
+  THREAD_ID_QUERY,
+} from "@dbx-tools/appkit-mastra-shared";
 import { httpUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import {
   MASTRA_RESOURCE_ID_KEY,
@@ -14,8 +18,11 @@ import {
   type RequestContext,
 } from "@mastra/core/request-context";
 import { MastraServer as MastraServerExpress } from "@mastra/express";
+import { trace } from "@opentelemetry/api";
 import type express from "express";
 import { randomUUID } from "node:crypto";
+
+import { mlflowEnabled } from "./mlflow.js";
 
 import {
   MASTRA_REQUEST_ID_KEY,
@@ -36,8 +43,22 @@ import {
  * AppKit user, resource id, and a thread id backed by an HTTP-only
  * session cookie (`appkit_<plugin-name>_session_id`).
  */
+/**
+ * OpenTelemetry's sentinel for "no valid trace" - 32 zero hex chars.
+ * `trace.getActiveSpan()` returns a non-recording span with this id
+ * when no SDK is registered, which must never be surfaced as a trace to
+ * attach feedback to.
+ */
+const INVALID_TRACE_ID = "0".repeat(32);
+
 export class MastraServer extends MastraServerExpress {
   private log: logUtils.Logger;
+  /**
+   * Whether to stamp the MLflow trace-id header on responses. Mirrors
+   * the plugin's feedback gate: the explicit `config.feedback` override
+   * wins, else auto-detect from the MLflow tracing env.
+   */
+  private feedbackEnabled: boolean;
 
   constructor(
     private config: MastraPluginConfig,
@@ -45,6 +66,7 @@ export class MastraServer extends MastraServerExpress {
   ) {
     super(...args);
     this.log = logUtils.logger(config);
+    this.feedbackEnabled = config.feedback ?? mlflowEnabled();
   }
 
   override registerAuthMiddleware(): void {
@@ -55,6 +77,7 @@ export class MastraServer extends MastraServerExpress {
       this.configureRequestContextThreadId(req, res, requestContext);
       this.configureRequestContextModelOverride(req, requestContext);
       this.configureRequestContextRequestId(req, res, requestContext);
+      this.configureMlflowTraceId(res);
       this.log.debug("auth:middleware", {
         method: req.method,
         path: req.path,
@@ -124,6 +147,26 @@ export class MastraServer extends MastraServerExpress {
     const requestId = upstream?.trim() || randomUUID();
     requestContext.set(MASTRA_REQUEST_ID_KEY, requestId);
     res.setHeader("X-Request-Id", requestId);
+  }
+
+  /**
+   * Stamp the turn's MLflow trace id on the response so the chat client
+   * can attach thumbs / comment feedback to it later. MLflow derives
+   * its trace id from the OpenTelemetry trace id (`tr-<hex>`), and every
+   * Mastra span for this request inherits the ambient OTel context (see
+   * `observability.ts`), so the active span's trace id here is the id
+   * MLflow will record for the turn.
+   *
+   * No-op unless feedback is enabled, and when no live OTel span is
+   * active (e.g. the OTLP SDK isn't registered): in that case the header
+   * is simply absent and the client hides feedback for that message,
+   * degrading gracefully rather than emitting a bogus trace id.
+   */
+  configureMlflowTraceId(res: express.Response) {
+    if (!this.feedbackEnabled || res.headersSent) return;
+    const traceId = trace.getActiveSpan()?.spanContext().traceId;
+    if (!traceId || traceId === INVALID_TRACE_ID) return;
+    res.setHeader(MLFLOW_TRACE_ID_HEADER, `tr-${traceId}`);
   }
 
   /**

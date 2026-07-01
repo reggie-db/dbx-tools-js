@@ -93,6 +93,8 @@ export const ChatView = ({
   onToggleSidebar,
   onExportConversation,
   onExportMessage,
+  feedbackByMessage = {},
+  onFeedback,
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -288,13 +290,18 @@ export const ChatView = ({
             onSelect={(id) => onSelectThread?.(id)}
             {...(onNewThread ? { onNew: onNewThread } : {})}
             {...(onDeleteThread ? { onDelete: onDeleteThread } : {})}
+            onHide={toggleSidebar}
           />
         )}
         <div className="flex h-full min-w-0 flex-1 flex-col py-0 md:py-6">
           {showHeader && (
             <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground md:px-6">
               <div className="flex items-center gap-2">
-                {showSidebar && (
+                {/*
+                 * The hide control lives on the sidebar itself; the header
+                 * only offers a "show" toggle while the sidebar is collapsed.
+                 */}
+                {showSidebar && !sidebarOpen && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -302,16 +309,12 @@ export const ChatView = ({
                         variant="ghost"
                         size="icon-sm"
                         onClick={toggleSidebar}
-                        aria-label={
-                          sidebarOpen ? "Hide conversations" : "Show conversations"
-                        }
+                        aria-label="Show conversations"
                       >
                         <PanelLeftIcon className="size-4" />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>
-                      {sidebarOpen ? "Hide conversations" : "Show conversations"}
-                    </TooltipContent>
+                    <TooltipContent>Show conversations</TooltipContent>
                   </Tooltip>
                 )}
               </div>
@@ -438,6 +441,18 @@ export const ChatView = ({
                           {...(onExportMessage
                             ? {
                                 onExport: (format) => onExportMessage(message, format),
+                              }
+                            : {})}
+                          {...(onFeedback && feedbackByMessage[message.id]
+                            ? {
+                                onFeedback: (submission) =>
+                                  onFeedback(message, submission),
+                                ...(feedbackByMessage[message.id]?.value
+                                  ? {
+                                      feedbackValue:
+                                        feedbackByMessage[message.id]!.value,
+                                    }
+                                  : {}),
                               }
                             : {})}
                         />

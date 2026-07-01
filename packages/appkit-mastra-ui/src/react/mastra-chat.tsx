@@ -1,4 +1,4 @@
-import type { MastraThread } from "@dbx-tools/appkit-mastra-shared";
+import { MLFLOW_TRACE_ID_HEADER, type MastraThread } from "@dbx-tools/appkit-mastra-shared";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import type { UIMessage } from "ai";
 import { nanoid } from "nanoid";
@@ -16,6 +16,8 @@ import type {
   ApprovalDecision,
   ChatStatus,
   ChatViewProps,
+  FeedbackSubmission,
+  MessageFeedback,
   PendingApproval,
   ThreadSummary,
   ToolEvent,
@@ -112,6 +114,20 @@ const storeStoredSidebarOpen = (key: string, open: boolean): void => {
   }
 };
 
+/**
+ * Pull the MLflow trace id (`tr-<hex>`) the server stamped on a stream
+ * response, if present. `@mastra/client-js`'s `agent.stream()` returns
+ * a Response-shaped object, so the header is read defensively (the
+ * shape isn't guaranteed across client versions). Returns `undefined`
+ * when absent - which is the "no feedback for this turn" signal.
+ */
+const readMlflowTraceId = (stream: unknown): string | undefined => {
+  const headers = (stream as { headers?: { get?: (name: string) => string | null } })
+    ?.headers;
+  const raw = headers?.get?.(MLFLOW_TRACE_ID_HEADER);
+  return raw?.trim() || undefined;
+};
+
 // `tool-output` chunks carry arbitrary tool-defined payloads; only the
 // `{type: ...}` shape we know how to render in `ToolSessionPill` is
 // surfaced. Anything else (other tools, raw data, etc.) is ignored.
@@ -160,6 +176,19 @@ export interface UseMastraChatOptions {
    * inlined into the export so it renders reliably offline.
    */
   enableExport?: boolean;
+  /**
+   * Surface per-message feedback controls (thumbs up/down + a comment
+   * popover) that log to MLflow as trace assessments.
+   *
+   * Defaults to whatever {@link enableExport} is (feedback and export
+   * are the two "quality loop" affordances, so turning on export opts
+   * into feedback too); pass an explicit `true` / `false` to override.
+   * Regardless of this flag, controls only actually render when the
+   * server reports MLflow logging is enabled (`clientConfig.feedbackEnabled`)
+   * and the turn produced a trace id - so enabling it on a deployment
+   * without MLflow tracing is a safe no-op.
+   */
+  enableFeedback?: boolean;
 }
 
 /**
@@ -202,6 +231,11 @@ export const useMastraChat = (
   const enableThreads = options.enableThreads !== false;
   // Export is opt-in (default off): the host turns it on explicitly.
   const enableExport = options.enableExport === true;
+  // Feedback defaults to export's setting; an explicit option overrides.
+  // It only actually surfaces when the server reports MLflow logging is
+  // wired (so a trace exists to attach the assessment to).
+  const enableFeedback = options.enableFeedback ?? enableExport;
+  const feedbackAvailable = enableFeedback && mastraClient.feedbackEnabled;
   const threadKey = threadStorageKey(mastraClient.basePath, agentId);
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>(() =>
     enableThreads ? (readStoredThreadId(threadKey) ?? nanoid()) : undefined,
@@ -239,6 +273,29 @@ export const useMastraChat = (
     refreshThreads();
     window.setTimeout(refreshThreads, 2000);
   }, [enableThreads, refreshThreads]);
+  // Optimistic sidebar rows for conversations the user just started but
+  // that the server list hasn't returned yet. A new thread's id is
+  // client-minted, and the server only materializes the thread row once
+  // the first turn lands (with its auto-title arriving a beat later), so
+  // without this the sidebar wouldn't show a brand-new conversation
+  // until the delayed post-turn refresh. Keyed by thread id; each entry
+  // is pruned once the real server row supersedes it.
+  const [optimisticThreads, setOptimisticThreads] = useState<
+    Record<string, ThreadSummary>
+  >({});
+  // Surface the active thread in the sidebar immediately (called when its
+  // first message is sent). Upserts an untitled row stamped "now" so it
+  // sorts to the top; the server row replaces it on the next refresh.
+  const noteThreadActivity = useCallback(
+    (threadId: string) => {
+      if (!enableThreads) return;
+      setOptimisticThreads((prev) => ({
+        ...prev,
+        [threadId]: { ...prev[threadId], id: threadId, updatedAt: new Date().toISOString() },
+      }));
+    },
+    [enableThreads],
+  );
   // Picker is opt-in: an omitted (or falsy) `showModelPicker` keeps it
   // hidden and skips the catalogue fetch entirely.
   const showModelPicker = Boolean(options.showModelPicker);
@@ -295,6 +352,17 @@ export const useMastraChat = (
   const [pendingApprovalsByMessage, setPendingApprovalsByMessage] = useState<
     Record<string, PendingApproval[]>
   >({});
+  // MLflow feedback per assistant message, keyed by message id. Seeded
+  // with the trace id captured from each streamed turn's response header
+  // (see `processStream`); `value` is filled in once the user thumbs.
+  // Consumed by ChatView to both gate and highlight the per-bubble
+  // feedback controls. A ref mirror lets `submitFeedback` read the
+  // latest trace id without churning its identity every thumb.
+  const [feedbackByMessage, setFeedbackByMessage] = useState<
+    Record<string, MessageFeedback>
+  >({});
+  const feedbackByMessageRef = useRef(feedbackByMessage);
+  feedbackByMessageRef.current = feedbackByMessage;
   // We mirror `messages` into a ref so sendMessage / regenerate can read
   // the latest history without putting side effects (the agent.stream
   // call) inside a state updater. State updaters get invoked twice in
@@ -323,6 +391,19 @@ export const useMastraChat = (
       runIdRef: { current: string | null },
       signal: AbortSignal,
     ) => {
+      // Capture the turn's MLflow trace id off the stream response
+      // header and pin it to this assistant message so a later thumbs /
+      // comment attaches to the right trace. Absent when MLflow logging
+      // isn't enabled (the server omits the header) - the feedback
+      // controls then simply don't render for the message.
+      const traceId = readMlflowTraceId(stream);
+      if (traceId) {
+        setFeedbackByMessage((prev) =>
+          prev[assistantId]?.traceId === traceId
+            ? prev
+            : { ...prev, [assistantId]: { ...prev[assistantId], traceId } },
+        );
+      }
       // Replay carries forward whatever text / reasoning was already
       // accumulated for `assistantId` so resuming after approval
       // appends rather than overwrites.
@@ -720,11 +801,15 @@ export const useMastraChat = (
       const text = message.text ?? "";
       if (!text) return;
       lastUserTextRef.current = text;
+      // As soon as a conversation gets a message, surface it in the
+      // sidebar (optimistically for a brand-new, not-yet-persisted
+      // thread; a no-op merge for one already in the server list).
+      if (activeThreadId) noteThreadActivity(activeThreadId);
       const next = [...messagesRef.current, makeUserMessage(text)];
       writeMessages(next);
       void runStream(next);
     },
-    [runStream, writeMessages],
+    [runStream, writeMessages, activeThreadId, noteThreadActivity],
   );
 
   /**
@@ -750,6 +835,7 @@ export const useMastraChat = (
     writeMessages([]);
     setToolEventsByMessage({});
     setPendingApprovalsByMessage({});
+    setFeedbackByMessage({});
     setHasMoreHistory(false);
     historyPageRef.current = 1;
     lastUserTextRef.current = null;
@@ -757,9 +843,18 @@ export const useMastraChat = (
     currentRunIdRef.current = null;
     setError(null);
     setStatus("ready");
+    // The active thread is now empty; drop any optimistic row for it so
+    // a just-started conversation doesn't linger in the sidebar.
+    if (activeThreadId) {
+      setOptimisticThreads((prev) => {
+        if (!prev[activeThreadId]) return prev;
+        const { [activeThreadId]: _drop, ...rest } = prev;
+        return rest;
+      });
+    }
     // Clearing deletes the thread server-side, so drop it from the list.
     refreshThreadsSoon();
-  }, [mastraClient, agentId, writeMessages, refreshThreadsSoon]);
+  }, [mastraClient, agentId, writeMessages, refreshThreadsSoon, activeThreadId]);
 
   /**
    * Switch the active conversation to `threadId`. Aborts any in-flight
@@ -806,6 +901,13 @@ export const useMastraChat = (
           error: commonUtils.errorMessage(error),
         });
       }
+      // Drop any optimistic row for the deleted thread so it can't
+      // linger in the sidebar after removal.
+      setOptimisticThreads((prev) => {
+        if (!prev[threadId]) return prev;
+        const { [threadId]: _drop, ...rest } = prev;
+        return rest;
+      });
       if (threadId === activeThreadId) {
         runTokenRef.current++;
         abortRef.current?.abort();
@@ -836,6 +938,10 @@ export const useMastraChat = (
         const { [lastAssistant.id]: _approvals, ...rest } = map;
         return rest;
       });
+      setFeedbackByMessage((map) => {
+        const { [lastAssistant.id]: _feedback, ...rest } = map;
+        return rest;
+      });
     }
     writeMessages(trimmed);
     void runStream(trimmed);
@@ -856,10 +962,12 @@ export const useMastraChat = (
     // header is cleared, so the server falls back to the session cookie.
     mastraClient.setThreadId(activeThreadId);
     // Reset per-thread client state so switching conversations never
-    // bleeds the prior thread's transcript / pills / approvals through.
+    // bleeds the prior thread's transcript / pills / approvals / feedback
+    // through.
     writeMessages([]);
     setToolEventsByMessage({});
     setPendingApprovalsByMessage({});
+    setFeedbackByMessage({});
     historyInFlightRef.current = true;
     setIsLoadingHistory(true);
     mastraClient
@@ -993,6 +1101,70 @@ export const useMastraChat = (
     [exportResolver],
   );
 
+  // Submit thumbs / comment feedback for an assistant message to MLflow
+  // via the plugin's feedback route. The message's captured trace id
+  // scopes the assessment; without one there's nothing to attach to, so
+  // the call is skipped. A thumbs value is reflected optimistically so
+  // the active button highlights immediately; a soft "not recorded"
+  // (e.g. the trace is still exporting) is logged, not surfaced as an
+  // error, to keep the chat calm.
+  const submitFeedback = useCallback(
+    async (message: UIMessage, submission: FeedbackSubmission) => {
+      const traceId = feedbackByMessageRef.current[message.id]?.traceId;
+      if (!traceId) return;
+      if (submission.value) {
+        setFeedbackByMessage((prev) => ({
+          ...prev,
+          [message.id]: { traceId, value: submission.value },
+        }));
+      }
+      try {
+        const result = await mastraClient.feedback({
+          traceId,
+          ...(submission.value !== undefined
+            ? { value: submission.value === "up" }
+            : {}),
+          ...(submission.comment ? { comment: submission.comment } : {}),
+        });
+        if (!result.ok) {
+          log.warn("feedback not recorded (trace may still be exporting)", {
+            traceId,
+          });
+        }
+      } catch (error) {
+        log.error("feedback error", {
+          traceId,
+          error: commonUtils.errorMessage(error),
+        });
+      }
+    },
+    [mastraClient],
+  );
+
+  // Merge optimistic rows (conversations just started this session) with
+  // the server list, newest first, dropping any optimistic entry the
+  // server already returns so a thread is never listed twice.
+  const sidebarThreads = useMemo<ThreadSummary[]>(() => {
+    const server = threads.map(toThreadSummary);
+    const serverIds = new Set(server.map((t) => t.id));
+    const pending = Object.values(optimisticThreads)
+      .filter((t) => !serverIds.has(t.id))
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    return [...pending, ...server];
+  }, [threads, optimisticThreads]);
+  // Once the server list includes a thread we were tracking optimistically,
+  // drop the optimistic copy so the map doesn't grow without bound.
+  useEffect(() => {
+    const serverIds = new Set(threads.map((t) => t.id));
+    const stale = Object.keys(optimisticThreads).filter((id) => serverIds.has(id));
+    if (stale.length === 0) return;
+    setOptimisticThreads((prev) => {
+      const next = { ...prev };
+      for (const id of stale) delete next[id];
+      return next;
+    });
+  }, [threads, optimisticThreads]);
+
   return {
     messages,
     status,
@@ -1020,7 +1192,7 @@ export const useMastraChat = (
     // single-thread chat (ChatView keys the sidebar off these props).
     ...(enableThreads
       ? {
-          threads: threads.map(toThreadSummary),
+          threads: sidebarThreads,
           ...(activeThreadId ? { activeThreadId } : {}),
           isLoadingThreads,
           onSelectThread: selectThread,
@@ -1038,6 +1210,16 @@ export const useMastraChat = (
       ? {
           onExportConversation: exportConversation,
           onExportMessage: exportMessage,
+        }
+      : {}),
+    // Feedback: only expose the state + handler (which light up the
+    // per-bubble thumbs / comment controls in ChatView) when feedback
+    // is enabled AND the server can log to MLflow. `feedbackByMessage`
+    // still gates per-message on a captured trace id.
+    ...(feedbackAvailable
+      ? {
+          feedbackByMessage,
+          onFeedback: submitFeedback,
         }
       : {}),
   };

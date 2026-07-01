@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
@@ -17,6 +17,7 @@
     "@mastra/observability": "catalog:",
     "@mastra/otel-bridge": "catalog:",
     "@mastra/pg": "catalog:",
+    "@opentelemetry/api": "catalog:",
     "pg": "^8.20.0",
     "zod": "catalog:"
   },
