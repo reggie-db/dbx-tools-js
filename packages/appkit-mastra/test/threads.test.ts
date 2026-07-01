@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import type { Agent } from "@mastra/core/agent";
 import type { StorageThreadType } from "@mastra/core/memory";
 
-import { deleteThread, listThreads } from "../src/threads.js";
+import { deleteThread, listThreads, renameThread } from "../src/threads.js";
 
 const RESOURCE = "user-1";
 
@@ -13,6 +13,7 @@ function fakeMemory(opts: {
   total?: number;
   hasMore?: boolean;
   onDelete?: (threadId: string) => void;
+  onUpdate?: (args: { id: string; title: string; metadata: unknown }) => void;
 }) {
   const threads = opts.threads ?? [];
   return {
@@ -37,6 +38,20 @@ function fakeMemory(opts: {
       threads.find((t) => t.id === threadId) ?? null,
     deleteThread: async (threadId: string) => {
       opts.onDelete?.(threadId);
+    },
+    updateThread: async (args: {
+      id: string;
+      title: string;
+      metadata: Record<string, unknown>;
+    }) => {
+      opts.onUpdate?.(args);
+      const existing = threads.find((t) => t.id === args.id);
+      return {
+        ...(existing ?? thread({ id: args.id })),
+        title: args.title,
+        metadata: args.metadata,
+        updatedAt: new Date("2026-01-03T00:00:00.000Z"),
+      } satisfies StorageThreadType;
     },
   };
 }
@@ -153,5 +168,71 @@ describe("deleteThread", () => {
       resourceId: RESOURCE,
     });
     expect(res).toEqual({ deleted: false });
+  });
+});
+
+describe("renameThread", () => {
+  it("returns null for a stateless agent", async () => {
+    const res = await renameThread({
+      agent: fakeAgent(null),
+      threadId: "t1",
+      resourceId: RESOURCE,
+      title: "Renamed",
+    });
+    expect(res).toBeNull();
+  });
+
+  it("renames an owned thread and echoes the updated wire shape", async () => {
+    const updates: { id: string; title: string; metadata: unknown }[] = [];
+    const memory = fakeMemory({
+      threads: [thread({ metadata: { pinned: true } })],
+      onUpdate: (args) => updates.push(args),
+    });
+    const res = await renameThread({
+      agent: fakeAgent(memory),
+      threadId: "t1",
+      resourceId: RESOURCE,
+      title: "Renamed",
+    });
+    expect(res).toEqual({
+      id: "t1",
+      title: "Renamed",
+      resourceId: RESOURCE,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-03T00:00:00.000Z",
+      metadata: { pinned: true },
+    });
+    // Existing metadata is preserved through the update (Mastra replaces
+    // the row, so the route must pass it back in).
+    expect(updates).toEqual([
+      { id: "t1", title: "Renamed", metadata: { pinned: true } },
+    ]);
+  });
+
+  it("refuses to rename a thread owned by another resource", async () => {
+    let called = false;
+    const memory = fakeMemory({
+      threads: [thread({ id: "t1", resourceId: "other" })],
+      onUpdate: () => (called = true),
+    });
+    const res = await renameThread({
+      agent: fakeAgent(memory),
+      threadId: "t1",
+      resourceId: RESOURCE,
+      title: "Renamed",
+    });
+    expect(res).toBeNull();
+    expect(called).toBe(false);
+  });
+
+  it("returns null for an unknown thread", async () => {
+    const memory = fakeMemory({ threads: [] });
+    const res = await renameThread({
+      agent: fakeAgent(memory),
+      threadId: "missing",
+      resourceId: RESOURCE,
+      title: "Renamed",
+    });
+    expect(res).toBeNull();
   });
 });

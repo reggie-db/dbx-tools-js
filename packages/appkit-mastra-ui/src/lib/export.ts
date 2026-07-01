@@ -28,6 +28,7 @@ import { stringUtils } from "@dbx-tools/shared";
 import type { UIMessage } from "ai";
 import * as echarts from "echarts";
 import { marked } from "marked";
+import { normalizeChartOption } from "./chart-option.js";
 
 /** Output formats {@link exportChat} can produce. */
 export type ExportFormat = "pdf" | "markdown";
@@ -212,8 +213,12 @@ function markdownToHtml(md: string): string {
 
 /**
  * Resolve a chart id and render its Echarts spec to an inline SVG string
- * via server-side rendering (no DOM). Returns `null` when the id is
- * unknown / expired / still processing, or if rendering throws.
+ * via server-side rendering (no DOM). The JSON-safe planner spec is run
+ * through {@link normalizeChartOption} first - same as the live inline
+ * chart - so the export gets compact value ticks, conventionally-placed
+ * axis names, and legible category labels rather than a raw spec. Returns
+ * `null` when the id is unknown / expired / still processing, or if
+ * rendering throws.
  */
 async function chartSvg(resolver: EmbedResolver, id: string): Promise<string | null> {
   try {
@@ -226,7 +231,9 @@ async function chartSvg(resolver: EmbedResolver, id: string): Promise<string | n
       height: CHART_HEIGHT_PX,
     });
     try {
-      instance.setOption(chart.result.option as echarts.EChartsCoreOption);
+      instance.setOption(
+        normalizeChartOption(chart.result.option) as echarts.EChartsCoreOption,
+      );
       return instance.renderToSVGString();
     } finally {
       instance.dispose();

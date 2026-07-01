@@ -6,20 +6,25 @@
  * resource, and shapes each into the JSON-safe {@link MastraThread}
  * wire type. A sibling `DELETE` removes a single named thread.
  *
+ * A sibling `DELETE` removes a single named thread; a `PATCH` renames
+ * one ({@link renameThread}).
+ *
  * Like {@link historyRoute} this registers through Mastra's
  * `registerApiRoute` so it shares the `MastraServer` auth-middleware
  * pipeline (in `./server.ts`), which has already stamped the resource
  * id (`MASTRA_RESOURCE_ID_KEY`) and the targeted thread id
  * (`MASTRA_THREAD_ID_KEY`, resolved from the thread-selection header /
  * cookie) on `RequestContext` by the time a handler runs. Resource
- * scoping lives here so a caller can only ever see or delete its own
- * threads; no cookie or user lookups happen in this module.
+ * scoping lives here so a caller can only ever see, rename, or delete
+ * its own threads; no cookie or user lookups happen in this module.
  */
 
-import type {
-  MastraDeleteThreadResponse,
-  MastraThread,
-  MastraThreadsResponse,
+import {
+  MastraUpdateThreadRequestSchema,
+  type MastraDeleteThreadResponse,
+  type MastraThread,
+  type MastraThreadsResponse,
+  type MastraUpdateThreadResponse,
 } from "@dbx-tools/appkit-mastra-shared";
 import { logUtils } from "@dbx-tools/shared";
 import type { Agent } from "@mastra/core/agent";
@@ -142,13 +147,64 @@ export async function deleteThread(
   return { deleted: true };
 }
 
+/** Inputs accepted by {@link renameThread}. */
+export interface RenameThreadOptions {
+  agent: Agent;
+  threadId: string;
+  resourceId: string;
+  title: string;
+}
+
+/**
+ * Rename a single thread, returning the updated wire thread.
+ *
+ * Ownership is enforced the same way {@link deleteThread} enforces it:
+ * the title is only changed when the thread belongs to the calling
+ * resource, so a client can't rename another user's conversation by
+ * guessing its id. Existing thread `metadata` is preserved untouched
+ * (Mastra's `updateThread` replaces the row, so it must be passed back
+ * in). Returns `null` when the thread doesn't exist, isn't owned by the
+ * caller, or the agent has no memory configured, letting the route map
+ * that to a 404.
+ */
+export async function renameThread(
+  opts: RenameThreadOptions,
+): Promise<MastraThread | null> {
+  const memory = await opts.agent.getMemory();
+  if (!memory) {
+    log.debug("rename:no-memory", { agentId: opts.agent.id });
+    return null;
+  }
+  const existing = await memory.getThreadById({ threadId: opts.threadId });
+  if (!existing || existing.resourceId !== opts.resourceId) {
+    log.debug("rename:not-owned", {
+      agentId: opts.agent.id,
+      threadId: opts.threadId,
+      found: existing !== null,
+    });
+    return null;
+  }
+  const startedAt = Date.now();
+  const updated = await memory.updateThread({
+    id: opts.threadId,
+    title: opts.title,
+    metadata: existing.metadata ?? {},
+  });
+  log.info("rename:done", {
+    agentId: opts.agent.id,
+    threadId: opts.threadId,
+    elapsedMs: Date.now() - startedAt,
+  });
+  return toWireThread(updated);
+}
+
 /** Options accepted by {@link threadsRoute}. */
 export type ThreadsRouteOptions =
   | { path: `${string}:agentId${string}`; agent?: never }
   | { path: string; agent: string };
 
 /**
- * Register the `<path>` Mastra custom API route. Handles two methods
+ * Register the `<path>` Mastra custom API route. Handles three methods
  * on the same mount:
  *
  *   - `GET`: a page of the resource's conversation threads
@@ -158,6 +214,10 @@ export type ThreadsRouteOptions =
  *     `RequestContext` (the auth middleware resolves it the same way it
  *     does for streaming and history), so the client deletes any of its
  *     threads by stamping the target id - no separate path param.
+ *   - `PATCH`: rename the thread named by the thread-selection header /
+ *     `?threadId=` query to the `{ title }` in the JSON body
+ *     ({@link renameThread}). Targets a thread the same way `DELETE`
+ *     does; 404s when the thread isn't owned by the caller.
  *
  * Follows the `@mastra/ai-sdk` agent-binding convention: pass `agent`
  * for a fixed-agent mount, or include `:agentId` in the path for
@@ -233,6 +293,38 @@ export function threadsRoute(options: ThreadsRouteOptions) {
           agentId: ctx.agentId,
           threadId,
           deleted,
+        };
+        return c.json(payload);
+      },
+    }),
+    registerApiRoute(path, {
+      method: "PATCH",
+      handler: async (c: ContextWithMastra) => {
+        const ctx = resolveContext(c);
+        if ("error" in ctx) return ctx.error;
+        const threadId = ctx.requestContext.get(MASTRA_THREAD_ID_KEY) as
+          | string
+          | undefined;
+        if (!threadId) {
+          return c.json({ error: "thread id missing from request context" }, 400);
+        }
+        const body = MastraUpdateThreadRequestSchema.safeParse(await c.req.json());
+        if (!body.success) {
+          return c.json({ error: body.error.message }, 400);
+        }
+        const thread = await renameThread({
+          agent: ctx.agent,
+          threadId,
+          resourceId: ctx.resourceId,
+          title: body.data.title,
+        });
+        if (!thread) {
+          return c.json({ error: `Unknown thread "${threadId}"` }, 404);
+        }
+        const payload: MastraUpdateThreadResponse = {
+          ok: true,
+          agentId: ctx.agentId,
+          thread,
         };
         return c.json(payload);
       },

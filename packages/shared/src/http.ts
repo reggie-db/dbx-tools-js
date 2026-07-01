@@ -132,6 +132,39 @@ export function parseCookies(
   return out;
 }
 
+/**
+ * Build an `Error` describing a failed `fetch` response: status line,
+ * the URL(s) involved (the requested `url` and the final `response.url`
+ * after redirects, de-duplicated), and a truncated snapshot of the
+ * response body. Reads the body defensively - a body that can't be read
+ * is simply omitted. Call only on a non-`ok` response.
+ */
+export async function createFetchError(
+  response: Response,
+  url?: string,
+): Promise<Error> {
+  let body = "";
+  try {
+    body = (await response.text()).trim();
+  } catch {
+    // ignore
+  }
+  if (body.length > 1_000) {
+    body = `${body.slice(0, 1_000)}…`;
+  }
+  const urlSummary = [...new Set([url, response.url].filter(Boolean))].join(" -> ");
+  return new Error(
+    [
+      `Request failed.`,
+      `${response.status} ${response.statusText}`,
+      `${urlSummary}`,
+      body && `Response:\n${body}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
 // ────────────────────────────────────────────────────────────────
 // Private helpers
 // ────────────────────────────────────────────────────────────────

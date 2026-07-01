@@ -9,100 +9,80 @@ export type NonFunctionKeys<T> = {
   [K in keyof T]: T[K] extends (...args: any[]) => any ? never : K;
 }[keyof T];
 
-type MemoizeKeyFn<TArgs extends readonly unknown[]> = (...args: TArgs) => string;
-
-export interface MemoizeOptions<TArgs extends readonly unknown[]> {
-  /** Build a cache key from call arguments. Defaults to `JSON.stringify(args)`. */
-  key?: MemoizeKeyFn<TArgs>;
+export interface MemoizeOptions {
+  /**
+   * Time-to-live in milliseconds. The cached value expires `ttlMs` after
+   * it was stored, so the next call past that recomputes; a rejection is
+   * also evicted so a later call retries rather than replaying the error.
+   * Omitted or `<= 0` means cache forever (the default), where even a
+   * rejection is cached.
+   *
+   * Use for periodically-refreshed data (published IP ranges, feature
+   * flags, anything fetched once and reused across requests).
+   */
+  ttlMs?: number;
 }
 
 /**
  * Run a zero-argument factory once; later calls return the same result.
+ * The memoized function mirrors the factory's sync / async nature: a
+ * sync factory yields a sync getter (`() => T`), an async / thenable
+ * factory yields a promise-returning getter (`() => Promise<T>`) whose
+ * concurrent callers share the one in-flight promise until it settles.
  *
- * Concurrent callers share one in-flight promise until the factory settles.
- * Thenable returns (anything with a `.then` method) are accepted; the
- * cached value is always a native `Promise<T>` because we route through
- * `Promise.resolve().then(factory)`.
- */
-export function memoize<T>(factory: () => T | PromiseLike<T>): () => Promise<T>;
-
-/**
- * Memoize by call arguments. Sync `fn` returns values directly; if `fn`
- * returns a thenable (`Promise` or any object with a `.then` method),
- * concurrent calls for the same key share one in-flight promise.
+ * Errors are never cached: a sync factory that throws propagates the
+ * throw, and an async factory that rejects evicts the cached promise, so
+ * in both cases the next call retries. Pass `{ ttlMs }` to also expire
+ * and recompute a successful value after a window; without a TTL a
+ * success is cached forever.
  *
- * Input is `T | PromiseLike<T>` so foreign thenables (e.g. third-party
- * promise libraries, hand-rolled `{ then }` shims) are accepted; the
- * async branch wraps them with `Promise.resolve(...)` so the cached
- * entry is always a native `Promise<T>` even when the caller hands us a
- * non-spec-compliant thenable.
+ * For an async factory the TTL window starts when the promise
+ * *resolves*, not when it was created - a slow in-flight request never
+ * counts as already-expired, and concurrent callers keep sharing the one
+ * pending promise until it settles.
+ *
+ * @example
+ * const ranges = commonUtils.memoize(fetchIpRanges, { ttlMs: 24 * 60 * 60 * 1000 });
+ * await ranges(); // fetches
+ * await ranges(); // cached until 24h later
  */
-export function memoize<TArgs extends readonly unknown[], TReturn>(
-  fn: (...args: TArgs) => TReturn | PromiseLike<TReturn>,
-  options?: MemoizeOptions<TArgs>,
-): (...args: TArgs) => TReturn | Promise<TReturn>;
+export function memoize<T>(
+  factory: () => PromiseLike<T>,
+  options?: MemoizeOptions,
+): () => Promise<T>;
+export function memoize<T>(factory: () => T, options?: MemoizeOptions): () => T;
 
-export function memoize<TArgs extends readonly unknown[], TReturn>(
-  fn:
-    | ((...args: TArgs) => TReturn | PromiseLike<TReturn>)
-    | (() => TReturn | PromiseLike<TReturn>),
-  options?: MemoizeOptions<TArgs>,
-): ((...args: TArgs) => TReturn | Promise<TReturn>) | (() => Promise<TReturn>) {
-  if (fn.length === 0) {
-    const factory = fn as () => TReturn | PromiseLike<TReturn>;
-    let cache: Promise<TReturn> | undefined;
-    return () => {
-      if (cache === undefined) {
-        cache = Promise.resolve().then(factory);
+export function memoize<T>(
+  factory: () => T | PromiseLike<T>,
+  options?: MemoizeOptions,
+): () => T | Promise<T> {
+  const ttlMs = options?.ttlMs ?? 0;
+  let cache: { value: T | Promise<T>; expiresAt: number } | undefined;
+  return () => {
+    if (cache === undefined || (ttlMs > 0 && Date.now() >= cache.expiresAt)) {
+      const result = factory();
+      if (isThenable(result)) {
+        const pending = Promise.resolve(result);
+        // `Infinity` keeps the entry unexpired while in flight (so a slow
+        // request isn't refetched and concurrent callers share it); the
+        // TTL window is stamped from resolution below.
+        const entry = { value: pending, expiresAt: Infinity };
+        cache = entry;
+        void pending.then(
+          () => {
+            entry.expiresAt = Date.now() + ttlMs;
+          },
+          // Never cache a rejection: evict so a later call retries.
+          () => {
+            if (cache === entry) cache = undefined;
+          },
+        );
+      } else {
+        cache = { value: result, expiresAt: Date.now() + ttlMs };
       }
-      return cache;
-    };
-  }
-
-  const keyOf = options?.key ?? defaultMemoizeKey<TArgs>;
-  const syncCache = new Map<string, TReturn>();
-  const asyncCache = new Map<string, Promise<TReturn>>();
-
-  return (...args: TArgs) => {
-    const key = keyOf(...args);
-    if (asyncCache.has(key)) {
-      return asyncCache.get(key)!;
     }
-    if (syncCache.has(key)) {
-      return syncCache.get(key)!;
-    }
-
-    const result = (fn as (...args: TArgs) => TReturn | PromiseLike<TReturn>)(...args);
-    if (isThenable(result)) {
-      const pending = Promise.resolve(result);
-      asyncCache.set(key, pending);
-      void pending.catch(() => {
-        asyncCache.delete(key);
-      });
-      return pending;
-    }
-
-    syncCache.set(key, result);
-    return result;
+    return cache.value;
   };
-}
-
-/**
- * Method decorator: memoizes the decorated method by its arguments.
- *
- * Requires `experimentalDecorators` in the consumer's `tsconfig.json`.
- */
-export function memoized(
-  _target: object,
-  _propertyKey: string | symbol,
-  descriptor: PropertyDescriptor,
-): PropertyDescriptor {
-  const original = descriptor.value;
-  if (typeof original !== "function") {
-    throw new TypeError("@memoized can only decorate methods");
-  }
-  descriptor.value = memoize(original as (...args: readonly unknown[]) => unknown);
-  return descriptor;
 }
 
 /**
@@ -285,17 +265,20 @@ export async function* poll<T, A = Record<string, unknown>>(
   }
 }
 
-function defaultMemoizeKey<TArgs extends readonly unknown[]>(...args: TArgs): string {
-  return JSON.stringify(args);
-}
-
+/** Duck-type any value with a callable `.then` as a thenable. */
 function isThenable<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "then" in value &&
-    typeof (value as PromiseLike<T>).then === "function"
-  );
+  if (value !== null) {
+    if (value instanceof Promise) {
+      return true;
+    } else if (
+      typeof value === "object" &&
+      "then" in value &&
+      typeof (value as PromiseLike<T>).then === "function"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

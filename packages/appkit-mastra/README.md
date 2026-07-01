@@ -117,6 +117,9 @@ management (registered alongside `/route/history`):
 - `DELETE /route/threads` - delete the targeted thread (id from the
   thread-selection header). Ownership is enforced server-side: a thread
   is only removed when it belongs to the caller.
+- `PATCH /route/threads` - rename the targeted thread (id from the
+  thread-selection header) to the `{ title }` in the JSON body. Same
+  ownership enforcement; existing thread metadata is preserved.
 
 Each thread is auto-titled from its opening turn (Mastra's
 `generateTitle`), but titling runs on the **small / fast chat tier**

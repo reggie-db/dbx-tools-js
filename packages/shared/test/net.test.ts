@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 
-import { pathMatch, urlBuilder } from "../src/net.browser.js";
+import {
+  findContainingCidr,
+  ipInCidr,
+  parseCidr,
+  parseIp,
+  pathMatch,
+  urlBuilder,
+} from "../src/net.browser.js";
 
 describe("urlBuilder", () => {
   describe("string input", () => {
@@ -173,5 +180,125 @@ describe("pathMatch", () => {
 
   it("treats a blank string as the base origin root", () => {
     expect(pathMatch("", "/api")).toBe(false);
+  });
+});
+
+describe("parseIp", () => {
+  it("parses a dotted-quad IPv4 into its integer value", () => {
+    expect(parseIp("10.0.0.1")).toEqual({ version: 4, value: 167772161n });
+    expect(parseIp("0.0.0.0")).toEqual({ version: 4, value: 0n });
+    expect(parseIp("255.255.255.255")).toEqual({ version: 4, value: 4294967295n });
+  });
+
+  it("trims whitespace", () => {
+    expect(parseIp("  1.2.3.4 ")?.value).toBe(16909060n);
+  });
+
+  it("rejects malformed IPv4", () => {
+    expect(parseIp("256.0.0.1")).toBeNull();
+    expect(parseIp("1.2.3")).toBeNull();
+    expect(parseIp("1.2.3.4.5")).toBeNull();
+    expect(parseIp("not-an-ip")).toBeNull();
+    expect(parseIp("")).toBeNull();
+  });
+
+  it("parses IPv6, including :: compression and brackets", () => {
+    expect(parseIp("::1")).toEqual({ version: 6, value: 1n });
+    expect(parseIp("::")).toEqual({ version: 6, value: 0n });
+    expect(parseIp("[2001:db8::1]")?.version).toBe(6);
+    // A fully-expanded address equals its compressed form.
+    expect(parseIp("2001:db8::1")?.value).toBe(
+      parseIp("2001:0db8:0000:0000:0000:0000:0000:0001")?.value,
+    );
+  });
+
+  it("parses an IPv6 address with an embedded IPv4 tail", () => {
+    // ::ffff:1.2.3.4 -> low 32 bits are the v4 value, prefixed by ffff.
+    expect(parseIp("::ffff:1.2.3.4")?.value).toBe((0xffffn << 32n) | 16909060n);
+  });
+
+  it("strips an IPv6 zone id", () => {
+    expect(parseIp("fe80::1%eth0")?.value).toBe(parseIp("fe80::1")?.value);
+  });
+
+  it("rejects malformed IPv6", () => {
+    expect(parseIp("1::2::3")).toBeNull();
+    expect(parseIp("gggg::1")).toBeNull();
+    expect(parseIp("1:2:3:4:5:6:7:8:9")).toBeNull();
+  });
+});
+
+describe("parseCidr", () => {
+  it("clears host bits from the base address", () => {
+    expect(parseCidr("10.1.2.3/8")?.base).toBe(parseIp("10.0.0.0")?.value);
+    expect(parseCidr("192.168.1.1/16")?.base).toBe(parseIp("192.168.0.0")?.value);
+  });
+
+  it("handles /32 (single host) and /0 (everything)", () => {
+    expect(parseCidr("1.2.3.4/32")?.base).toBe(16909060n);
+    expect(parseCidr("1.2.3.4/0")?.base).toBe(0n);
+  });
+
+  it("parses IPv6 CIDRs", () => {
+    const cidr = parseCidr("2001:db8::/32");
+    expect(cidr?.version).toBe(6);
+    expect(cidr?.prefix).toBe(32);
+  });
+
+  it("rejects out-of-range prefixes and missing slash", () => {
+    expect(parseCidr("10.0.0.0/33")).toBeNull();
+    expect(parseCidr("2001:db8::/129")).toBeNull();
+    expect(parseCidr("10.0.0.0")).toBeNull();
+    expect(parseCidr("bad/8")).toBeNull();
+  });
+});
+
+describe("ipInCidr", () => {
+  it("matches addresses inside an IPv4 block", () => {
+    expect(ipInCidr("10.1.2.3", "10.0.0.0/8")).toBe(true);
+    expect(ipInCidr("10.255.255.255", "10.0.0.0/8")).toBe(true);
+    expect(ipInCidr("11.0.0.1", "10.0.0.0/8")).toBe(false);
+  });
+
+  it("matches addresses inside an IPv6 block", () => {
+    expect(ipInCidr("2001:db8::dead", "2001:db8::/32")).toBe(true);
+    expect(ipInCidr("2001:db9::1", "2001:db8::/32")).toBe(false);
+  });
+
+  it("never matches across address families", () => {
+    expect(ipInCidr("10.0.0.1", "2001:db8::/32")).toBe(false);
+    expect(ipInCidr("::1", "10.0.0.0/8")).toBe(false);
+  });
+
+  it("accepts pre-parsed arguments", () => {
+    const ip = parseIp("10.1.2.3")!;
+    const cidr = parseCidr("10.0.0.0/8")!;
+    expect(ipInCidr(ip, cidr)).toBe(true);
+  });
+
+  it("returns false for unparseable input", () => {
+    expect(ipInCidr("nope", "10.0.0.0/8")).toBe(false);
+    expect(ipInCidr("10.0.0.1", "nope")).toBe(false);
+  });
+});
+
+describe("findContainingCidr", () => {
+  it("returns the first matching range and preserves side metadata", () => {
+    const ranges = [
+      { ...parseCidr("192.168.0.0/16")!, region: "a" },
+      { ...parseCidr("10.0.0.0/8")!, region: "b" },
+    ];
+    expect(findContainingCidr("10.1.2.3", ranges)?.region).toBe("b");
+    expect(findContainingCidr("192.168.5.5", ranges)?.region).toBe("a");
+    expect(findContainingCidr("8.8.8.8", ranges)).toBeNull();
+  });
+
+  it("parses a string ip once and skips version mismatches", () => {
+    const ranges = [
+      { ...parseCidr("2001:db8::/32")!, region: "v6" },
+      { ...parseCidr("10.0.0.0/8")!, region: "v4" },
+    ];
+    expect(findContainingCidr("10.9.9.9", ranges)?.region).toBe("v4");
+    expect(findContainingCidr("2001:db8::1", ranges)?.region).toBe("v6");
   });
 });

@@ -230,6 +230,45 @@ export type MastraDeleteThreadResponse = z.infer<
   typeof MastraDeleteThreadResponseSchema
 >;
 
+/** Longest thread title the rename route accepts (trimmed server-side). */
+export const MASTRA_THREAD_TITLE_MAX = 200;
+
+/**
+ * JSON body for `PATCH ${basePath}/threads` (thread id supplied via the
+ * thread-selection header / `threadId` query). Renames a single
+ * conversation.
+ *
+ * Fields:
+ *   - `title`: the new human-readable title. Trimmed and capped at
+ *     {@link MASTRA_THREAD_TITLE_MAX} characters server-side; must be
+ *     non-empty after trimming.
+ */
+export const MastraUpdateThreadRequestSchema = z.object({
+  title: z.string().trim().min(1).max(MASTRA_THREAD_TITLE_MAX),
+});
+export type MastraUpdateThreadRequest = z.infer<
+  typeof MastraUpdateThreadRequestSchema
+>;
+
+/**
+ * JSON payload returned by `PATCH ${basePath}/threads`. Echoes the
+ * renamed thread in its post-update wire shape so the client can reflect
+ * the new title without a re-fetch.
+ *
+ * Fields:
+ *   - `ok`: literal `true` on success.
+ *   - `agentId`: agent whose thread was renamed.
+ *   - `thread`: the updated thread (carries the new `title`).
+ */
+export const MastraUpdateThreadResponseSchema = z.object({
+  ok: z.literal(true),
+  agentId: z.string(),
+  thread: MastraThreadSchema,
+});
+export type MastraUpdateThreadResponse = z.infer<
+  typeof MastraUpdateThreadResponseSchema
+>;
+
 /* ------------------------------ suggestions ------------------------------ */
 
 /**

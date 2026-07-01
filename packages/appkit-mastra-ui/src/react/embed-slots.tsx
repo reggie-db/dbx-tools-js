@@ -7,6 +7,8 @@ import {
 } from "@dbx-tools/appkit-mastra-shared";
 import ReactECharts from "echarts-for-react";
 import { ClockIcon } from "lucide-react";
+import { useMemo } from "react";
+import { normalizeChartOption } from "../lib/chart-option.js";
 import { useChartFetch, useStatementFetch } from "../lib/mastra-client.js";
 import { DataGrid, humanizeLabel } from "./data-grid.js";
 import { AssistantMarkdown } from "./markdown.js";
@@ -77,11 +79,18 @@ const ExpiredSlot = ({ type }: { type: string }) => (
  */
 const ChartSlot = ({ chartId }: { chartId: string }) => {
   const { data: chart, loading, error } = useChartFetch(chartId);
-  if (chart?.result) {
+  // Patch presentation (compact ticks, axis-name placement, legible
+  // category labels) into the JSON-safe planner spec before rendering,
+  // matching the export path. Memoized on the resolved option identity.
+  const option = useMemo(
+    () => (chart?.result ? normalizeChartOption(chart.result.option) : undefined),
+    [chart?.result],
+  );
+  if (option) {
     return (
       <div className={CHART_FRAME_CLASSES}>
         <ReactECharts
-          option={chart.result.option}
+          option={option}
           style={{ height: CHART_HEIGHT_PX, width: "100%" }}
           notMerge
           lazyUpdate

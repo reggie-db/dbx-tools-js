@@ -9,6 +9,8 @@
  *     `@ast-grep/napi` native binary. Keeping them out of the
  *     browser entry stops that whole subtree from being bundled
  *     for the client.
+ *   - `cloudUtils` resolves a host to its cloud provider / region
+ *     via DNS (`node:dns`), so it is server-only too.
  *
  * Resolution: this file is the `import` / `default` target in the
  * package's `exports` map. Vite (and any other browser-aware
@@ -20,6 +22,7 @@
 
 export * as apiUtils from "./api.js";
 export * as appkitUtils from "./appkit.js";
+export * as cloudUtils from "./cloud.js";
 export * as netUtils from "./net.js";
 export * as projectUtils from "./project.js";
 

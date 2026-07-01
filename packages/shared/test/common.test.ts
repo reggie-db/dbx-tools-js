@@ -5,7 +5,6 @@ import {
   fnvHashWithOptions,
   id,
   memoize,
-  memoized,
   poll,
   sleep,
   toBase32,
@@ -53,6 +52,32 @@ describe("memoize (once)", () => {
     expect(a).toEqual({ id: 1 });
   });
 
+  it("returns the value synchronously for a sync factory", () => {
+    const get = memoize(() => 42);
+    const value: number = get();
+    expect(value).toBe(42);
+    // Not wrapped in a promise.
+    expect((value as unknown) instanceof Promise).toBe(false);
+  });
+
+  it("returns a promise for an async factory", () => {
+    const get = memoize(async () => 42);
+    const value = get();
+    expect(value).toBeInstanceOf(Promise);
+  });
+
+  it("does not cache a sync throw - the next call retries", () => {
+    let runs = 0;
+    const get = memoize(() => {
+      runs += 1;
+      if (runs === 1) throw new Error("boom");
+      return runs;
+    });
+    expect(() => get()).toThrow("boom");
+    expect(get()).toBe(2);
+    expect(runs).toBe(2);
+  });
+
   it("single-flights concurrent async initialization", async () => {
     let runs = 0;
     const get = memoize(async () => {
@@ -67,156 +92,92 @@ describe("memoize (once)", () => {
     expect(c).toBe(1);
   });
 
-  it("returns the same rejected promise when the factory fails", async () => {
+  it("single-flights an in-flight rejection but does not cache it", async () => {
     let runs = 0;
     const get = memoize(async () => {
       runs += 1;
+      await sleep(10);
       throw new Error("boom");
     });
+    // Concurrent callers share the one in-flight promise.
     const first = get();
     const second = get();
     expect(first).toBe(second);
     await expect(first).rejects.toThrow("boom");
-    await expect(second).rejects.toThrow("boom");
     expect(runs).toBe(1);
+    // Once it has rejected, the entry is evicted so a later call retries.
+    await expect(get()).rejects.toThrow("boom");
+    expect(runs).toBe(2);
   });
 });
 
-describe("memoize (by args)", () => {
-  it("caches per argument key for sync functions", () => {
+describe("memoize (ttl)", () => {
+  it("reuses the cached value within the ttl window", async () => {
     let runs = 0;
-    const fn = memoize((n: number) => {
+    const get = memoize(() => {
       runs += 1;
-      return n * 2;
-    });
-    expect(fn(3)).toBe(6);
-    expect(fn(3)).toBe(6);
-    expect(fn(4)).toBe(8);
+      return runs;
+    }, { ttlMs: 10_000 });
+    expect(await get()).toBe(1);
+    expect(await get()).toBe(1);
+    expect(runs).toBe(1);
+  });
+
+  it("recomputes after the ttl elapses", async () => {
+    let runs = 0;
+    const get = memoize(() => {
+      runs += 1;
+      return runs;
+    }, { ttlMs: 5 });
+    expect(await get()).toBe(1);
+    await sleep(15);
+    expect(await get()).toBe(2);
     expect(runs).toBe(2);
   });
 
-  it("uses JSON.stringify for the default cache key", () => {
+  it("single-flights concurrent callers", async () => {
     let runs = 0;
-    const fn = memoize((a: number, b: number) => {
+    const get = memoize(async () => {
       runs += 1;
-      return a + b;
-    });
-    expect(fn(1, 2)).toBe(3);
-    expect(fn(1, 2)).toBe(3);
-    expect(fn(2, 1)).toBe(3);
+      await sleep(15);
+      return runs;
+    }, { ttlMs: 10_000 });
+    const [a, b, c] = await Promise.all([get(), get(), get()]);
+    expect(runs).toBe(1);
+    expect([a, b, c]).toEqual([1, 1, 1]);
+  });
+
+  it("does not cache a rejection under a ttl - a later call retries", async () => {
+    let runs = 0;
+    const get = memoize(async () => {
+      runs += 1;
+      if (runs === 1) throw new Error("boom");
+      return runs;
+    }, { ttlMs: 10_000 });
+    await expect(get()).rejects.toThrow("boom");
+    expect(await get()).toBe(2);
     expect(runs).toBe(2);
   });
 
-  it("uses a custom key function", () => {
+  it("measures the async ttl window from resolution, not creation", async () => {
     let runs = 0;
-    const fn = memoize(
-      (obj: { id: string }) => {
+    // TTL (5ms) is shorter than the in-flight time (30ms): a second call
+    // made past the TTL but before resolution must still share the one
+    // pending promise rather than kick off a duplicate fetch.
+    const get = memoize(
+      async () => {
         runs += 1;
-        return obj.id;
+        await sleep(30);
+        return runs;
       },
-      { key: (obj) => obj.id },
+      { ttlMs: 5 },
     );
-    expect(fn({ id: "a" })).toBe("a");
-    expect(fn({ id: "a" })).toBe("a");
+    const first = get();
+    await sleep(15);
+    const second = get();
+    expect(await first).toBe(1);
+    expect(await second).toBe(1);
     expect(runs).toBe(1);
-  });
-
-  it("single-flights concurrent async calls for the same key", async () => {
-    let runs = 0;
-    const fn = memoize(async (id: string) => {
-      runs += 1;
-      await new Promise((r) => setTimeout(r, 15));
-      return id;
-    });
-    const [a, b] = await Promise.all([fn("x"), fn("x")]);
-    expect(runs).toBe(1);
-    expect(a).toBe("x");
-    expect(b).toBe("x");
-  });
-
-  it("caches different keys independently for async functions", async () => {
-    let runs = 0;
-    const fn = memoize(async (id: string) => {
-      runs += 1;
-      return id;
-    });
-    expect(await fn("a")).toBe("a");
-    expect(await fn("b")).toBe("b");
-    expect(await fn("a")).toBe("a");
-    expect(runs).toBe(2);
-  });
-
-  it("retries after an async rejection for the same key", async () => {
-    let runs = 0;
-    const fn = memoize(async (fail: boolean) => {
-      runs += 1;
-      if (fail) {
-        throw new Error("fail");
-      }
-      return "ok";
-    });
-
-    await expect(fn(true)).rejects.toThrow("fail");
-    expect(runs).toBe(1);
-
-    await expect(fn(true)).rejects.toThrow("fail");
-    expect(runs).toBe(2);
-
-    expect(await fn(false)).toBe("ok");
-    expect(await fn(false)).toBe("ok");
-    expect(runs).toBe(3);
-  });
-
-  it("treats a thenable return value as async and single-flights it", async () => {
-    let runs = 0;
-    const fn = memoize((id: string) => {
-      runs += 1;
-      // Intentionally non-spec-compliant thenable (single-arg `then`,
-      // returns void) cast to `PromiseLike<string>` so we can prove
-      // `isThenable` duck-types purely on the `.then` method and routes
-      // through `Promise.resolve(...)` regardless of shape.
-      const thenable = {
-        then(onFulfilled: (value: string) => void) {
-          onFulfilled(id);
-        },
-      } as unknown as PromiseLike<string>;
-      return thenable;
-    });
-    const [a, b] = await Promise.all([fn("t"), fn("t")]);
-    expect(runs).toBe(1);
-    expect(a).toBe("t");
-    expect(b).toBe("t");
-  });
-});
-
-describe("memoized", () => {
-  it("throws when the descriptor value is not a function", () => {
-    expect(() =>
-      memoized({}, "prop", {
-        value: 42,
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      }),
-    ).toThrow("@memoized can only decorate methods");
-  });
-
-  it("memoizes a method by its arguments", () => {
-    let runs = 0;
-    const target = {
-      compute(this: unknown, n: number) {
-        runs += 1;
-        return n + 1;
-      },
-    };
-    const descriptor = Object.getOwnPropertyDescriptor(target, "compute")!;
-    memoized(target, "compute", descriptor);
-    Object.defineProperty(target, "compute", descriptor);
-
-    expect(target.compute(1)).toBe(2);
-    expect(target.compute(1)).toBe(2);
-    expect(target.compute(2)).toBe(3);
-    expect(runs).toBe(2);
   });
 });
 

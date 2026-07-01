@@ -1,19 +1,27 @@
+import { MASTRA_THREAD_TITLE_MAX } from "@dbx-tools/appkit-mastra-shared";
 import {
   Button,
+  Input,
   Spinner,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
   cn,
 } from "@databricks/appkit-ui/react";
-import { MessageSquarePlusIcon, PanelLeftIcon, Trash2Icon } from "lucide-react";
+import {
+  MessageSquarePlusIcon,
+  PanelLeftIcon,
+  PencilIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useState } from "react";
 import type { ThreadSummary } from "./types.js";
 
 // Presentational conversation list. Renders the threads a resource owns
-// so the user can switch between them, start a new one, and delete one.
-// All state is owned by the caller (the `useMastraChat` driver) and fed
-// in through props; this component only reports intent back out.
+// so the user can switch between them, start a new one, rename one, and
+// delete one. All state is owned by the caller (the `useMastraChat`
+// driver) and fed in through props; this component only reports intent
+// back out (rename is edited inline against local draft state here).
 
 /** Props for {@link ThreadSidebar}. */
 export interface ThreadSidebarProps {
@@ -29,6 +37,8 @@ export interface ThreadSidebarProps {
   onNew?: () => void;
   /** Delete a thread. Per-row trash affordance hidden when omitted. */
   onDelete?: (threadId: string) => void;
+  /** Rename a thread. Per-row edit affordance (inline text field) hidden when omitted. */
+  onRename?: (threadId: string, title: string) => void;
   /** Collapse the sidebar. Renders the hide button in the header when provided. */
   onHide?: () => void;
   /** Extra classes merged onto the sidebar root. */
@@ -39,9 +49,11 @@ export interface ThreadSidebarProps {
  * Conversation sidebar: a "New chat" button over a scrollable list of
  * the caller's threads. Each row shows the thread title (or a
  * placeholder for an as-yet-untitled new thread) and a relative
- * last-activity hint, with a two-click delete latch so a stray click
- * can't drop a conversation. Pair with {@link ThreadSidebarProps} from
- * the `useMastraChat` driver, which owns the data and selection.
+ * last-activity hint, with a hover rename affordance (inline text field,
+ * commit on Enter / blur, cancel on Escape) and a two-click delete latch
+ * so a stray click can't drop a conversation. Pair with
+ * {@link ThreadSidebarProps} from the `useMastraChat` driver, which owns
+ * the data and selection.
  */
 export const ThreadSidebar = ({
   threads,
@@ -50,12 +62,17 @@ export const ThreadSidebar = ({
   onSelect,
   onNew,
   onDelete,
+  onRename,
   onHide,
   className,
 }: ThreadSidebarProps) => {
   // Thread id armed for deletion (first trash click). A second click on
   // the same row confirms; clicking elsewhere / another row resets it.
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Thread id whose title is being edited inline, and the working draft
+  // for that row's text field. Only ever one row edits at a time.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
 
   const handleDeleteClick = (e: React.MouseEvent, threadId: string) => {
     e.stopPropagation();
@@ -66,6 +83,25 @@ export const ThreadSidebar = ({
     }
     setConfirmDeleteId(null);
     onDelete(threadId);
+  };
+
+  // Enter edit mode for a row, seeding the draft with its current title
+  // (blank for an as-yet-untitled thread). Cancels any armed delete.
+  const startEdit = (e: React.MouseEvent, thread: ThreadSummary) => {
+    e.stopPropagation();
+    setConfirmDeleteId(null);
+    setEditingId(thread.id);
+    setDraftTitle(thread.title?.trim() ?? "");
+  };
+
+  // Commit the draft, firing `onRename` only when it's non-empty and
+  // actually changed, then leave edit mode. Called on Enter and on blur.
+  const commitEdit = (threadId: string) => {
+    const title = draftTitle.trim();
+    setEditingId(null);
+    if (!onRename || !title) return;
+    const current = threads.find((t) => t.id === threadId)?.title?.trim() ?? "";
+    if (title !== current) onRename(threadId, title);
   };
 
   return (
@@ -123,6 +159,34 @@ export const ThreadSidebar = ({
             {threads.map((thread) => {
               const isActive = thread.id === activeThreadId;
               const isConfirming = confirmDeleteId === thread.id;
+              const isEditing = editingId === thread.id;
+              if (isEditing) {
+                return (
+                  <li key={thread.id}>
+                    <div className="px-2 py-1">
+                      <Input
+                        // eslint-disable-next-line jsx-a11y/no-autofocus -- focus the field the user just opened
+                        autoFocus
+                        value={draftTitle}
+                        maxLength={MASTRA_THREAD_TITLE_MAX}
+                        aria-label="Conversation name"
+                        onChange={(e) => setDraftTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            commitEdit(thread.id);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setEditingId(null);
+                          }
+                        }}
+                        onBlur={() => commitEdit(thread.id)}
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                  </li>
+                );
+              }
               return (
                 <li key={thread.id}>
                   <div
@@ -149,6 +213,26 @@ export const ThreadSidebar = ({
                         </div>
                       )}
                     </div>
+                    {onRename && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => startEdit(e, thread)}
+                            aria-label="Rename conversation"
+                            className={cn(
+                              "size-6 shrink-0",
+                              "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                            )}
+                          >
+                            <PencilIcon className="size-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Rename conversation</TooltipContent>
+                      </Tooltip>
+                    )}
                     {onDelete && (
                       <Tooltip>
                         <TooltipTrigger asChild>

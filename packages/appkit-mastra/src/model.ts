@@ -150,8 +150,8 @@ interface ChatMessage {
  *
  * Safe to call from any hot path: {@link commonUtils.memoize} ensures
  * the wrapper is installed at most once per process, so subsequent
- * calls collapse to a single cached promise even when
- * {@link buildModel} fires on every agent step.
+ * calls are a no-op even when {@link buildModel} fires on every agent
+ * step.
  */
 const setupFetchInterceptor = commonUtils.memoize((): void => {
   const log = logUtils.logger("mastra/llm");

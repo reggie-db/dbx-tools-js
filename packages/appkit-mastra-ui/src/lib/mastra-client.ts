@@ -9,6 +9,7 @@ import {
   MastraHistoryResponseSchema,
   MastraSuggestionsResponseSchema,
   MastraThreadsResponseSchema,
+  MastraUpdateThreadResponseSchema,
   ServingEndpointsResponseSchema,
   StatementDataSchema,
   THREAD_ID_HEADER,
@@ -21,6 +22,7 @@ import {
   type MastraHistoryResponse,
   type MastraThread,
   type MastraThreadsResponse,
+  type MastraUpdateThreadResponse,
   type ServingEndpointSummary,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
@@ -35,7 +37,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
  *   - Conversation streaming via the inherited
  *     `getAgent(id).stream()` (the standard Mastra agent route).
  *   - Thread history (`history` / `clearHistory`), the conversation
- *     list (`threads` / `removeThread`), the model catalogue (`models`),
+ *     list (`threads` / `removeThread` / `renameThread`), the model
+ *     catalogue (`models`),
  *     Genie starter prompts (`suggestions`), MLflow feedback logging
  *     (`feedback`), and inline embed resolution (`chart` / `statement`)
  *     over the plugin's own routes - all derived from `basePath` +
@@ -241,6 +244,33 @@ export class MastraPluginClient extends MastraClient {
   }
 
   /**
+   * Rename a single conversation thread via the plugin's own
+   * `PATCH ${basePath}/threads` route. The id travels as the
+   * thread-selection header for this one call (mirroring
+   * {@link removeThread}, so the sidebar can rename any thread without
+   * disturbing the client's currently-selected thread) and the new
+   * `title` rides in the JSON body. The server enforces ownership and
+   * echoes back the updated thread, so the caller can reflect the new
+   * title immediately. Throws on an unknown / unowned thread (HTTP 404).
+   */
+  async renameThread(
+    threadId: string,
+    title: string,
+    options: { agentId?: string; signal?: AbortSignal } = {},
+  ): Promise<MastraUpdateThreadResponse> {
+    return this.#mutateJson(
+      this.#agentScoped(MASTRA_ROUTES.threads, options.agentId),
+      "PATCH",
+      MastraUpdateThreadResponseSchema,
+      {
+        body: { title },
+        headers: { [THREAD_ID_HEADER]: threadId },
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    );
+  }
+
+  /**
    * Log user feedback for a turn to `POST ${basePath}/route/feedback`.
    * `traceId` is the `tr-<hex>` value the server sent on the stream
    * response (via `MLFLOW_TRACE_ID_HEADER`) for that assistant message;
@@ -324,15 +354,16 @@ export class MastraPluginClient extends MastraClient {
   }
 
   /**
-   * `POST` / `DELETE` + JSON-parse + schema-validate for the mutating
-   * routes (`clearHistory` / `removeThread` / `feedback`). A JSON body,
-   * when present, sets `Content-Type`; `options.headers` add one-off
-   * headers (e.g. the thread-selection header for a targeted delete)
-   * over the client's default override headers.
+   * `POST` / `DELETE` / `PATCH` + JSON-parse + schema-validate for the
+   * mutating routes (`clearHistory` / `removeThread` / `renameThread` /
+   * `feedback`). A JSON body, when present, sets `Content-Type`;
+   * `options.headers` add one-off headers (e.g. the thread-selection
+   * header for a targeted delete / rename) over the client's default
+   * override headers.
    */
   async #mutateJson<T>(
     url: string,
-    method: "POST" | "DELETE",
+    method: "POST" | "DELETE" | "PATCH",
     schema: { parse: (raw: unknown) => T },
     options: {
       body?: unknown;

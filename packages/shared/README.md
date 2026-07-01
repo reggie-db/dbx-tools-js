@@ -12,6 +12,7 @@ libraries:
 import {
   apiUtils,
   appkitUtils,
+  cloudUtils,
   commonUtils,
   httpUtils,
   logUtils,
@@ -21,11 +22,12 @@ import {
 } from "@dbx-tools/shared";
 ```
 
-> `apiUtils`, `appkitUtils`, and `projectUtils` import Node-only modules
-> (`@databricks/appkit`, `node:fs`) and are intentionally **not** re-exported
-> from the browser entry. Vite / Webpack / esbuild builds that honor the
-> `browser` condition will resolve `@dbx-tools/shared` to a barrel that
-> omits all three - import them only from server-side code.
+> `apiUtils`, `appkitUtils`, `projectUtils`, and `cloudUtils` import
+> Node-only modules (`@databricks/appkit`, `node:fs`, `node:dns`) and are
+> intentionally **not** re-exported from the browser entry. Vite / Webpack
+> / esbuild builds that honor the `browser` condition will resolve
+> `@dbx-tools/shared` to a barrel that omits them - import them only from
+> server-side code.
 
 ## `appkitUtils` - typed sibling-plugin lookup
 
@@ -75,11 +77,12 @@ app.use((req, res, next) => {
 });
 ```
 
-## `netUtils` - URL builder + path matching
+## `netUtils` - URL builder, path matching, IP / CIDR toolkit
 
-The URL helpers are pure JS and ship in the browser bundle too; the
-server entry re-exports the same surface and is where any server-only
-(node) helpers belong.
+The URL and IP helpers are pure JS and ship in the browser bundle too;
+the server entry re-exports the same surface and adds server-only (node)
+helpers: `resolveHostIps` (DNS) and `getPublicIp` (this process's
+outbound public IP).
 
 ```ts
 import { netUtils } from "@dbx-tools/shared";
@@ -95,7 +98,52 @@ netUtils.urlBuilder("https://host")!.withPathAppend("/api/", ["v2", "items"]); /
 
 // Segment-boundary prefix test (accepts any UrlLike, incl. a Request).
 netUtils.pathMatch("/api/cool?q=1", "/api"); // true
+
+// IPv4 / IPv6 parsing + CIDR membership. Addresses parse into a
+// bigint value so both families share one comparison path; `null`
+// on bad input (never throws).
+netUtils.parseIp("2001:db8::1");           // { version: 6, value: ... }
+netUtils.ipInCidr("10.1.2.3", "10.0.0.0/8"); // true
+
+// Find the first CIDR (from a pre-parsed list) that contains an IP.
+// Entries may carry side metadata, read straight off the match.
+const ranges = ["10.0.0.0/8", "192.168.0.0/16"]
+  .map(netUtils.parseCidr)
+  .filter((c): c is netUtils.Cidr => c !== null);
+netUtils.findContainingCidr("10.1.2.3", ranges)?.cidr; // "10.0.0.0/8"
+
+// Server-only: resolve a host (any UrlLike) to its IP address(es),
+// and discover this process's own outbound public IP (cached 5 min).
+await netUtils.resolveHostIps("https://example.com"); // ["93.184.216.34", ...]
+await netUtils.getPublicIp();                          // "203.0.113.7"
 ```
+
+## `cloudUtils` - cloud provider + region lookup (server only)
+
+`resolveCloudLocation` resolves any host (e.g. a Databricks workspace
+URL) to the cloud it runs in. It DNS-resolves the host, then matches the
+resolved IP against the public IP-range feeds AWS, Azure, and GCP
+publish. Each feed is cached for 24 hours (`RANGE_CACHE_TTL_MS`) at two
+layers - an on-disk copy under the OS temp dir plus an in-process
+memoized parse; a feed that fails to load is skipped rather than failing
+the whole lookup.
+
+```ts
+import { cloudUtils } from "@dbx-tools/shared";
+const { CloudProvider, resolveCloudLocation } = cloudUtils;
+
+const loc = await resolveCloudLocation(
+  "https://adb-984752964297111.11.azuredatabricks.net",
+);
+// { provider: CloudProvider.Azure, region: "eastus2",
+//   ip: "52.254.24.96", cidr: "52.254.0.0/18" }  (null if unresolved)
+```
+
+`region` is the provider-native string (`"us-east-1"` on AWS,
+`"eastus2"` on Azure, `"us-east1"` on GCP). Azure ships no stable feed
+URL, so the current `ServiceTags_Public_<date>.json` link is scraped off
+Microsoft's download page. `loadProviderRanges()` exposes the cached,
+parsed range tables for matching many IPs without a DNS step each.
 
 ## `apiUtils` - Databricks REST cancellation helpers (server only)
 
@@ -167,8 +215,12 @@ projectUtils.parseGitRemote("git@github.com:org/my-repo.git"); // "my-repo"
 ```ts
 import { commonUtils } from "@dbx-tools/shared";
 
-// Memoize by all-args; sync results cache forever, async failures bust.
-const fetchUser = commonUtils.memoize(async (id: string) => loadUser(id));
+// Run a sync/async factory once; later calls share the cached promise.
+const getClient = commonUtils.memoize(async () => buildClient());
+
+// Pass `{ ttlMs }` to expire + recompute after a window (and evict a
+// rejection so a later call retries).
+const ranges = commonUtils.memoize(fetchIpRanges, { ttlMs: 24 * 60 * 60 * 1000 });
 
 // Mint an id. With no arg, a full v4 UUID (use when global
 // uniqueness matters - cross-process / cross-storage). Pass
@@ -202,8 +254,6 @@ for await (const status of commonUtils.poll(async ({ signal }) => fetchStatus(si
 log.warn("write:error", { error: commonUtils.errorMessage(err) });
 ```
 
-`@memoized` is a TC39 stage-1 method decorator built on the same
-`memoize` (requires `experimentalDecorators: true` in `tsconfig.json`).
 `fnvHash` is intentionally **not** cryptographically secure - use it for
 keys and slugs, never for tokens or signatures.
 

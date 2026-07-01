@@ -1,12 +1,19 @@
 {
   "name": "@dbx-tools/shared",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
     "fast-deep-equal": "catalog:"
   },
+  "devDependencies": {
+    "commander": "catalog:"
+  },
   "exports": {
     ".": {
+      "source": {
+        "browser": "./src/index.client.ts",
+        "default": "./src/index.ts"
+      },
       "browser": {
         "types": "./dist/index.client.d.ts",
         "default": "./dist/index.client.js"
@@ -14,10 +21,6 @@
       "import": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
-      },
-      "source": {
-        "browser": "./src/index.client.ts",
-        "default": "./src/index.ts"
       },
       "default": {
         "types": "./dist/index.d.ts",

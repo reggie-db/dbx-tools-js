@@ -66,8 +66,9 @@ doesn't register. The two types it ships:
   markers to inline table data.
 
 `MastraPluginClient` exposes `chart(id)` / `statement(id)` for these,
-plus `history()` / `clearHistory()`, `threads()` / `removeThread()`,
-`setThreadId()`, `models()`, `suggestions()`, and `feedback()`; see
+plus `history()` / `clearHistory()`, `threads()` / `removeThread()` /
+`renameThread()`, `setThreadId()`, `models()`, `suggestions()`, and
+`feedback()`; see
 `@dbx-tools/appkit-mastra-ui`.
 
 ## Wire-format types

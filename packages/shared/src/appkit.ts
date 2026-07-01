@@ -151,22 +151,22 @@ export function require<F extends PluginDataFactory>(
   throw new Error(`${prefix}required plugin not registered: ${registeredName}`);
 }
 
-export function isInitialized(): boolean {
+export function tryGetExecutionContext(): ExecutionContextLike | undefined {
   try {
     const ctx = getExecutionContext();
     if (ctx?.client) {
-      return true;
+      return ctx;
     }
   } catch (error) {
     if (!(error instanceof InitializationError)) {
       throw error;
     }
   }
-  return false;
+  return undefined;
 }
 
 export async function ensureInitialized() {
-  if (!isInitialized()) {
+  if (!tryGetExecutionContext()) {
     await createApp({
       plugins: [],
     });

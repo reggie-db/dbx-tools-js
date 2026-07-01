@@ -89,6 +89,7 @@ export const ChatView = ({
   onSelectThread,
   onNewThread,
   onDeleteThread,
+  onRenameThread,
   sidebarOpen: sidebarOpenProp,
   onToggleSidebar,
   onExportConversation,
@@ -290,6 +291,7 @@ export const ChatView = ({
             onSelect={(id) => onSelectThread?.(id)}
             {...(onNewThread ? { onNew: onNewThread } : {})}
             {...(onDeleteThread ? { onDelete: onDeleteThread } : {})}
+            {...(onRenameThread ? { onRename: onRenameThread } : {})}
             onHide={toggleSidebar}
           />
         )}

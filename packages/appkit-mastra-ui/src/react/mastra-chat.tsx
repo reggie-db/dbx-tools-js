@@ -287,6 +287,13 @@ export const useMastraChat = (
   const [optimisticThreads, setOptimisticThreads] = useState<
     Record<string, ThreadSummary>
   >({});
+  // Optimistic title overrides for threads the user just renamed, keyed
+  // by thread id. Applied over the server rows in `sidebarThreads` so the
+  // new name shows instantly; each entry is dropped once the server list
+  // reports the matching title (or the rename request fails).
+  const [renamedThreads, setRenamedThreads] = useState<Record<string, string>>(
+    {},
+  );
   // Surface the active thread in the sidebar immediately (called when its
   // first message is sent). Upserts an untitled row stamped "now" so it
   // sorts to the top; the server row replaces it on the next refresh.
@@ -927,6 +934,42 @@ export const useMastraChat = (
     [mastraClient, agentId, activeThreadId, refreshThreads],
   );
 
+  /**
+   * Rename a conversation. Optimistically overlays the new title so the
+   * sidebar updates instantly (both the server-row overlay and any
+   * still-pending optimistic row for a brand-new thread), persists it,
+   * then refreshes the list. On failure the overlay is dropped so the
+   * real (unchanged) title reappears.
+   */
+  const renameThread = useCallback(
+    async (threadId: string, rawTitle: string) => {
+      const title = rawTitle.trim();
+      if (!title) return;
+      setRenamedThreads((prev) => ({ ...prev, [threadId]: title }));
+      setOptimisticThreads((prev) =>
+        prev[threadId]
+          ? { ...prev, [threadId]: { ...prev[threadId], id: threadId, title } }
+          : prev,
+      );
+      try {
+        await mastraClient.renameThread(threadId, title, { agentId });
+        log.info("thread renamed", { threadId });
+      } catch (error) {
+        log.error("thread rename error", {
+          threadId,
+          error: commonUtils.errorMessage(error),
+        });
+        setRenamedThreads((prev) => {
+          if (!(threadId in prev)) return prev;
+          const { [threadId]: _drop, ...rest } = prev;
+          return rest;
+        });
+      }
+      refreshThreads();
+    },
+    [mastraClient, agentId, refreshThreads],
+  );
+
   const regenerate = useCallback(() => {
     if (!lastUserTextRef.current) return;
     // Drop the last assistant message before regenerating so the new
@@ -1153,13 +1196,16 @@ export const useMastraChat = (
   // the server list, newest first, dropping any optimistic entry the
   // server already returns so a thread is never listed twice.
   const sidebarThreads = useMemo<ThreadSummary[]>(() => {
-    const server = threads.map(toThreadSummary);
+    const server = threads.map(toThreadSummary).map((t) => {
+      const renamed = renamedThreads[t.id];
+      return renamed !== undefined ? { ...t, title: renamed } : t;
+    });
     const serverIds = new Set(server.map((t) => t.id));
     const pending = Object.values(optimisticThreads)
       .filter((t) => !serverIds.has(t.id))
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
     return [...pending, ...server];
-  }, [threads, optimisticThreads]);
+  }, [threads, optimisticThreads, renamedThreads]);
   // Once the server list includes a thread we were tracking optimistically,
   // drop the optimistic copy so the map doesn't grow without bound.
   useEffect(() => {
@@ -1172,6 +1218,20 @@ export const useMastraChat = (
       return next;
     });
   }, [threads, optimisticThreads]);
+  // Drop a rename overlay once the server list reports the new title, so
+  // the map doesn't grow without bound and later server-side title
+  // changes aren't masked by a stale override.
+  useEffect(() => {
+    const settled = threads
+      .filter((t) => renamedThreads[t.id] !== undefined && t.title === renamedThreads[t.id])
+      .map((t) => t.id);
+    if (settled.length === 0) return;
+    setRenamedThreads((prev) => {
+      const next = { ...prev };
+      for (const id of settled) delete next[id];
+      return next;
+    });
+  }, [threads, renamedThreads]);
 
   return {
     messages,
@@ -1206,6 +1266,7 @@ export const useMastraChat = (
           onSelectThread: selectThread,
           onNewThread: newThread,
           onDeleteThread: deleteThread,
+          onRenameThread: renameThread,
           // Persisted sidebar visibility, controlled from the driver so
           // the show/hide choice survives reloads.
           sidebarOpen,

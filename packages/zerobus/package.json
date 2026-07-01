@@ -1,0 +1,12 @@
+{
+  "name": "@dbx-tools/zerobus",
+  "version": "0.1.76",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@databricks/zerobus-ingest-sdk": "^1.1.0",
+    "@dbx-tools/shared": "workspace:*"
+  }
+}

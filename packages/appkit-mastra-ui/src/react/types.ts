@@ -196,6 +196,13 @@ export type ChatViewProps = {
    */
   onDeleteThread?: (threadId: string) => void;
   /**
+   * Rename a conversation by id. The handler persists the new title
+   * server-side and updates the list (optimistically, so the new name
+   * shows immediately). When provided, each sidebar row shows a rename
+   * affordance that swaps the title into an inline text field.
+   */
+  onRenameThread?: (threadId: string, title: string) => void;
+  /**
    * Controlled open/closed state for the conversation sidebar. When
    * omitted the view manages its own (session-only) open state; pass
    * this together with {@link onToggleSidebar} to control and persist
