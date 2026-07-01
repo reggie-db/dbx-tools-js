@@ -22,7 +22,7 @@ import { trace } from "@opentelemetry/api";
 import type express from "express";
 import { randomUUID } from "node:crypto";
 
-import { mlflowEnabled } from "./mlflow.js";
+import { resolveFeedbackEnabled } from "./mlflow.js";
 
 import {
   MASTRA_REQUEST_ID_KEY,
@@ -39,11 +39,6 @@ import {
 } from "./serving.js";
 
 /**
- * `@mastra/express` subclass that stamps `RequestContext` with the
- * AppKit user, resource id, and a thread id backed by an HTTP-only
- * session cookie (`appkit_<plugin-name>_session_id`).
- */
-/**
  * OpenTelemetry's sentinel for "no valid trace" - 32 zero hex chars.
  * `trace.getActiveSpan()` returns a non-recording span with this id
  * when no SDK is registered, which must never be surfaced as a trace to
@@ -51,12 +46,16 @@ import {
  */
 const INVALID_TRACE_ID = "0".repeat(32);
 
+/**
+ * `@mastra/express` subclass that stamps `RequestContext` with the
+ * AppKit user, resource id, and a thread id backed by an HTTP-only
+ * session cookie (`appkit_<plugin-name>_session_id`).
+ */
 export class MastraServer extends MastraServerExpress {
   private log: logUtils.Logger;
   /**
-   * Whether to stamp the MLflow trace-id header on responses. Mirrors
-   * the plugin's feedback gate: the explicit `config.feedback` override
-   * wins, else auto-detect from the MLflow tracing env.
+   * Whether to stamp the MLflow trace-id header on responses. Shares the
+   * plugin's feedback gate via {@link resolveFeedbackEnabled}.
    */
   private feedbackEnabled: boolean;
 
@@ -66,7 +65,7 @@ export class MastraServer extends MastraServerExpress {
   ) {
     super(...args);
     this.log = logUtils.logger(config);
-    this.feedbackEnabled = config.feedback ?? mlflowEnabled();
+    this.feedbackEnabled = resolveFeedbackEnabled(config.feedback);
   }
 
   override registerAuthMiddleware(): void {
@@ -253,6 +252,54 @@ export class MastraServer extends MastraServerExpress {
       if (override) requestContext.set(MASTRA_MODEL_OVERRIDE_KEY, override);
     }
   }
+}
+
+/** Inputs for {@link isMastraRequestAllowed}. */
+export interface MastraApiGateOptions {
+  /** `config.apiAccess`; `"full"` short-circuits to allow everything. */
+  access: "scoped" | "full";
+  /** Whether the MCP transport is mounted (so `/mcp/*` is legitimate). */
+  mcpEnabled: boolean;
+}
+
+/**
+ * Mount-relative agent inference paths (`/agents/:id/<verb>...`). Matched
+ * by prefix on the verb so future variants (`streamVNext`, `stream/vnext`,
+ * `generateVNext`) stay covered without a code change. These are the only
+ * *writes* the browser client is allowed to make against stock Mastra.
+ */
+const AGENT_INFERENCE = /^\/agents\/[^/]+\/(stream|generate|network)/i;
+
+/** Mount-relative read-only agent metadata (`/agents`, `/agents/:id`). */
+const AGENT_METADATA = /^\/agents(\/[^/]+)?$/;
+
+/**
+ * Whether a request to the stock `@mastra/express` sub-app should be
+ * dispatched, given the configured {@link MastraApiGateOptions.access}.
+ *
+ * `path` is mount-relative (what the plugin's catch-all sees, e.g.
+ * `/agents/x/stream`, `/route/history/x`, `/mcp/...`). In `"scoped"`
+ * mode the allowlist is deliberately tight - the chat client only ever
+ * needs agent inference, read-only agent metadata, this plugin's own
+ * OBO/resource-scoped `/route/*` routes, and (when enabled) MCP - so the
+ * whole admin / mutating / bulk-export surface Mastra also exposes is
+ * denied by default rather than enumerated.
+ */
+export function isMastraRequestAllowed(
+  method: string,
+  path: string,
+  opts: MastraApiGateOptions,
+): boolean {
+  if (opts.access === "full") return true;
+  const p = path.startsWith("/") ? path : `/${path}`;
+  // This plugin's own custom routes are individually OBO- and
+  // resource-scoped (see history.ts / threads.ts), so every method is safe.
+  if (p === "/route" || p.startsWith("/route/")) return true;
+  if (opts.mcpEnabled && (p === "/mcp" || p.startsWith("/mcp/"))) return true;
+  const m = method.toUpperCase();
+  if (m === "POST" && AGENT_INFERENCE.test(p)) return true;
+  if (m === "GET" && AGENT_METADATA.test(p)) return true;
+  return false;
 }
 
 /**

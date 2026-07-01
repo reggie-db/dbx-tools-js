@@ -3,8 +3,10 @@
  * host and a fresh bearer header off an OBO-scoped `WorkspaceClient`
  * (`client.config.getHost()` + `authenticate()`), then issues a plain
  * `fetch`. Used by modules that hit REST surfaces without a typed SDK
- * method (e.g. the MLflow assessments API); returns the raw `Response`
- * so callers decide how to treat status codes.
+ * method (e.g. the MLflow assessments API and the managed-memory Beta
+ * API); returns the raw `Response` so callers decide how to treat
+ * status codes. Also carries the defensive `Response` body readers those
+ * callers share.
  */
 
 import type { appkitUtils } from "@dbx-tools/shared";
@@ -44,4 +46,24 @@ export async function databricksFetch(
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     ...(init.signal ? { signal: init.signal } : {}),
   });
+}
+
+/** Read a response body as text, swallowing read errors (returns `""`). */
+export async function readResponseText(res: Response): Promise<string> {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+/** Parse a response body as JSON, returning `{}` on empty / invalid bodies. */
+export async function readResponseJson(res: Response): Promise<unknown> {
+  const text = await readResponseText(res);
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
 }

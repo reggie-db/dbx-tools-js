@@ -9,23 +9,15 @@
  * chat-only: embedding endpoints surface only when `modelClass` is
  * explicitly {@link ModelClass.Embedding}.
  *
- * Ranking entry points (return a ranked list):
- *
- *   - {@link rankModels} is the pure ranker over an endpoint list you
- *     already hold. A chat `modelClass` acts as a ceiling: only that
- *     band and the less-capable chat bands below it are eligible (see
- *     {@link classesAtOrBelow}), so a `chat-balanced` ask can fall to
- *     `chat-fast` but never escalate to `chat-thinking`.
- *   - {@link searchModels} is the I/O wrapper: hand it a
- *     `WorkspaceClient` and it lists `/serving-endpoints` (cached) then
- *     ranks in one step.
- *
- * Single-selection entry points (return one id + how it was reached):
- *
- *   - {@link resolveModel} is the pure selector; it delegates to
- *     {@link rankModels} with `limit: 1` and adds the operator-pinned
- *     fallback / static-floor safety net.
- *   - {@link selectModel} is the I/O wrapper over {@link resolveModel}.
+ * Two shapes of selection, each in a pure form (over an endpoint list
+ * the caller already holds) and an I/O wrapper (that lists
+ * `/serving-endpoints` first): ranking, which returns a match- then
+ * class-ordered list, and single-selection, which collapses to one id
+ * plus how it was reached and layers the operator-pinned fallback /
+ * static-floor safety net on top. A chat `modelClass` acts as a
+ * ceiling: that band and the less-capable chat bands below it are
+ * eligible (see {@link classesAtOrBelow}), so a `chat-balanced` ask can
+ * fall to `chat-fast` but never escalate to `chat-thinking`.
  */
 
 import {
@@ -59,7 +51,7 @@ export interface ResolveModelInput {
    * canonical 404 if it doesn't exist).
    */
   fuzzy?: boolean;
-  /** Fuse.js threshold forwarded to {@link resolveModelId}. */
+  /** Fuse.js threshold forwarded to the fuzzy `search` match ({@link searchServingEndpoints}). */
   threshold?: number;
   /**
    * Chat capability class to resolve when no `explicit` id is given.

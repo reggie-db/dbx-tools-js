@@ -24,6 +24,7 @@ import {
   type Chart,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
+import { stringUtils } from "@dbx-tools/shared";
 import type { UIMessage } from "ai";
 import * as echarts from "echarts";
 import { marked } from "marked";
@@ -371,23 +372,14 @@ function mdCell(value: string): string {
 
 /** Title-case a snake/kebab/camel column name for a header label. */
 function humanizeHeader(name: string): string {
-  return name
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  const tokens = [
+    ...stringUtils.tokenizeWithOptions({ lowerCase: true, capitalize: true }, name),
+  ];
+  return tokens.length > 0 ? tokens.join(" ") : name;
 }
 
-/** Escape the five HTML-significant characters. */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+/** Escape HTML-significant characters (from the shared string utils). */
+const escapeHtml = stringUtils.escapeHtml;
 
 /** Turn a title into a safe, lowercase filename stem. */
 function slugify(value: string): string {
@@ -414,7 +406,7 @@ function downloadTextFile(filename: string, content: string, mime: string): void
 /** Placeholder shown in the print tab while embeds resolve. */
 const PREPARING_HTML =
   '<!doctype html><html><head><meta charset="utf-8"><title>Preparing export...</title>' +
-  '<style>body{font:14px system-ui,sans-serif;color:#475569;display:flex;' +
+  "<style>body{font:14px system-ui,sans-serif;color:#475569;display:flex;" +
   "height:100vh;margin:0;align-items:center;justify-content:center}</style></head>" +
   "<body>Preparing export...</body></html>";
 

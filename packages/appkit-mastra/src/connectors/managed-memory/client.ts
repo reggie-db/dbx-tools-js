@@ -1,20 +1,19 @@
 /**
  * Thin REST client over the Databricks Unity Catalog Managed Agent
  * Memory API (Beta). There is no TS SDK for memory-stores yet, so this
- * mirrors the auth pattern `model.ts` uses for raw serving calls: pull
- * the workspace host and a fresh bearer header off the OBO-scoped
- * `WorkspaceClient` (`client.config.getHost()` + `authenticate()`), then
- * issue a plain `fetch`. All calls run as whatever identity the caller's
- * client carries - the per-request OBO user for tools / recall, the
- * service principal for setup-time probes.
+ * issues authenticated requests through the shared {@link databricksFetch}
+ * primitive (`rest.ts`) as whatever identity the caller's client carries
+ * - the per-request OBO user for tools / recall, the service principal
+ * for setup-time probes.
  *
  * Responses are parsed defensively: the Beta wire shape may still drift,
  * so the search parser tolerates missing / renamed entry fields and the
  * store probe maps a 404 to `null` rather than throwing.
  */
 
-import type { appkitUtils } from "@dbx-tools/shared";
+import { stringUtils, type appkitUtils } from "@dbx-tools/shared";
 
+import { databricksFetch, readResponseJson, readResponseText } from "../../rest.js";
 import type { MemoryEntry } from "./types.js";
 
 /** Base path for the Unity Catalog memory-stores REST surface. */
@@ -64,29 +63,6 @@ export function parseStoreName(fullName: string): StoreName {
 }
 
 /**
- * Resolve the workspace host and an authenticated header set off the
- * client, then issue a `fetch`. Returns the raw `Response` so callers
- * decide how to handle status codes (the store probe wants the 404, the
- * mutating calls want a throw).
- */
-async function rawFetch(
-  client: WorkspaceClient,
-  path: string,
-  init: { method: string; body?: unknown; signal?: AbortSignal },
-): Promise<Response> {
-  const host = (await client.config.getHost()).toString();
-  const headers = new Headers({ "Content-Type": "application/json" });
-  await client.config.authenticate(headers);
-  const url = new URL(path, host).toString();
-  return fetch(url, {
-    method: init.method,
-    headers,
-    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    ...(init.signal ? { signal: init.signal } : {}),
-  });
-}
-
-/**
  * Issue a request and parse the JSON body, throwing
  * {@link ManagedMemoryError} on any non-2xx status. Used by the calls
  * where anything but success is a real error (create / write / search).
@@ -96,11 +72,15 @@ async function requestJson(
   path: string,
   init: { method: string; body?: unknown; signal?: AbortSignal },
 ): Promise<unknown> {
-  const res = await rawFetch(client, path, init);
+  const res = await databricksFetch(client, path, init);
   if (!res.ok) {
-    throw new ManagedMemoryError(res.status, res.statusText, await safeText(res));
+    throw new ManagedMemoryError(
+      res.status,
+      res.statusText,
+      await readResponseText(res),
+    );
   }
-  return safeJson(res);
+  return readResponseJson(res);
 }
 
 /**
@@ -114,15 +94,19 @@ export async function getStore(
   fullName: string,
   signal?: AbortSignal,
 ): Promise<unknown | null> {
-  const res = await rawFetch(client, `${MEMORY_STORES_PATH}/${fullName}`, {
+  const res = await databricksFetch(client, `${MEMORY_STORES_PATH}/${fullName}`, {
     method: "GET",
     ...(signal ? { signal } : {}),
   });
   if (res.status === 404) return null;
   if (!res.ok) {
-    throw new ManagedMemoryError(res.status, res.statusText, await safeText(res));
+    throw new ManagedMemoryError(
+      res.status,
+      res.statusText,
+      await readResponseText(res),
+    );
   }
-  return safeJson(res);
+  return readResponseJson(res);
 }
 
 /**
@@ -218,10 +202,14 @@ function parseEntries(body: unknown): MemoryEntry[] {
   for (const raw of list) {
     if (!raw || typeof raw !== "object") continue;
     const obj = raw as Record<string, unknown>;
-    const contents = firstString(obj["contents"], obj["content"], obj["text"]);
+    const contents = stringUtils.firstNonEmpty([
+      obj["contents"],
+      obj["content"],
+      obj["text"],
+    ]);
     if (!contents) continue;
-    const path = firstString(obj["path"]);
-    const description = firstString(obj["description"], obj["summary"]);
+    const path = stringUtils.firstNonEmpty(obj["path"]);
+    const description = stringUtils.firstNonEmpty([obj["description"], obj["summary"]]);
     const score =
       typeof obj["score"] === "number" ? (obj["score"] as number) : undefined;
     out.push({
@@ -232,32 +220,4 @@ function parseEntries(body: unknown): MemoryEntry[] {
     });
   }
   return out;
-}
-
-/** Return the first argument that is a non-empty string, else undefined. */
-function firstString(...values: unknown[]): string | undefined {
-  for (const v of values) {
-    if (typeof v === "string" && v.trim() !== "") return v;
-  }
-  return undefined;
-}
-
-/** Parse a response body as JSON, returning `{}` on empty / invalid bodies. */
-async function safeJson(res: Response): Promise<unknown> {
-  const text = await safeText(res);
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {};
-  }
-}
-
-/** Read a response body as text, swallowing read errors. */
-async function safeText(res: Response): Promise<string> {
-  try {
-    return await res.text();
-  } catch {
-    return "";
-  }
 }

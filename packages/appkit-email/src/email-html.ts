@@ -13,21 +13,15 @@
  * so a browser and an inbox show the same thing.
  */
 
+import { stringUtils } from "@dbx-tools/shared";
 import juice from "juice";
 import { markdownToHtml } from "./markdown.js";
 
 /** Accent color for the header band and links. */
 const ACCENT = "#0b6bcb";
 
-/** Escape the five characters that matter inside HTML text / attributes. */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+/** Escape HTML-significant characters (re-exported from `@dbx-tools/shared`). */
+export const escapeHtml = stringUtils.escapeHtml;
 
 /**
  * Content stylesheet inlined onto the markdown body (juice maps these

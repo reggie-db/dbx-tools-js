@@ -115,6 +115,32 @@ The headless driver exposes `onExportConversation(format)` and
 `enableExport` is set; the underlying `exportChat(...)` helper and the
 `ExportMenu` component are exported for custom wiring.
 
+### Feedback (MLflow)
+
+When the plugin has MLflow feedback enabled (see
+[`@dbx-tools/appkit-mastra`](../appkit-mastra) - it publishes
+`clientConfig().feedbackEnabled`), each assistant bubble gets thumbs
+up / down controls and a comment popover. A rating / comment is logged
+as a HUMAN assessment on that turn's MLflow trace, attributed to the
+signed-in user.
+
+Feedback **defaults to `enableExport`'s value** (rating a turn pairs
+naturally with exporting it) and can be forced independently with
+`enableFeedback`:
+
+```tsx
+<MastraChat enableFeedback />          {/* force on */}
+<MastraChat enableExport enableFeedback={false} />  {/* export, no feedback */}
+```
+
+The controls only render for a turn once the client has captured that
+turn's `tr-<hex>` trace id from the stream response, and only when the
+server reports `feedbackEnabled` - so they degrade to nothing when
+tracing is off. The headless driver exposes `feedbackByMessage` and
+`onFeedback(message, submission)` on the `useMastraChat` prop bag when
+feedback is available; `MastraPluginClient.feedback(...)` is the
+underlying call.
+
 ### Starter suggestions
 
 The empty state carries **no built-in example prompts**. When the agent
@@ -150,10 +176,10 @@ For lower-level access, `useMastraClient()` returns a
 `MastraPluginClient` (a `@mastra/client-js` `MastraClient` subclass)
 that streams turns via `getAgent(id).stream()` and adds `history()` /
 `clearHistory()`, `threads()` / `removeThread()` / `setThreadId()`,
-`models()`, `suggestions()`, and `chart()` / `statement()` over the
-plugin's own routes. `useMastraModels()`, `useMastraSuggestions()`, and
-`useMastraThreads()` are thin hooks over the catalogue, Genie starter
-questions, and the conversation list.
+`models()`, `suggestions()`, `feedback()`, and `chart()` /
+`statement()` over the plugin's own routes. `useMastraModels()`,
+`useMastraSuggestions()`, and `useMastraThreads()` are thin hooks over
+the catalogue, Genie starter questions, and the conversation list.
 
 `ChatView` itself shows no suggestions unless you pass them (it has no
 built-in defaults); `useMastraSuggestions()` resolves the agent's Genie
@@ -185,3 +211,5 @@ space starter questions, or an empty list when none are configured.
 - Chat export (opt-in via `enableExport`): whole-conversation and
   per-message export to PDF (browser print) or Markdown, with charts
   (inline SVG) and data tables inlined so the export is self-contained.
+- Per-turn MLflow feedback (thumbs + comment) when the plugin enables it;
+  defaults to `enableExport`, overridable with `enableFeedback`.

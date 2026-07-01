@@ -1,3 +1,4 @@
+import { stringUtils } from "@dbx-tools/shared";
 import {
   createHighlighter,
   type BundledLanguage,
@@ -59,16 +60,8 @@ function highlightTokens(h: Highlighter, code: string, language: BundledLanguage
   return { tokens, fg, bg, rootStyle };
 }
 
-const _htmlEscapes: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-};
-
-/** Escape the three characters that matter inside `<pre><code>` HTML. */
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>]/g, (char) => _htmlEscapes[char] ?? char);
-}
+/** Escape HTML-significant characters (from the shared string utils). */
+const escapeHtml = stringUtils.escapeHtml;
 
 /**
  * Highlight `code` into minimal inline HTML: one colored `<span>` per

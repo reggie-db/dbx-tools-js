@@ -26,6 +26,6 @@ export {
 } from "./serving.js";
 export {
   buildSummarizeTool,
-  type SummarizeOptions,
   summarizeText,
+  type SummarizeOptions,
 } from "./summarize.js";

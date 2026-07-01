@@ -201,6 +201,22 @@ export function firstNonEmpty(value: unknown): string | null {
 }
 
 /**
+ * Escape the five characters significant in HTML text and
+ * double-quoted attribute values (`&`, `<`, `>`, `"`, `'`) so an
+ * untrusted string can be interpolated into markup without breaking
+ * out of its context. `&` is replaced first so ampersands introduced
+ * by the later replacements aren't double-escaped.
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
  * Slugify `value` (using the standard {@link toIdentifierWithOptions}
  * tokenizer + delimiter rules) and **always** suffix a short
  * deterministic hash. Use when you need a stable, slugified id that
@@ -292,8 +308,8 @@ type ListKind = (typeof LIST_KEYS)[number];
  * lines, so callers can write multi-line template literals indented
  * naturally in source without leaking that indentation into the
  * consumer-facing output. Plain-string inputs flow through unchanged
- * apart from the same normalization pass, so the helper is a drop-in
- * replacement for the prior tagged-template form:
+ * apart from the same normalization pass, so a single multi-line
+ * template literal works directly:
  *
  * ```ts
  * toDescription(`

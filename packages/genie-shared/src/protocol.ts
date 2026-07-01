@@ -507,8 +507,9 @@ export type ResultEvent = z.infer<typeof ResultEventSchema>;
  *
  * Stream order per turn:
  *
- *   1. `question` (synchronous, before the first SDK call)
- *      carrying the prompt this turn sent to Genie.
+ *   1. `question`, emitted with the first `message` yield (deferred so
+ *      the assigned `message_id` is available), carrying the prompt
+ *      this turn sent to Genie.
  *   2. `message` for every poll yield (raw `GenieMessage` on
  *      `event.message`).
  *   3. Any derived events the snapshot diff produced (`status`,

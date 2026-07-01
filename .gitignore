@@ -1,5 +1,8 @@
 node_modules
 
+# macOS Finder metadata - never belongs in the tree.
+.DS_Store
+
 # Build output. The bundler (tsdown) emits each publishable package's
 # JS + .d.ts into `<pkg>/dist`; the editor/typecheck program and the
 # IDE watchers (see .vscode/settings.json) exclude it.

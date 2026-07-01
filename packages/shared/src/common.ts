@@ -400,6 +400,17 @@ export function errorMessage(value: unknown): string {
 }
 
 /**
+ * Normalize any thrown value into an `Error`. Returns `value`
+ * unchanged when it already is an `Error`, otherwise wraps its
+ * {@link errorMessage} in a fresh `Error`. Use when a consumer needs a
+ * real `Error` object (React error state, `reject`, rethrow) rather
+ * than just a printable string.
+ */
+export function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(errorMessage(value));
+}
+
+/**
  * Short, deterministic FNV-1a hash over one or more values.
  * Wraps {@link fnvHashWithOptions} with all defaults: 6-char
  * Crockford-style base-32 output (digits + lowercase, minus

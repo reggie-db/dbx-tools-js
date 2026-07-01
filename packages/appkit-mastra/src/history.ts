@@ -32,6 +32,8 @@ import {
 import type { ContextWithMastra } from "@mastra/core/server";
 import { registerApiRoute } from "@mastra/core/server";
 
+import { clampPerPage, parseIntParam } from "./pagination.js";
+
 const log = logUtils.logger("mastra/history");
 
 /** Default history page size; matches the Mastra storage default. */
@@ -68,7 +70,10 @@ export interface LoadHistoryOptions {
 export async function loadHistory(
   opts: LoadHistoryOptions,
 ): Promise<MastraHistoryResponse> {
-  const perPage = clampPerPage(opts.perPage);
+  const perPage = clampPerPage(opts.perPage, {
+    fallback: DEFAULT_PER_PAGE,
+    max: MAX_PER_PAGE,
+  });
   const page = Math.max(0, Math.trunc(opts.page ?? 0));
   const memory = await opts.agent.getMemory();
   if (!memory) {
@@ -278,14 +283,6 @@ export function historyRoute(options: HistoryRouteOptions) {
   ];
 }
 
-/** Coerce / clamp `perPage`; falls back to the page-size default. */
-function clampPerPage(value: number | undefined): number {
-  if (value === undefined || Number.isNaN(value)) return DEFAULT_PER_PAGE;
-  const n = Math.trunc(value);
-  if (n <= 0) return DEFAULT_PER_PAGE;
-  return Math.min(n, MAX_PER_PAGE);
-}
-
 /**
  * Sort messages oldest-first by `createdAt`, falling back to whatever
  * order the storage returned them in. The native `recall` call honors
@@ -307,16 +304,4 @@ function toEpoch(value: unknown): number {
     return Number.isNaN(parsed) ? 0 : parsed;
   }
   return 0;
-}
-
-/**
- * Coerce a Hono query value into a non-negative integer. Returns
- * `undefined` for empty / non-numeric / negative inputs so
- * {@link loadHistory} can apply its built-in defaults.
- */
-function parseIntParam(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return undefined;
-  return Math.trunc(n);
 }

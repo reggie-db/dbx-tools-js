@@ -31,6 +31,8 @@ import {
 import type { ContextWithMastra } from "@mastra/core/server";
 import { registerApiRoute } from "@mastra/core/server";
 
+import { clampPerPage, parseIntParam } from "./pagination.js";
+
 const log = logUtils.logger("mastra/threads");
 
 /** Default threads page size. */
@@ -58,7 +60,10 @@ export interface ListThreadsOptions {
 export async function listThreads(
   opts: ListThreadsOptions,
 ): Promise<MastraThreadsResponse> {
-  const perPage = clampPerPage(opts.perPage);
+  const perPage = clampPerPage(opts.perPage, {
+    fallback: DEFAULT_PER_PAGE,
+    max: MAX_PER_PAGE,
+  });
   const page = Math.max(0, Math.trunc(opts.page ?? 0));
   const memory = await opts.agent.getMemory();
   if (!memory) {
@@ -254,24 +259,4 @@ function toIso(value: Date | string | number): string {
   return Number.isNaN(parsed.getTime())
     ? new Date(0).toISOString()
     : parsed.toISOString();
-}
-
-/** Coerce / clamp `perPage`; falls back to the page-size default. */
-function clampPerPage(value: number | undefined): number {
-  if (value === undefined || Number.isNaN(value)) return DEFAULT_PER_PAGE;
-  const n = Math.trunc(value);
-  if (n <= 0) return DEFAULT_PER_PAGE;
-  return Math.min(n, MAX_PER_PAGE);
-}
-
-/**
- * Coerce a Hono query value into a non-negative integer. Returns
- * `undefined` for empty / non-numeric / negative inputs so
- * {@link listThreads} can apply its built-in defaults.
- */
-function parseIntParam(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return undefined;
-  return Math.trunc(n);
 }

@@ -14,7 +14,7 @@
 
 import { WorkspaceClient } from "@databricks/sdk-experimental";
 import { GenieSpaceSchema, type GenieSpace } from "@dbx-tools/genie-shared";
-import { apiUtils, commonUtils, logUtils } from "@dbx-tools/shared";
+import { apiUtils, commonUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 
 const log = logUtils.logger("genie/space");
 
@@ -78,20 +78,6 @@ interface SerializedSampleQuestion {
   question?: unknown;
 }
 
-/** Pull the first non-empty string out of a `question` field (string | string[]). */
-function questionText(question: unknown): string | undefined {
-  if (typeof question === "string") {
-    const trimmed = question.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-  if (Array.isArray(question)) {
-    for (const part of question) {
-      if (typeof part === "string" && part.trim().length > 0) return part.trim();
-    }
-  }
-  return undefined;
-}
-
 /**
  * Extract the curated starter questions an author configured on a
  * Genie space. Reads `serialized_space -> config.sample_questions[*]
@@ -121,7 +107,7 @@ export function genieSampleQuestions(space: GenieSpace): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const entry of sampleQuestions as SerializedSampleQuestion[]) {
-    const text = questionText(entry?.question);
+    const text = stringUtils.firstNonEmpty(entry?.question);
     if (!text || seen.has(text)) continue;
     seen.add(text);
     out.push(text);

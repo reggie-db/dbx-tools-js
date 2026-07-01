@@ -24,6 +24,7 @@ import {
   type ServingEndpointSummary,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
+import { commonUtils } from "@dbx-tools/shared";
 import { MastraClient } from "@mastra/client-js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -33,10 +34,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
  *
  *   - Conversation streaming via the inherited
  *     `getAgent(id).stream()` (the standard Mastra agent route).
- *   - Thread history (`history` / `clearHistory`), the model catalogue
- *     (`models`), Genie starter prompts (`suggestions`), and inline
- *     embed resolution (`chart` / `statement`) over the plugin's own
- *     routes - all derived from `basePath` + {@link MASTRA_ROUTES}.
+ *   - Thread history (`history` / `clearHistory`), the conversation
+ *     list (`threads` / `removeThread`), the model catalogue (`models`),
+ *     Genie starter prompts (`suggestions`), MLflow feedback logging
+ *     (`feedback`), and inline embed resolution (`chart` / `statement`)
+ *     over the plugin's own routes - all derived from `basePath` +
+ *     {@link MASTRA_ROUTES}.
  *
  * Built from the plugin's published `clientConfig()` payload
  * ({@link MastraClientConfig}). `credentials: "include"` is set once at
@@ -175,18 +178,12 @@ export class MastraPluginClient extends MastraClient {
   async clearHistory(
     options: { agentId?: string; signal?: AbortSignal } = {},
   ): Promise<MastraClearHistoryResponse> {
-    const init: RequestInit = {
-      method: "DELETE",
-      credentials: "include",
-      headers: this.#defaultHeaders(),
-    };
-    if (options.signal) init.signal = options.signal;
-    const res = await fetch(
+    return this.#mutateJson(
       this.#agentScoped(MASTRA_ROUTES.history, options.agentId),
-      init,
+      "DELETE",
+      MastraClearHistoryResponseSchema,
+      options.signal ? { signal: options.signal } : {},
     );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return MastraClearHistoryResponseSchema.parse(await res.json());
   }
 
   /**
@@ -232,18 +229,15 @@ export class MastraPluginClient extends MastraClient {
     threadId: string,
     options: { agentId?: string; signal?: AbortSignal } = {},
   ): Promise<MastraDeleteThreadResponse> {
-    const init: RequestInit = {
-      method: "DELETE",
-      credentials: "include",
-      headers: { ...this.#defaultHeaders(), [THREAD_ID_HEADER]: threadId },
-    };
-    if (options.signal) init.signal = options.signal;
-    const res = await fetch(
+    return this.#mutateJson(
       this.#agentScoped(MASTRA_ROUTES.threads, options.agentId),
-      init,
+      "DELETE",
+      MastraDeleteThreadResponseSchema,
+      {
+        headers: { [THREAD_ID_HEADER]: threadId },
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
     );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return MastraDeleteThreadResponseSchema.parse(await res.json());
   }
 
   /**
@@ -260,14 +254,12 @@ export class MastraPluginClient extends MastraClient {
    * a transport / HTTP-level failure.
    */
   async feedback(input: MastraFeedbackRequest): Promise<MastraFeedbackResponse> {
-    const res = await fetch(`${this.basePath}${MASTRA_ROUTES.feedback}`, {
-      method: "POST",
-      credentials: "include",
-      headers: { ...this.#defaultHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return MastraFeedbackResponseSchema.parse(await res.json());
+    return this.#mutateJson(
+      `${this.basePath}${MASTRA_ROUTES.feedback}`,
+      "POST",
+      MastraFeedbackResponseSchema,
+      { body: input },
+    );
   }
 
   /**
@@ -326,6 +318,35 @@ export class MastraPluginClient extends MastraClient {
       headers: this.#defaultHeaders(),
     };
     if (signal) init.signal = signal;
+    const res = await fetch(url, init);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return schema.parse(await res.json());
+  }
+
+  /**
+   * `POST` / `DELETE` + JSON-parse + schema-validate for the mutating
+   * routes (`clearHistory` / `removeThread` / `feedback`). A JSON body,
+   * when present, sets `Content-Type`; `options.headers` add one-off
+   * headers (e.g. the thread-selection header for a targeted delete)
+   * over the client's default override headers.
+   */
+  async #mutateJson<T>(
+    url: string,
+    method: "POST" | "DELETE",
+    schema: { parse: (raw: unknown) => T },
+    options: {
+      body?: unknown;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<T> {
+    const headers = { ...this.#defaultHeaders(), ...options.headers };
+    const init: RequestInit = { method, credentials: "include", headers };
+    if (options.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(options.body);
+    }
+    if (options.signal) init.signal = options.signal;
     const res = await fetch(url, init);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return schema.parse(await res.json());
@@ -429,7 +450,7 @@ export const useMastraModels = (
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        setError(e instanceof Error ? e : new Error(String(e)));
+        setError(commonUtils.toError(e));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -538,7 +559,7 @@ export const useMastraThreads = (
       .catch((e: unknown) => {
         if (controller.signal.aborted || (e as { name?: string }).name === "AbortError")
           return;
-        setError(e instanceof Error ? e : new Error(String(e)));
+        setError(commonUtils.toError(e));
         setThreads([]);
       })
       .finally(() => {
@@ -704,7 +725,7 @@ function useByIdFetch<T>(
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e : new Error(String(e)));
+        setError(commonUtils.toError(e));
         setLoading(false);
       });
 

@@ -19,8 +19,11 @@
 
 import { commonUtils, logUtils, type appkitUtils } from "@dbx-tools/shared";
 
-import { DEFAULT_COMMENT_NAME, DEFAULT_FEEDBACK_NAME } from "@dbx-tools/appkit-mastra-shared";
-import { databricksFetch } from "./rest.js";
+import {
+  DEFAULT_COMMENT_NAME,
+  DEFAULT_FEEDBACK_NAME,
+} from "@dbx-tools/appkit-mastra-shared";
+import { databricksFetch, readResponseJson, readResponseText } from "./rest.js";
 
 const log = logUtils.logger("mastra/mlflow");
 
@@ -48,12 +51,24 @@ const NOT_FOUND_BACKOFF_MS = 1200;
 export function mlflowEnabled(): boolean {
   const hasExporter = Boolean(
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() ||
-      process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim(),
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim(),
   );
   const hasExperiment = Boolean(
-    process.env.MLFLOW_EXPERIMENT_ID?.trim() || process.env.MLFLOW_EXPERIMENT_NAME?.trim(),
+    process.env.MLFLOW_EXPERIMENT_ID?.trim() ||
+    process.env.MLFLOW_EXPERIMENT_NAME?.trim(),
   );
   return hasExporter && hasExperiment;
+}
+
+/**
+ * Resolve whether user feedback is enabled from the plugin's optional
+ * `config.feedback` override: the explicit boolean wins, otherwise fall
+ * back to auto-detecting MLflow tracing ({@link mlflowEnabled}). Shared
+ * by the plugin's client-config gate and the server's trace-id header so
+ * the two never disagree.
+ */
+export function resolveFeedbackEnabled(explicit: boolean | undefined): boolean {
+  return explicit ?? mlflowEnabled();
 }
 
 /** Parameters for {@link logFeedback}. */
@@ -114,7 +129,7 @@ export async function logFeedback(
       return undefined;
     }
     if (res.ok) {
-      const parsed = await safeJson(res);
+      const parsed = await readResponseJson(res);
       const assessmentId =
         (parsed as { assessment?: { assessment_id?: unknown } })?.assessment
           ?.assessment_id ?? (parsed as { assessment_id?: unknown })?.assessment_id;
@@ -123,37 +138,15 @@ export async function logFeedback(
     // Trace export is async; a fresh trace may not exist yet. Retry a
     // few times with a short backoff before giving up softly.
     if (res.status === 404 && attempt < NOT_FOUND_RETRIES) {
-      await delay(NOT_FOUND_BACKOFF_MS * (attempt + 1));
+      await commonUtils.sleep(NOT_FOUND_BACKOFF_MS * (attempt + 1));
       continue;
     }
     log.warn("feedback not recorded", {
       traceId: params.traceId,
       status: res.status,
-      body: await safeText(res),
+      body: await readResponseText(res),
     });
     return undefined;
   }
   return undefined;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function safeJson(res: Response): Promise<unknown> {
-  const text = await safeText(res);
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {};
-  }
-}
-
-async function safeText(res: Response): Promise<string> {
-  try {
-    return await res.text();
-  } catch {
-    return "";
-  }
 }

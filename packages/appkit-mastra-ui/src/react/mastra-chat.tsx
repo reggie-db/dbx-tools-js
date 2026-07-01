@@ -1,15 +1,18 @@
-import { MLFLOW_TRACE_ID_HEADER, type MastraThread } from "@dbx-tools/appkit-mastra-shared";
+import {
+  MLFLOW_TRACE_ID_HEADER,
+  type MastraThread,
+} from "@dbx-tools/appkit-mastra-shared";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import type { UIMessage } from "ai";
 import { nanoid } from "nanoid";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { exportChat, type EmbedResolver, type ExportFormat } from "../lib/export.js";
 import {
   useMastraClient,
   useMastraModels,
   useMastraSuggestions,
   useMastraThreads,
 } from "../lib/mastra-client.js";
-import { exportChat, type EmbedResolver, type ExportFormat } from "../lib/export.js";
 import { ChatView } from "./chat-view.js";
 import { dedupeSuggestions } from "./suggestions.js";
 import type {
@@ -211,7 +214,8 @@ export const useMastraChat = (
 ): Omit<ChatViewProps, "className"> => {
   const [model, setModel] = useState("");
   // One client drives both the agent stream and the plugin's custom
-  // routes (history / models / suggestions / embeds). Its identity is
+  // routes (history / threads / models / suggestions / feedback /
+  // embeds). Its identity is
   // stable across renders (memoized on `basePath` / `defaultAgent`) so
   // using it as a hook dep doesn't refire the initial-history fetch on
   // every parent render.
@@ -291,7 +295,11 @@ export const useMastraChat = (
       if (!enableThreads) return;
       setOptimisticThreads((prev) => ({
         ...prev,
-        [threadId]: { ...prev[threadId], id: threadId, updatedAt: new Date().toISOString() },
+        [threadId]: {
+          ...prev[threadId],
+          id: threadId,
+          updatedAt: new Date().toISOString(),
+        },
       }));
     },
     [enableThreads],
@@ -699,7 +707,7 @@ export const useMastraChat = (
         log.error("stream error", {
           error: commonUtils.errorMessage(caught),
         });
-        setError(caught instanceof Error ? caught : new Error(String(caught)));
+        setError(commonUtils.toError(caught));
         setStatus("error");
       } finally {
         if (abortRef.current === controller) abortRef.current = null;

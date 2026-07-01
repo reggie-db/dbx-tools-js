@@ -36,13 +36,16 @@ interface MastraClientConfig {
   basePath: string; // /api/<plugin name>
   defaultAgent: string; // agent the client talks to when no :agentId
   agents: string[]; // every registered agent id
+  feedbackEnabled: boolean; // whether the server can log MLflow feedback
 }
 
 // Relative segments under basePath (single source of truth)
 const MASTRA_ROUTES = {
   history: "/route/history",
+  threads: "/route/threads",
   suggestions: "/suggestions",
   models: "/models",
+  feedback: "/route/feedback",
   embed: "/embed",
 };
 ```
@@ -63,8 +66,9 @@ doesn't register. The two types it ships:
   markers to inline table data.
 
 `MastraPluginClient` exposes `chart(id)` / `statement(id)` for these,
-plus `history()` / `clearHistory()`, `models()`, and `suggestions()`;
-see `@dbx-tools/appkit-mastra-ui`.
+plus `history()` / `clearHistory()`, `threads()` / `removeThread()`,
+`setThreadId()`, `models()`, `suggestions()`, and `feedback()`; see
+`@dbx-tools/appkit-mastra-ui`.
 
 ## Wire-format types
 
@@ -84,6 +88,11 @@ The notable ones:
 - **Statements** (`GET ${basePath}/embed/data/:id`) - tabular data
   mirroring the agent-side `get_statement` tool output, so the host UI
   and the LLM see the same shape.
+- **Feedback** (`POST ${basePath}/route/feedback`) - a thumbs value
+  and/or freeform comment for one turn, keyed by the `tr-<hex>` MLflow
+  trace id the server stamps on the stream response
+  (`MLFLOW_TRACE_ID_HEADER`); logged as a HUMAN trace assessment. Only
+  offered when `clientConfig().feedbackEnabled` is `true`.
 
 ### Genie writer-event vocabulary
 

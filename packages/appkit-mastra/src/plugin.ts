@@ -25,8 +25,13 @@
  *   Mastra agent routes, the plugin registers `/route/history`
  *   (load + clear a thread's messages), `/route/threads` (list the
  *   caller's conversations + delete one), `/models`, `/suggestions`,
- *   and the generic `/embed/:type/:id` resolver for inline chart /
- *   data markers.
+ *   `/route/feedback` (log a thumbs / comment to MLflow when feedback
+ *   is enabled), and the generic `/embed/:type/:id` resolver for inline
+ *   chart / data markers. The stock `@mastra/express` surface is gated
+ *   by `config.apiAccess` (default `"scoped"`): only agent inference,
+ *   read-only agent metadata, the `/route/*` routes, and (when enabled)
+ *   MCP are dispatched to Mastra; admin / mutating / bulk-export routes
+ *   are refused with `403`. See {@link isMastraRequestAllowed}.
  * - MCP: opt in with `config.mcp` to expose the agents (and optionally
  *   tools) as a Mastra `MCPServer`. It is registered on the `Mastra`
  *   instance via `mcpServers`, so `@mastra/express` serves the stock
@@ -74,14 +79,18 @@ import {
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { buildMcpServer, type ResolvedMcp } from "./mcp.js";
-import { logFeedback, mlflowEnabled } from "./mlflow.js";
 import {
   createMemoryBuilder,
   createServicePrincipalPool,
   needsLakebase,
 } from "./memory.js";
+import { logFeedback, resolveFeedbackEnabled } from "./mlflow.js";
 import { buildObservability } from "./observability.js";
-import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
+import {
+  attachRoutePatchMiddleware,
+  isMastraRequestAllowed,
+  MastraServer,
+} from "./server.js";
 import { resolveServingConfig } from "./serving.js";
 import { fetchStatementData, STATEMENT_ROW_CAP } from "./statement.js";
 import { threadsRoute } from "./threads.js";
@@ -287,13 +296,12 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   }
 
   /**
-   * Whether user feedback can be logged to MLflow. The explicit
-   * `config.feedback` override wins; otherwise auto-detect from the
-   * MLflow tracing env ({@link mlflowEnabled}). Gates both the client
-   * config flag and the feedback route so the two never disagree.
+   * Whether user feedback can be logged to MLflow. Delegates to
+   * {@link resolveFeedbackEnabled} so the client-config flag and the
+   * feedback route share the same gate as the server's trace-id header.
    */
   private feedbackEnabled(): boolean {
-    return this.config.feedback ?? mlflowEnabled();
+    return resolveFeedbackEnabled(this.config.feedback);
   }
 
   override injectRoutes(router: IAppRouter): void {
@@ -448,6 +456,22 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
 
     router.use((req, res, next) => {
       if (!this.mastraApp) return res.status(503).end();
+      // Gate the stock Mastra surface before dispatch. In the default
+      // "scoped" mode only agent inference, read-only agent metadata, this
+      // plugin's own `/route/*` routes, and (when enabled) MCP reach Mastra;
+      // admin / mutating / bulk-export routes are refused here. `req.path`
+      // is mount-relative under the plugin mount. See `server.ts`.
+      if (
+        !isMastraRequestAllowed(req.method, req.path, {
+          access: this.config.apiAccess ?? "scoped",
+          mcpEnabled: Boolean(this.config.mcp),
+        })
+      ) {
+        res
+          .status(403)
+          .json({ error: "Endpoint not exposed to the client (apiAccess=scoped)" });
+        return;
+      }
       // Dispatch through a real method, NOT the `mastraApp` property. The
       // AppKit `asUser(req)` proxy wraps function-valued props with
       // `value.bind(target)`. `mastraApp` is an express app whose `.bind` is
@@ -768,6 +792,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         "/route/threads",
         "/models",
         "/suggestions",
+        "/route/feedback",
         "/embed/:type/:id",
       ],
       instanceStorage: instanceStorage !== undefined,

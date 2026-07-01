@@ -1,10 +1,6 @@
-// Public surface of @dbx-tools/appkit-email-ui/react.
-//
-// - `EmailPreview`: the labelled To / Subject / Body card body, with the
-//   body rendered as markdown. Drop it into a custom approval card.
-// - `EmailApprovalCard`: a self-contained Approve / Deny card around the
-//   preview for the `send_email` tool.
-// - `EmailMessage` / `EmailDraft`: the email contract types.
+// React surface for the `send_email` approval flow: a presentational
+// preview of the drafted message plus a self-contained Approve / Deny
+// card built around it, styled with AppKit tokens.
 
 export type { EmailMessage } from "@dbx-tools/appkit-email-shared";
 export {

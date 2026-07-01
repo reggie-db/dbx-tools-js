@@ -13,10 +13,14 @@ is a one-line import change.
 
 The implementation lives under `src/`: agent registration in
 [`agents.ts`](src/agents.ts), the plugin + routes in
-[`plugin.ts`](src/plugin.ts) / [`server.ts`](src/server.ts), Model
-Serving resolution in [`model.ts`](src/model.ts) / [`serving.ts`](src/serving.ts),
-Genie tooling in [`genie.ts`](src/genie.ts), and the chart pipeline in
-[`chart.ts`](src/chart.ts).
+[`plugin.ts`](src/plugin.ts) / [`server.ts`](src/server.ts), thread
+history / listing in [`history.ts`](src/history.ts) /
+[`threads.ts`](src/threads.ts), Model Serving resolution in
+[`model.ts`](src/model.ts) / [`serving.ts`](src/serving.ts), Genie
+tooling in [`genie.ts`](src/genie.ts), the chart pipeline in
+[`chart.ts`](src/chart.ts), and MLflow feedback logging in
+[`mlflow.ts`](src/mlflow.ts) (over the shared REST helper in
+[`rest.ts`](src/rest.ts)).
 
 ## Quick start
 
@@ -267,6 +271,35 @@ entry settles. Cache entries carry a 1h TTL; after expiry the route
 placement contract are in [`chart.ts`](src/chart.ts); the wire shapes
 are in [`@dbx-tools/appkit-mastra-shared`](../appkit-mastra-shared).
 
+## Feedback (MLflow)
+
+When MLflow tracing is wired for the deployment, the plugin lets users
+rate an assistant turn (thumbs up / down) and leave a comment, logged as
+a HUMAN [assessment](https://mlflow.org/docs/latest/genai/assessments/)
+on that turn's trace and attributed to the signed-in (OBO) user.
+
+Enablement is auto-detected: it turns on when an OTLP exporter endpoint
+(`OTEL_EXPORTER_OTLP_ENDPOINT` / `..._TRACES_ENDPOINT`) **and** an MLflow
+experiment (`MLFLOW_EXPERIMENT_ID` / `MLFLOW_EXPERIMENT_NAME`) are
+configured - the two signals that traces actually materialize in MLflow.
+Set `config.feedback` to `true` / `false` to force it on or off
+regardless of the env.
+
+```ts
+mastra({ agents: support, feedback: true }); // force-enable
+```
+
+Under the hood the server derives MLflow's trace id from the active
+OpenTelemetry span (`tr-<hex(otelTraceId)>`) and stamps it on each
+turn's response (`MLFLOW_TRACE_ID_HEADER`); the client sends it back to
+`POST ${basePath}/route/feedback`, which posts the assessment to the
+Databricks MLflow REST API. Trace export is asynchronous, so a
+just-finished trace may not exist yet - the log call retries briefly on
+"not found" and otherwise fails softly (the chat stays usable). The
+current state is published to the client as
+`clientConfig().feedbackEnabled`; see [`mlflow.ts`](src/mlflow.ts) and
+the UI wiring in [`@dbx-tools/appkit-mastra-ui`](../appkit-mastra-ui).
+
 ## Model resolution
 
 Each agent call resolves a model lazily (so concurrent requests keep
@@ -337,6 +370,36 @@ AppKit OBO scope as the chat routes, so an agent invoked over MCP
 resolves its model and tools as the calling user. The resolved endpoint
 paths are available in-process via
 `appkitUtils.require(this.context, mastra).exports().getMcp()`.
+
+## Client API surface (`apiAccess`)
+
+`@mastra/express` registers its full management route table under the
+plugin mount - agent inference *plus* admin / mutating routes (direct
+tool execution, workflow control, raw memory read/write, telemetry,
+logs, scores). AppKit authenticates every request as the OBO user, but
+does not restrict *which* of those a browser client may call.
+
+`config.apiAccess` gates that surface at the plugin's dispatch point:
+
+- `"scoped"` (default): only the routes the chat client needs are
+  dispatched to Mastra - agent inference (`stream` / `generate` /
+  `network`), read-only agent metadata (`GET /agents`,
+  `GET /agents/:id`), this plugin's own OBO- and resource-scoped
+  `/route/*` routes (history / threads / feedback), and, when `mcp` is
+  enabled, the MCP transport. Everything else is refused with `403`
+  before it reaches Mastra.
+- `"full"`: dispatch the entire stock Mastra API. Use only for a trusted
+  first-party console that genuinely needs the management surface.
+
+```ts
+mastra({ agents: support }); // scoped by default
+mastra({ agents: support, apiAccess: "full" }); // opt into the full API
+```
+
+The gate is a pure allowlist (`isMastraRequestAllowed` in
+[`server.ts`](src/server.ts)); the browser chat client only ever uses
+the agent stream and the `/route/*` routes, so the default breaks
+nothing.
 
 ## License
 

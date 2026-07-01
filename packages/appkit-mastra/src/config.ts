@@ -432,4 +432,26 @@ export interface MastraPluginConfig extends BasePluginConfig {
    * calling user.
    */
   mcp?: boolean | MastraMcpConfig;
+  /**
+   * How much of the stock `@mastra/express` management API is reachable
+   * through the plugin mount. `@mastra/express` registers its full route
+   * table (agent inference plus admin / mutating routes: direct tool
+   * execution, workflow control, raw memory read/write, telemetry, logs,
+   * scores). AppKit already authenticates every request as the OBO user,
+   * but nothing there restricts *which* of those operations the browser
+   * client may invoke.
+   *
+   * - `"scoped"` (default): only the routes the chat client legitimately
+   *   needs are dispatched to Mastra - agent inference
+   *   (`stream` / `generate` / `network`), read-only agent metadata, this
+   *   plugin's own OBO- and resource-scoped `/route/*` routes (history /
+   *   threads), and, when {@link mcp} is enabled, the MCP transport.
+   *   Everything else (tool execution, workflow control, raw memory,
+   *   telemetry, logs, scores, and other mutations) is rejected with
+   *   `403` before it reaches Mastra.
+   * - `"full"`: dispatch the entire stock Mastra API. Use only for a
+   *   trusted first-party console that genuinely needs the management
+   *   surface.
+   */
+  apiAccess?: "scoped" | "full";
 }

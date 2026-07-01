@@ -374,7 +374,9 @@ export const AssistantBubble = ({
                 <TooltipContent>Copy</TooltipContent>
               </Tooltip>
             )}
-            {onExport && <ExportMenu onExport={onExport} iconOnly tooltip="Export message" />}
+            {onExport && (
+              <ExportMenu onExport={onExport} iconOnly tooltip="Export message" />
+            )}
             {onFeedback && (
               <FeedbackControls
                 onSubmit={onFeedback}
