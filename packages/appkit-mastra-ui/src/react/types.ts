@@ -1,5 +1,8 @@
 import type { GenieWriterEvent } from "@dbx-tools/appkit-mastra-shared";
 import type { UIMessage } from "ai";
+import type { ExportFormat } from "../lib/export.js";
+
+export type { ExportFormat } from "../lib/export.js";
 
 // Public types for the chat UI: the controlled `ChatView` props plus
 // the supporting tool-event / approval shapes a host transport feeds
@@ -183,6 +186,18 @@ export type ChatViewProps = {
    * flips its own internal open state.
    */
   onToggleSidebar?: () => void;
+  /**
+   * Export the whole conversation in the chosen {@link ExportFormat}
+   * (PDF via the browser print dialog, or a Markdown download). When
+   * provided, the header shows an Export menu. Charts and data tables are
+   * inlined into the export. Omit to hide conversation-level export.
+   */
+  onExportConversation?: (format: ExportFormat) => void | Promise<void>;
+  /**
+   * Export a single message in the chosen {@link ExportFormat}. When
+   * provided, each assistant bubble shows a per-message export menu.
+   */
+  onExportMessage?: (message: UIMessage, format: ExportFormat) => void | Promise<void>;
 };
 
 /** Payload {@link ChatViewProps.onResolveToolApproval} receives. */

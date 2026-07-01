@@ -1,12 +1,12 @@
 {
   "name": "@dbx-tools/appkit-email",
-  "version": "0.1.72",
+  "version": "0.1.73",
   "dependencies": {
     "@dbx-tools/appkit-email-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
     "@mastra/core": "catalog:",
     "juice": "^12.1.1",
-    "marked": "^18.0.5",
+    "marked": "catalog:",
     "nodemailer": "^7.0.9",
     "zod": "catalog:"
   },

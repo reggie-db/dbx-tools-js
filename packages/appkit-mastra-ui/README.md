@@ -85,6 +85,36 @@ the per-session cookie, no sidebar) with `enableThreads={false}`:
 <MastraChat enableThreads={false} />
 ```
 
+### Export
+
+Chat export is **opt-in** (off by default). Turn it on with
+`enableExport`:
+
+```tsx
+<MastraChat enableExport />
+```
+
+With it on, an **Export** menu appears in the header (whole conversation)
+and a per-message export menu appears on each assistant bubble. Both
+offer two formats:
+
+- **PDF** - opens a print-ready document in a new tab and triggers the
+  browser's print dialog, so the user saves a real PDF ("Save as PDF").
+  If a popup blocker stops the tab, the document is downloaded as an HTML
+  file instead.
+- **Markdown** - downloads a `.md` file.
+
+Exports are **self-contained and include charts**: each `[chart:<id>]`
+marker is resolved against the plugin's chart cache and rendered to an
+inline SVG via Echarts' server-side renderer (so it renders offline with
+no runtime), and `[data:<id>]` markers resolve to real tables (GFM tables
+in Markdown). Expired / unknown embeds are skipped.
+
+The headless driver exposes `onExportConversation(format)` and
+`onExportMessage(message, format)` on the `useMastraChat` prop bag when
+`enableExport` is set; the underlying `exportChat(...)` helper and the
+`ExportMenu` component are exported for custom wiring.
+
 ### Starter suggestions
 
 The empty state carries **no built-in example prompts**. When the agent
@@ -152,3 +182,6 @@ space starter questions, or an empty list when none are configured.
   user's auto-titled threads (titled on the small / fast model tier) with
   select / new / delete, persisted across reloads, plus a persisted
   show/hide toggle; opt out with `enableThreads={false}`.
+- Chat export (opt-in via `enableExport`): whole-conversation and
+  per-message export to PDF (browser print) or Markdown, with charts
+  (inline SVG) and data tables inlined so the export is self-contained.

@@ -22,6 +22,7 @@ export {
 } from "../lib/mastra-client.js";
 export type { ByIdFetchState } from "../lib/mastra-client.js";
 export { ChatView } from "./chat-view.js";
+export { ExportMenu } from "./export-menu.js";
 export { MastraChat, useMastraChat } from "./mastra-chat.js";
 export type { MastraChatProps, UseMastraChatOptions } from "./mastra-chat.js";
 export { ThreadSidebar } from "./thread-sidebar.js";
@@ -30,6 +31,7 @@ export type {
   ChatModelOption,
   ChatStatus,
   ChatViewProps,
+  ExportFormat,
   PendingApproval,
   ThreadSummary,
   ToolEvent,

@@ -11,7 +11,10 @@
 //
 // After pushing, the function can also run the workspace publish script
 // so local release flows use the same Bun-based package publishing path
-// as CI. Opt out with `publish: false`.
+// as CI. Before publishing it refreshes the (gitignored) lockfile with
+// `bun install` so `bun publish` resolves each `workspace:*` sibling pin
+// to the just-bumped version instead of a stale one left over from a
+// previous release. Opt out with `publish: false`.
 //
 // All packages in the changesets `fixed` group share one version. The
 // function reads the shared version from the first publishable package,
@@ -405,7 +408,23 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   // Publish via the repo's Bun-based release script. Best-effort: the tag
   // is already pushed, so a publish failure is a warning, not a failure.
   if (publish) {
-    await sh(["bun", "run", "release"], { nothrow: true });
+    // Refresh the (gitignored) lockfile so its recorded workspace
+    // versions match the bump before publishing. `bun publish` resolves
+    // each `workspace:*` sibling pin from the lockfile, so a stale one
+    // would freeze published siblings at the previous version. Not
+    // `--frozen-lockfile`: the lockfile is intentionally uncommitted, so
+    // there is nothing to freeze against. If the refresh fails, skip the
+    // local publish rather than shipping stale pins - CI publishes from
+    // the pushed tag regardless.
+    consola.log("Refreshing bun.lock to the bumped versions before publish...");
+    const install = await sh(["bun", "install"], { nothrow: true });
+    if (install.exitCode !== 0) {
+      consola.warn(
+        "bun install failed; skipping local publish so stale sibling pins aren't shipped. CI will publish from the tag.",
+      );
+    } else {
+      await sh(["bun", "run", "release"], { nothrow: true });
+    }
   }
 
   consola.log("");

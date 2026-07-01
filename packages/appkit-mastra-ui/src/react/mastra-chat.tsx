@@ -9,6 +9,7 @@ import {
   useMastraSuggestions,
   useMastraThreads,
 } from "../lib/mastra-client.js";
+import { exportChat, type EmbedResolver, type ExportFormat } from "../lib/export.js";
 import { ChatView } from "./chat-view.js";
 import { dedupeSuggestions } from "./suggestions.js";
 import type {
@@ -151,6 +152,14 @@ export interface UseMastraChatOptions {
    * (no sidebar, no thread tracking).
    */
   enableThreads?: boolean;
+  /**
+   * Enable chat export. Off by default (opt-in). When on, the header
+   * shows an "Export" menu for the whole conversation and each assistant
+   * bubble shows a per-message export menu. Both offer PDF (via the
+   * browser print dialog) and Markdown; charts and data tables are
+   * inlined into the export so it renders reliably offline.
+   */
+  enableExport?: boolean;
 }
 
 /**
@@ -191,6 +200,8 @@ export const useMastraChat = (
   // conversations a user owns. Selecting a thread routes every call
   // (stream + history + clear) at it via `mastraClient.setThreadId`.
   const enableThreads = options.enableThreads !== false;
+  // Export is opt-in (default off): the host turns it on explicitly.
+  const enableExport = options.enableExport === true;
   const threadKey = threadStorageKey(mastraClient.basePath, agentId);
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>(() =>
     enableThreads ? (readStoredThreadId(threadKey) ?? nanoid()) : undefined,
@@ -930,6 +941,58 @@ export const useMastraChat = (
       });
   }, [hasMoreHistory, mastraClient, agentId, writeMessages]);
 
+  // Chat export (opt-in). Resolves `[chart:<id>]` / `[data:<id>]` embeds
+  // straight off the client so the export inlines the same charts /
+  // tables the UI renders. Handlers are defined unconditionally (rules of
+  // hooks) and only surfaced to ChatView when `enableExport` is on.
+  const exportResolver = useMemo<EmbedResolver>(
+    () => ({
+      chart: (id) => mastraClient.chart(id),
+      statement: (id) => mastraClient.statement(id),
+    }),
+    [mastraClient],
+  );
+  const exportConversation = useCallback(
+    async (format: ExportFormat) => {
+      const title =
+        (activeThreadId && threads.find((t) => t.id === activeThreadId)?.title) ||
+        "Conversation";
+      try {
+        await exportChat({
+          messages: messagesRef.current,
+          format,
+          resolver: exportResolver,
+          title,
+        });
+      } catch (error) {
+        log.error("conversation export error", {
+          format,
+          error: commonUtils.errorMessage(error),
+        });
+      }
+    },
+    [exportResolver, activeThreadId, threads],
+  );
+  const exportMessage = useCallback(
+    async (message: UIMessage, format: ExportFormat) => {
+      try {
+        await exportChat({
+          messages: [message],
+          format,
+          resolver: exportResolver,
+          title: "Message",
+          filename: "message",
+        });
+      } catch (error) {
+        log.error("message export error", {
+          format,
+          error: commonUtils.errorMessage(error),
+        });
+      }
+    },
+    [exportResolver],
+  );
+
   return {
     messages,
     status,
@@ -967,6 +1030,14 @@ export const useMastraChat = (
           // the show/hide choice survives reloads.
           sidebarOpen,
           onToggleSidebar: toggleSidebar,
+        }
+      : {}),
+    // Export is opt-in: only expose the handlers (which light up the
+    // header + per-message export menus in ChatView) when enabled.
+    ...(enableExport
+      ? {
+          onExportConversation: exportConversation,
+          onExportMessage: exportMessage,
         }
       : {}),
   };

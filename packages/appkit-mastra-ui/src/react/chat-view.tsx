@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AssistantBubble, UserBubble } from "./bubbles.js";
+import { ExportMenu } from "./export-menu.js";
 import { SuggestionPills } from "./suggestion-pills.js";
 import { ThreadSidebar } from "./thread-sidebar.js";
 import type { ChatViewProps } from "./types.js";
@@ -90,6 +91,8 @@ export const ChatView = ({
   onDeleteThread,
   sidebarOpen: sidebarOpenProp,
   onToggleSidebar,
+  onExportConversation,
+  onExportMessage,
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -228,6 +231,7 @@ export const ChatView = ({
 
   const showModelPicker = Boolean(models && models.length > 0 && onModelChange);
   const showClear = Boolean(onClear);
+  const showExport = Boolean(onExportConversation);
   // The conversation sidebar turns on once the host wires both the
   // thread list and a selection handler. A header toggle lets the user
   // show/hide it on demand. Open state is controlled when the caller
@@ -241,7 +245,7 @@ export const ChatView = ({
     if (onToggleSidebar) onToggleSidebar();
     else setInternalSidebarOpen((open) => !open);
   };
-  const showHeader = showModelPicker || showClear || showSidebar;
+  const showHeader = showModelPicker || showClear || showSidebar || showExport;
 
   // Local "in-flight" + confirm latch for the clear button so the
   // user can't double-fire the DELETE and so a stray click doesn't
@@ -337,6 +341,12 @@ export const ChatView = ({
                     </Select>
                   </div>
                 )}
+                {showExport && (
+                  <ExportMenu
+                    onExport={(format) => void onExportConversation?.(format)}
+                    tooltip="Export conversation"
+                  />
+                )}
                 {showClear && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -425,6 +435,11 @@ export const ChatView = ({
                           onSuggestionClick={(text) => sendMessage({ text })}
                           onResolveToolApproval={onResolveToolApproval}
                           externalApprovals={pendingApprovalsByMessage[message.id]}
+                          {...(onExportMessage
+                            ? {
+                                onExport: (format) => onExportMessage(message, format),
+                              }
+                            : {})}
                         />
                       );
                     }

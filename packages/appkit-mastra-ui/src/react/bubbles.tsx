@@ -26,12 +26,14 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { MarkdownWithEmbeds } from "./embed-slots.js";
+import { ExportMenu } from "./export-menu.js";
 import { SuggestionPills } from "./suggestion-pills.js";
 import { collectSuggestions } from "./suggestions.js";
 import { ToolSessionPill, humanizeToolName } from "./tool-pill.js";
 import type {
   ApprovalDecision,
   ChatStatus,
+  ExportFormat,
   PendingApproval,
   ToolEvent,
 } from "./types.js";
@@ -227,6 +229,11 @@ type AssistantBubbleProps = {
    * Merged with inline `data-tool-call-approval` parts.
    */
   externalApprovals?: PendingApproval[];
+  /**
+   * Export this message in the chosen format. When set, the bubble's
+   * action row shows a per-message export menu (charts / tables inlined).
+   */
+  onExport?: (format: ExportFormat) => void;
 };
 
 export const AssistantBubble = ({
@@ -238,6 +245,7 @@ export const AssistantBubble = ({
   onSuggestionClick,
   onResolveToolApproval,
   externalApprovals,
+  onExport,
 }: AssistantBubbleProps) => {
   const reasoning = getReasoningText(message.parts);
   const isReasoningStreaming =
@@ -319,9 +327,9 @@ export const AssistantBubble = ({
             />
           ) : null,
         )}
-        {isLast && hasText && (
+        {hasText && (isLast || onExport) && (
           <div className="flex items-center gap-1">
-            {regenerate && (
+            {isLast && regenerate && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -337,20 +345,23 @@ export const AssistantBubble = ({
                 <TooltipContent>Retry</TooltipContent>
               </Tooltip>
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-7"
-                  onClick={() => navigator.clipboard.writeText(fullText)}
-                >
-                  <CopyIcon className="size-3" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copy</TooltipContent>
-            </Tooltip>
+            {isLast && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    onClick={() => navigator.clipboard.writeText(fullText)}
+                  >
+                    <CopyIcon className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy</TooltipContent>
+              </Tooltip>
+            )}
+            {onExport && <ExportMenu onExport={onExport} iconOnly tooltip="Export message" />}
           </div>
         )}
         <SuggestionPills

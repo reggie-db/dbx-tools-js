@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra-ui",
-  "version": "0.1.72",
+  "version": "0.1.73",
   "dependencies": {
     "@dbx-tools/appkit-email-ui": "workspace:*",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
@@ -12,6 +12,7 @@
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "lucide-react": "catalog:",
+    "marked": "catalog:",
     "nanoid": "^5.1.11",
     "shiki": "^4.2.0",
     "sql-formatter": "^15.8.0",
