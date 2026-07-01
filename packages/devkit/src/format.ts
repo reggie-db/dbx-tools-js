@@ -14,9 +14,9 @@
 // finder rather than a hand-maintained glob, so a newly created
 // package is picked up automatically.
 
+import { consola } from "consola";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { consola } from "consola";
 import {
   discoverPackageJsons,
   discoverPackages,
@@ -36,7 +36,9 @@ const require = createRequire(import.meta.url);
 /** Absolute path to a dependency's binary, read from its own `package.json`. */
 function resolveBin(pkg: string, binName: string): string {
   const pkgJsonPath = require.resolve(`${pkg}/package.json`);
-  const meta = require(`${pkg}/package.json`) as { bin?: string | Record<string, string> };
+  const meta = require(`${pkg}/package.json`) as {
+    bin?: string | Record<string, string>;
+  };
   const bin = typeof meta.bin === "string" ? meta.bin : meta.bin?.[binName];
   if (!bin) throw new Error(`${pkg} declares no "${binName}" bin`);
   return resolve(dirname(pkgJsonPath), bin);

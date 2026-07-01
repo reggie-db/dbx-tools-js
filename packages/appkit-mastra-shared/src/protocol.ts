@@ -151,6 +151,79 @@ export type MastraClearHistoryResponse = z.infer<
   typeof MastraClearHistoryResponseSchema
 >;
 
+/* -------------------------------- threads -------------------------------- */
+
+/**
+ * A single conversation thread the resource (authenticated user) owns,
+ * as returned by `GET ${basePath}/threads`. Mirrors Mastra's
+ * `StorageThreadType` but with JSON-safe ISO-8601 timestamps (the wire
+ * can't carry `Date`).
+ *
+ * Fields:
+ *   - `id`: thread id. Pass it back as the thread-selection header
+ *     (`THREAD_ID_HEADER`) on a stream / history / delete call to act
+ *     on this conversation.
+ *   - `title`: human-readable title. Present once the agent's memory
+ *     has auto-generated one (after the first turn); absent on a
+ *     brand-new thread, so the UI falls back to a placeholder.
+ *   - `resourceId`: owning resource (the user id). Always the caller's
+ *     own resource - the list route filters by it server-side.
+ *   - `createdAt` / `updatedAt`: ISO-8601 timestamps. `updatedAt` is
+ *     the natural sort key for "most recent conversations first".
+ *   - `metadata`: opaque thread metadata, passed through untouched.
+ */
+export const MastraThreadSchema = z.object({
+  id: z.string(),
+  title: z.string().optional(),
+  resourceId: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  metadata: z.unknown().optional(),
+});
+export type MastraThread = z.infer<typeof MastraThreadSchema>;
+
+/**
+ * JSON payload returned by `GET ${basePath}/threads`. One page of the
+ * caller's conversation threads, newest (`updatedAt` DESC) first.
+ *
+ * Fields:
+ *   - `threads`: page of threads for the caller's resource.
+ *   - `page`: zero-indexed page that produced this response.
+ *   - `perPage`: number of items requested per page.
+ *   - `total`: total number of threads the resource owns.
+ *   - `hasMore`: true when at least one more page is available.
+ */
+export const MastraThreadsResponseSchema = z.object({
+  threads: z.array(MastraThreadSchema),
+  page: z.number(),
+  perPage: z.number(),
+  total: z.number(),
+  hasMore: z.boolean(),
+});
+export type MastraThreadsResponse = z.infer<typeof MastraThreadsResponseSchema>;
+
+/**
+ * JSON payload returned by `DELETE ${basePath}/threads` (thread id
+ * supplied via the thread-selection header / `threadId` query). Wipes
+ * the named thread and every message on it.
+ *
+ * Fields:
+ *   - `ok`: literal `true` on success.
+ *   - `agentId`: agent whose thread was deleted.
+ *   - `threadId`: thread id that was removed.
+ *   - `deleted`: `true` when a thread row existed and was removed,
+ *     `false` when it was already gone (call is idempotent).
+ */
+export const MastraDeleteThreadResponseSchema = z.object({
+  ok: z.literal(true),
+  agentId: z.string(),
+  threadId: z.string(),
+  deleted: z.boolean(),
+});
+export type MastraDeleteThreadResponse = z.infer<
+  typeof MastraDeleteThreadResponseSchema
+>;
+
 /* ------------------------------ suggestions ------------------------------ */
 
 /**

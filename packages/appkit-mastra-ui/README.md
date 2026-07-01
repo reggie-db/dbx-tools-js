@@ -55,6 +55,36 @@ serving endpoint per turn:
 <MastraChat showModelPicker />
 ```
 
+### Conversation management
+
+Conversation (thread) management is **on by default**. `MastraChat`
+renders a sidebar listing the threads the signed-in user owns for this
+agent, lets them switch between conversations, start a new one, and
+delete one - and persists the active thread id in `localStorage` so a
+reload reopens the same conversation. Each thread is auto-titled from its
+opening turn on the small / fast model tier (the plugin's `summarize`
+helper, not the agent's primary model), so the list reads like a chat
+history rather than a list of ids without spending the heavyweight model.
+
+A header toggle shows/hides the sidebar so the conversation view is
+easily turned on and off in the UI; that show/hide choice is also
+persisted to `localStorage`, so the chat reopens the way the user left
+it. The feature stays active when the panel is hidden (threads keep
+tracking) - the toggle only reclaims the width.
+
+Under the hood the client picks a thread id (from the `/route/threads`
+listing, or a freshly minted one for a new chat) and stamps it on every
+call via the thread-selection header, so streaming, history, and clear
+all target the selected conversation. The server scopes the listing to
+the caller's resource, so a user only ever sees their own threads.
+
+Turn the whole feature off for a classic single-thread chat (anchored to
+the per-session cookie, no sidebar) with `enableThreads={false}`:
+
+```tsx
+<MastraChat enableThreads={false} />
+```
+
 ### Starter suggestions
 
 The empty state carries **no built-in example prompts**. When the agent
@@ -89,10 +119,11 @@ function Chat() {
 For lower-level access, `useMastraClient()` returns a
 `MastraPluginClient` (a `@mastra/client-js` `MastraClient` subclass)
 that streams turns via `getAgent(id).stream()` and adds `history()` /
-`clearHistory()`, `models()`, `suggestions()`, and `chart()` /
-`statement()` over the plugin's own routes. `useMastraModels()` and
-`useMastraSuggestions()` are thin hooks over the catalogue and Genie
-starter questions.
+`clearHistory()`, `threads()` / `removeThread()` / `setThreadId()`,
+`models()`, `suggestions()`, and `chart()` / `statement()` over the
+plugin's own routes. `useMastraModels()`, `useMastraSuggestions()`, and
+`useMastraThreads()` are thin hooks over the catalogue, Genie starter
+questions, and the conversation list.
 
 `ChatView` itself shows no suggestions unless you pass them (it has no
 built-in defaults); `useMastraSuggestions()` resolves the agent's Genie
@@ -117,3 +148,7 @@ space starter questions, or an empty list when none are configured.
   (`ChatView` takes an `error` prop; the drop-in surfaces it itself).
 - Optional model picker (`showModelPicker`, off by default).
 - Infinite-scroll-up thread history.
+- Built-in conversation management (on by default): a sidebar of the
+  user's auto-titled threads (titled on the small / fast model tier) with
+  select / new / delete, persisted across reloads, plus a persisted
+  show/hide toggle; opt out with `enableThreads={false}`.

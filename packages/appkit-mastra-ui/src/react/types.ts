@@ -33,6 +33,20 @@ export type ToolProgress = GenieWriterEvent;
 /** Subset of a Model Serving endpoint surfaced in the model picker. */
 export type ChatModelOption = { name: string };
 
+/**
+ * One conversation thread surfaced in the {@link ChatViewProps}
+ * sidebar. A trimmed view of the wire `MastraThread`: only what the
+ * list needs to render and reference a conversation.
+ */
+export type ThreadSummary = {
+  /** Thread id. Passed back out via {@link ChatViewProps.onSelectThread}. */
+  id: string;
+  /** Human-readable title; falls back to a placeholder when absent (new threads). */
+  title?: string;
+  /** ISO-8601 last-activity timestamp, used to render a relative "time ago" hint. */
+  updatedAt?: string;
+};
+
 export type ChatViewProps = {
   messages: UIMessage[];
   status: ChatStatus;
@@ -124,6 +138,51 @@ export type ChatViewProps = {
    * button entirely (read-only embeds, history-less agents).
    */
   onClear?: () => void | Promise<void>;
+  /**
+   * The caller's conversation threads, newest first. When provided
+   * together with {@link onSelectThread}, the view renders a
+   * collapsible sidebar listing them so the user can switch between
+   * conversations. Omit (or pass without `onSelectThread`) to render
+   * the classic single-thread chat with no sidebar.
+   */
+  threads?: ThreadSummary[];
+  /** Id of the currently-active thread, highlighted in the sidebar. */
+  activeThreadId?: string;
+  /** True while the initial thread list is loading (drives a sidebar spinner). */
+  isLoadingThreads?: boolean;
+  /**
+   * Switch the conversation to `threadId`. The handler reloads that
+   * thread's history and points subsequent turns at it. Providing this
+   * (with {@link threads}) is what turns the sidebar on.
+   */
+  onSelectThread?: (threadId: string) => void;
+  /**
+   * Start a fresh conversation. The handler mints a new thread id,
+   * clears the transcript, and points subsequent turns at it. When
+   * provided, the sidebar shows a "New chat" affordance.
+   */
+  onNewThread?: () => void;
+  /**
+   * Delete a conversation by id. The handler removes it server-side and
+   * refreshes the list; deleting the active thread starts a new one.
+   * When provided, each sidebar row shows a delete affordance.
+   */
+  onDeleteThread?: (threadId: string) => void;
+  /**
+   * Controlled open/closed state for the conversation sidebar. When
+   * omitted the view manages its own (session-only) open state; pass
+   * this together with {@link onToggleSidebar} to control and persist
+   * the show/hide choice from the host (the driver does this so the
+   * choice survives reloads). The header toggle is shown whenever the
+   * sidebar is enabled, regardless of who owns the state.
+   */
+  sidebarOpen?: boolean;
+  /**
+   * Toggle the conversation sidebar's visibility. Provided alongside
+   * {@link sidebarOpen} for controlled mode; when omitted the view
+   * flips its own internal open state.
+   */
+  onToggleSidebar?: () => void;
 };
 
 /** Payload {@link ChatViewProps.onResolveToolApproval} receives. */

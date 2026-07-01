@@ -5,14 +5,15 @@
  * `@dbx-tools/appkit-mastra-ui`) so a relayout - or a rename of a
  * sub-path - is a one-line change here and the two can never drift.
  *
- * The agent-scoped segments (`history`, `suggestions`) take an
- * optional `/:agentId` suffix; the default agent uses the bare
+ * The agent-scoped segments (`history`, `threads`, `suggestions`) take
+ * an optional `/:agentId` suffix; the default agent uses the bare
  * segment. Conversation streaming itself rides the standard Mastra
  * agent routes (`@mastra/client-js`'s `getAgent(id).stream()`), so
  * there's no chat segment here.
  */
 export const MASTRA_ROUTES = {
   history: "/route/history",
+  threads: "/route/threads",
   suggestions: "/suggestions",
   models: "/models",
   embed: "/embed",

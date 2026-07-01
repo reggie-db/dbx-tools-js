@@ -23,9 +23,10 @@
  * - Server: the Express subapp wiring lives in `./server.js`.
  * - HTTP: AppKit mounts this plugin under `/api/mastra`. Alongside the
  *   Mastra agent routes, the plugin registers `/route/history`
- *   (load + clear thread history), `/models`, `/suggestions`, and the
- *   generic `/embed/:type/:id` resolver for inline chart / data
- *   markers.
+ *   (load + clear a thread's messages), `/route/threads` (list the
+ *   caller's conversations + delete one), `/models`, `/suggestions`,
+ *   and the generic `/embed/:type/:id` resolver for inline chart /
+ *   data markers.
  * - MCP: opt in with `config.mcp` to expose the agents (and optionally
  *   tools) as a Mastra `MCPServer`. It is registered on the `Mastra`
  *   instance via `mcpServers`, so `@mastra/express` serves the stock
@@ -62,6 +63,12 @@ import {
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
+import {
+  ensureStore,
+  getStore,
+  resolveManagedMemoryTarget,
+  type ManagedMemoryRuntime,
+} from "./connectors/managed-memory/index.js";
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { buildMcpServer, type ResolvedMcp } from "./mcp.js";
@@ -74,6 +81,7 @@ import { buildObservability } from "./observability.js";
 import { attachRoutePatchMiddleware, MastraServer } from "./server.js";
 import { resolveServingConfig } from "./serving.js";
 import { fetchStatementData, STATEMENT_ROW_CAP } from "./statement.js";
+import { threadsRoute } from "./threads.js";
 
 const GENIE_MANIFEST = appkitUtils.data(genie).plugin.manifest;
 const LAKEBASE_MANIFEST = appkitUtils.data(lakebase).plugin.manifest;
@@ -506,6 +514,59 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     return listServingEndpoints(client, host, { ttlMs: serving.ttlMs });
   }
 
+  /**
+   * Resolve and probe the Databricks Managed Memory backend at setup.
+   *
+   * Returns the runtime (store + recall sizing + tool / recall toggles)
+   * when managed memory is enabled and the workspace memory-stores API
+   * is reachable, else `undefined` so the caller uses the PgVector path.
+   *
+   * The probe runs as the service principal (setup is outside any
+   * `asUser` scope, so `getExecutionContext()` yields the SP client):
+   * the SP owns the store and is the identity that can `CREATE MEMORY
+   * STORE`. When `autoCreate` is on the store is created if missing.
+   *
+   * A misconfiguration where managed memory is explicitly enabled but no
+   * store name is resolvable throws ({@link resolveManagedMemoryTarget})
+   * - that is a wiring bug, not a runtime condition. Every other failure
+   * (feature unavailable, permission denied, network) is caught, logged,
+   * and degraded to a PgVector fallback so chat stays available.
+   */
+  private async resolveManagedMemory(): Promise<ManagedMemoryRuntime | undefined> {
+    const target = resolveManagedMemoryTarget(this.config);
+    if (!target) return undefined;
+    try {
+      const client = getExecutionContext().client;
+      const available = target.autoCreate
+        ? await ensureStore(client, target.storeName, target.description)
+        : (await getStore(client, target.storeName)) !== null;
+      if (!available) {
+        this.log.warn("managed-memory:unavailable; using PgVector fallback", {
+          store: target.storeName,
+        });
+        return undefined;
+      }
+      this.log.info("managed-memory:active", {
+        store: target.storeName,
+        topK: target.topK,
+        autoCreate: target.autoCreate,
+      });
+      return {
+        storeName: target.storeName,
+        topK: target.topK,
+        entryPath: target.entryPath,
+        tools: target.tools,
+        recall: target.recall,
+      };
+    } catch (err) {
+      this.log.warn("managed-memory:probe failed; using PgVector fallback", {
+        store: target.storeName,
+        error: commonUtils.errorMessage(err),
+      });
+      return undefined;
+    }
+  }
+
   private async buildAgentAndServer(): Promise<void> {
     // Per-agent memory factory. When any storage / memory setting needs
     // Postgres, stand up a dedicated service-principal pool first so
@@ -524,12 +585,22 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         .getPgConfig();
       this.servicePrincipalPool = await createServicePrincipalPool(spPgConfig);
     }
+    // Resolve the long-term / recall backend before building memory and
+    // agents. When Managed Memory is active it takes the PgVector role,
+    // so the memory builder suppresses PgVector and the agents pick up
+    // the recall processor + memory tools. A probe / create failure logs
+    // and falls back to PgVector (or stateless when no Lakebase).
+    const managedMemory = await this.resolveManagedMemory();
+
     const memoryBuilder = this.servicePrincipalPool
-      ? createMemoryBuilder(this.config, this.servicePrincipalPool)
+      ? createMemoryBuilder(this.config, this.servicePrincipalPool, {
+          suppressVector: managedMemory !== undefined,
+        })
       : undefined;
 
     this.log.debug("build:start", {
       lakebase: memoryBuilder !== undefined,
+      managedMemory: managedMemory !== undefined,
       stripStaleCharts: this.config.stripStaleCharts !== false,
     });
 
@@ -543,6 +614,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       config: this.config,
       context: this.context,
       memoryBuilder,
+      ...(managedMemory ? { managedMemory } : {}),
       log: this.log,
     });
 
@@ -605,13 +677,30 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         ...historyRoute({
           path: `${MASTRA_ROUTES.history}/:agentId` as `${string}:agentId`,
         }),
+        // `threadsRoute` registers GET (list the caller's conversation
+        // threads) and DELETE (remove the targeted thread) on the same
+        // path; both the default-agent and dynamic-agent mounts are
+        // spliced in, mirroring the history routes above.
+        ...threadsRoute({
+          path: MASTRA_ROUTES.threads,
+          agent: this.built.defaultAgentId,
+        }),
+        ...threadsRoute({
+          path: `${MASTRA_ROUTES.threads}/:agentId` as `${string}:agentId`,
+        }),
       ],
     });
     await this.mastraServer.init();
     this.log.debug("build:done", {
       agents: Object.keys(this.built.agents),
       defaultAgent: this.built.defaultAgentId,
-      routes: ["/route/history", "/models", "/suggestions", "/embed/:type/:id"],
+      routes: [
+        "/route/history",
+        "/route/threads",
+        "/models",
+        "/suggestions",
+        "/embed/:type/:id",
+      ],
       instanceStorage: instanceStorage !== undefined,
       observability: observability !== undefined ? "mlflow" : "off",
       mcp: this.mcp ? `/api/${this.name}${this.mcp.httpPath}` : "off",

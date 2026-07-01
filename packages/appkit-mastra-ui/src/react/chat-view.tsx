@@ -28,6 +28,7 @@ import { commonUtils } from "@dbx-tools/shared";
 import {
   ArrowDownIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
   RefreshCwIcon,
   SendIcon,
   SquareIcon,
@@ -37,6 +38,7 @@ import {
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AssistantBubble, UserBubble } from "./bubbles.js";
 import { SuggestionPills } from "./suggestion-pills.js";
+import { ThreadSidebar } from "./thread-sidebar.js";
 import type { ChatViewProps } from "./types.js";
 
 // Controlled, presentational chat shell: the scroll container, header
@@ -80,6 +82,14 @@ export const ChatView = ({
   onResolveToolApproval,
   pendingApprovalsByMessage = {},
   onClear,
+  threads,
+  activeThreadId,
+  isLoadingThreads = false,
+  onSelectThread,
+  onNewThread,
+  onDeleteThread,
+  sidebarOpen: sidebarOpenProp,
+  onToggleSidebar,
 }: ChatViewProps) => {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -218,7 +228,20 @@ export const ChatView = ({
 
   const showModelPicker = Boolean(models && models.length > 0 && onModelChange);
   const showClear = Boolean(onClear);
-  const showHeader = showModelPicker || showClear;
+  // The conversation sidebar turns on once the host wires both the
+  // thread list and a selection handler. A header toggle lets the user
+  // show/hide it on demand. Open state is controlled when the caller
+  // supplies `sidebarOpen` + `onToggleSidebar` (the driver does this and
+  // persists the choice); otherwise the view manages a session-only
+  // open flag. Defaults to open.
+  const showSidebar = Boolean(threads && onSelectThread);
+  const [internalSidebarOpen, setInternalSidebarOpen] = useState(true);
+  const sidebarOpen = sidebarOpenProp ?? internalSidebarOpen;
+  const toggleSidebar = () => {
+    if (onToggleSidebar) onToggleSidebar();
+    else setInternalSidebarOpen((open) => !open);
+  };
+  const showHeader = showModelPicker || showClear || showSidebar;
 
   // Local "in-flight" + confirm latch for the clear button so the
   // user can't double-fire the DELETE and so a stray click doesn't
@@ -243,234 +266,274 @@ export const ChatView = ({
   return (
     <TooltipProvider delayDuration={200}>
       {/*
-       * Full-width column owns the vertical layout and the scroll. The
-       * centered `max-w-4xl` framing lives on each section (header,
-       * transcript, suggestions, composer) instead of the outer shell,
-       * so the scroll area's scrollbar sits at the far right - outside
-       * the centered column - and the composer lines up with the
-       * message column regardless of whether a scrollbar is showing.
+       * Outer row hosts the optional conversation sidebar beside the
+       * chat column. The chat column owns the vertical layout and the
+       * scroll; the centered `max-w-4xl` framing lives on each section
+       * (header, transcript, suggestions, composer) instead of the
+       * outer shell, so the scroll area's scrollbar sits at the far
+       * right - outside the centered column - and the composer lines up
+       * with the message column regardless of whether a scrollbar is
+       * showing.
        */}
-      <div className={cn("flex h-full flex-col py-0 md:py-6", className)}>
-        {showHeader && (
-          <div className="mx-auto flex w-full max-w-4xl items-center justify-end gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground md:px-6">
-            {showModelPicker && (
-              <div className="flex items-center gap-2">
-                <span>Model</span>
-                <Select
-                  value={model ? model : DEFAULT_MODEL_VALUE}
-                  onValueChange={(v) =>
-                    onModelChange?.(v === DEFAULT_MODEL_VALUE ? "" : v)
-                  }
-                >
-                  <SelectTrigger size="sm" className="w-[260px]">
-                    <SelectValue placeholder="Server default" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_MODEL_VALUE}>Server default</SelectItem>
-                    {models!.map((m) => (
-                      <SelectItem key={m.name} value={m.name}>
-                        {m.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {showClear && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant={clearState === "confirm" ? "destructive" : "outline"}
-                    size="sm"
-                    onClick={handleClearClick}
-                    onBlur={() =>
-                      // Drop the confirm latch when focus leaves so a
-                      // half-armed button doesn't sit destructive-red
-                      // forever after the user clicks away.
-                      setClearState((s) => (s === "confirm" ? "idle" : s))
-                    }
-                    disabled={clearState === "clearing"}
-                    className="gap-1.5"
-                  >
-                    {clearState === "clearing" ? (
-                      <Spinner className="size-3" />
-                    ) : (
-                      <Trash2Icon className="size-3" />
-                    )}
-                    {clearState === "confirm"
-                      ? "Confirm clear"
-                      : clearState === "clearing"
-                        ? "Clearing..."
-                        : "Clear"}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {clearState === "confirm"
-                    ? "Click again to confirm; wipes this conversation."
-                    : "Clear chat history for this thread"}
-                </TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        )}
-        <div className="relative flex flex-1 flex-col overflow-hidden">
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            className="flex-1 overflow-y-auto [scrollbar-gutter:stable]"
-          >
-            {messages.length === 0 && !isLoadingHistory ? (
-              <Empty className="mx-auto h-full w-full max-w-4xl px-4 md:px-6">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <MessageSquareIcon className="size-5" />
-                  </EmptyMedia>
-                  <EmptyTitle>Start a conversation</EmptyTitle>
-                  <EmptyDescription>
-                    {suggestions.length > 0
-                      ? "Ask anything, or pick a suggestion below."
-                      : "Ask anything to get started."}
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              <div
-                ref={contentRef}
-                className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4 md:px-6"
-              >
-                {(isLoadingMore || isLoadingHistory) && (
-                  <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
-                    <Spinner className="size-3" />
-                    <span>
-                      {isLoadingHistory
-                        ? "Loading history..."
-                        : "Loading older messages..."}
-                    </span>
-                  </div>
-                )}
-                {messages.map((message, i) => {
-                  const isLast = i === messages.length - 1;
-                  if (message.role === "assistant") {
-                    return (
-                      <AssistantBubble
-                        key={message.id}
-                        message={message}
-                        isLast={isLast}
-                        status={status}
-                        events={toolEventsByMessage[message.id]}
-                        regenerate={regenerate}
-                        onSuggestionClick={(text) => sendMessage({ text })}
-                        onResolveToolApproval={onResolveToolApproval}
-                        externalApprovals={pendingApprovalsByMessage[message.id]}
-                      />
-                    );
-                  }
-                  return <UserBubble key={message.id} message={message} />;
-                })}
-                {showWaiting && (
-                  <div className="flex h-7 items-center gap-2 px-3 text-xs text-muted-foreground">
-                    <Spinner className="size-3" />
-                    <span className="animate-pulse">{waitingLabel}</span>
-                  </div>
-                )}
-                {status === "error" && (
-                  <div className="flex flex-col items-start gap-2">
-                    <Alert variant="destructive">
-                      <TriangleAlertIcon className="size-4" />
-                      <AlertTitle>Something went wrong</AlertTitle>
-                      <AlertDescription>
-                        {error
-                          ? commonUtils.errorMessage(error)
-                          : "The assistant ran into an error. Please try again."}
-                      </AlertDescription>
-                    </Alert>
-                    {regenerate && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={regenerate}
-                        className="gap-1.5"
-                      >
-                        <RefreshCwIcon className="size-3" />
-                        Retry
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          {!isAtBottom && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-4 mx-auto flex w-full max-w-4xl justify-end px-4 md:px-6">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={scrollToBottom}
-                className="pointer-events-auto rounded-full shadow"
-              >
-                <ArrowDownIcon className="size-4" />
-              </Button>
-            </div>
-          )}
-        </div>
-
-        {messages.length === 0 && (
-          <SuggestionPills
-            questions={suggestions}
-            onSelect={(s) => sendMessage({ text: s })}
-            className="mx-auto w-full max-w-4xl px-4 pb-2 md:px-6"
+      <div className={cn("flex h-full", className)}>
+        {showSidebar && sidebarOpen && (
+          <ThreadSidebar
+            threads={threads ?? []}
+            {...(activeThreadId ? { activeThreadId } : {})}
+            isLoading={isLoadingThreads}
+            onSelect={(id) => onSelectThread?.(id)}
+            {...(onNewThread ? { onNew: onNewThread } : {})}
+            {...(onDeleteThread ? { onDelete: onDeleteThread } : {})}
           />
         )}
-
-        <form
-          onSubmit={handleSubmit}
-          className="mx-auto w-full max-w-4xl px-4 pb-4 pt-2 md:px-6"
-        >
-          <InputGroup>
-            <InputGroupTextarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e as unknown as React.FormEvent);
-                }
-              }}
-              placeholder="Send a message..."
-              rows={1}
-            />
-            <InputGroupAddon align="inline-end">
-              {isRunning && onStop ? (
-                <InputGroupButton
-                  type="button"
-                  size="icon-sm"
-                  variant="default"
-                  onClick={onStop}
-                  aria-label="Stop response"
-                >
-                  <SquareIcon className="size-3 fill-current" />
-                </InputGroupButton>
+        <div className="flex h-full min-w-0 flex-1 flex-col py-0 md:py-6">
+          {showHeader && (
+            <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-3 px-4 pb-2 pt-1 text-xs text-muted-foreground md:px-6">
+              <div className="flex items-center gap-2">
+                {showSidebar && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={toggleSidebar}
+                        aria-label={
+                          sidebarOpen ? "Hide conversations" : "Show conversations"
+                        }
+                      >
+                        <PanelLeftIcon className="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {sidebarOpen ? "Hide conversations" : "Show conversations"}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {showModelPicker && (
+                  <div className="flex items-center gap-2">
+                    <span>Model</span>
+                    <Select
+                      value={model ? model : DEFAULT_MODEL_VALUE}
+                      onValueChange={(v) =>
+                        onModelChange?.(v === DEFAULT_MODEL_VALUE ? "" : v)
+                      }
+                    >
+                      <SelectTrigger size="sm" className="w-[260px]">
+                        <SelectValue placeholder="Server default" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={DEFAULT_MODEL_VALUE}>
+                          Server default
+                        </SelectItem>
+                        {models!.map((m) => (
+                          <SelectItem key={m.name} value={m.name}>
+                            {m.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {showClear && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant={clearState === "confirm" ? "destructive" : "outline"}
+                        size="sm"
+                        onClick={handleClearClick}
+                        onBlur={() =>
+                          // Drop the confirm latch when focus leaves so a
+                          // half-armed button doesn't sit destructive-red
+                          // forever after the user clicks away.
+                          setClearState((s) => (s === "confirm" ? "idle" : s))
+                        }
+                        disabled={clearState === "clearing"}
+                        className="gap-1.5"
+                      >
+                        {clearState === "clearing" ? (
+                          <Spinner className="size-3" />
+                        ) : (
+                          <Trash2Icon className="size-3" />
+                        )}
+                        {clearState === "confirm"
+                          ? "Confirm clear"
+                          : clearState === "clearing"
+                            ? "Clearing..."
+                            : "Clear"}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {clearState === "confirm"
+                        ? "Click again to confirm; wipes this conversation."
+                        : "Clear chat history for this thread"}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="relative flex flex-1 flex-col overflow-hidden">
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+            >
+              {messages.length === 0 && !isLoadingHistory ? (
+                <Empty className="mx-auto h-full w-full max-w-4xl px-4 md:px-6">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <MessageSquareIcon className="size-5" />
+                    </EmptyMedia>
+                    <EmptyTitle>Start a conversation</EmptyTitle>
+                    <EmptyDescription>
+                      {suggestions.length > 0
+                        ? "Ask anything, or pick a suggestion below."
+                        : "Ask anything to get started."}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               ) : (
-                <InputGroupButton
-                  type="submit"
-                  size="icon-sm"
-                  variant="default"
-                  disabled={!input.trim() || isRunning}
-                  aria-label="Send message"
+                <div
+                  ref={contentRef}
+                  className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4 md:px-6"
                 >
-                  {isRunning ? (
-                    <Spinner className="size-3" />
-                  ) : (
-                    <SendIcon className="size-3" />
+                  {(isLoadingMore || isLoadingHistory) && (
+                    <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
+                      <Spinner className="size-3" />
+                      <span>
+                        {isLoadingHistory
+                          ? "Loading history..."
+                          : "Loading older messages..."}
+                      </span>
+                    </div>
                   )}
-                </InputGroupButton>
+                  {messages.map((message, i) => {
+                    const isLast = i === messages.length - 1;
+                    if (message.role === "assistant") {
+                      return (
+                        <AssistantBubble
+                          key={message.id}
+                          message={message}
+                          isLast={isLast}
+                          status={status}
+                          events={toolEventsByMessage[message.id]}
+                          regenerate={regenerate}
+                          onSuggestionClick={(text) => sendMessage({ text })}
+                          onResolveToolApproval={onResolveToolApproval}
+                          externalApprovals={pendingApprovalsByMessage[message.id]}
+                        />
+                      );
+                    }
+                    return <UserBubble key={message.id} message={message} />;
+                  })}
+                  {showWaiting && (
+                    <div className="flex h-7 items-center gap-2 px-3 text-xs text-muted-foreground">
+                      <Spinner className="size-3" />
+                      <span className="animate-pulse">{waitingLabel}</span>
+                    </div>
+                  )}
+                  {status === "error" && (
+                    <div className="flex flex-col items-start gap-2">
+                      <Alert variant="destructive">
+                        <TriangleAlertIcon className="size-4" />
+                        <AlertTitle>Something went wrong</AlertTitle>
+                        <AlertDescription>
+                          {error
+                            ? commonUtils.errorMessage(error)
+                            : "The assistant ran into an error. Please try again."}
+                        </AlertDescription>
+                      </Alert>
+                      {regenerate && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={regenerate}
+                          className="gap-1.5"
+                        >
+                          <RefreshCwIcon className="size-3" />
+                          Retry
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
-            </InputGroupAddon>
-          </InputGroup>
-        </form>
+            </div>
+            {!isAtBottom && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-4 mx-auto flex w-full max-w-4xl justify-end px-4 md:px-6">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={scrollToBottom}
+                  className="pointer-events-auto rounded-full shadow"
+                >
+                  <ArrowDownIcon className="size-4" />
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {messages.length === 0 && (
+            <SuggestionPills
+              questions={suggestions}
+              onSelect={(s) => sendMessage({ text: s })}
+              className="mx-auto w-full max-w-4xl px-4 pb-2 md:px-6"
+            />
+          )}
+
+          <form
+            onSubmit={handleSubmit}
+            className="mx-auto w-full max-w-4xl px-4 pb-4 pt-2 md:px-6"
+          >
+            <InputGroup>
+              <InputGroupTextarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit(e as unknown as React.FormEvent);
+                  }
+                }}
+                placeholder="Send a message..."
+                rows={1}
+              />
+              <InputGroupAddon align="inline-end">
+                {isRunning && onStop ? (
+                  <InputGroupButton
+                    type="button"
+                    size="icon-sm"
+                    variant="default"
+                    onClick={onStop}
+                    aria-label="Stop response"
+                  >
+                    <SquareIcon className="size-3 fill-current" />
+                  </InputGroupButton>
+                ) : (
+                  <InputGroupButton
+                    type="submit"
+                    size="icon-sm"
+                    variant="default"
+                    disabled={!input.trim() || isRunning}
+                    aria-label="Send message"
+                  >
+                    {isRunning ? (
+                      <Spinner className="size-3" />
+                    ) : (
+                      <SendIcon className="size-3" />
+                    )}
+                  </InputGroupButton>
+                )}
+              </InputGroupAddon>
+            </InputGroup>
+          </form>
+        </div>
       </div>
     </TooltipProvider>
   );

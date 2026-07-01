@@ -131,6 +131,14 @@ await createApp({
     mastra({
       storage: true,
       memory: true,
+      // Managed Memory (Databricks Agent Memory, Beta) is left at its
+      // prefer-if-available default: set the MEMORY_STORE env var to a
+      // three-level UC store (catalog.schema.name) and, when the
+      // workspace exposes the memory-stores API, the plugin uses it for
+      // long-term / semantic recall (save_memory / search_memory + auto
+      // recall) instead of PgVector. Unset MEMORY_STORE keeps the
+      // PgVector path, so the demo runs without the preview. Pass
+      // `managedMemory: { store, ... }` to configure it explicitly.
       agents: support,
     }),
   ],

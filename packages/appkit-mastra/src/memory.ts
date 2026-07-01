@@ -37,6 +37,7 @@ import { Pool, type PoolConfig } from "pg";
 
 import type { MastraAgentDefinition, MastraMemoryConfigOverride } from "./agents.js";
 import type { MastraPluginConfig } from "./config.js";
+import { summaryModel, TITLE_INSTRUCTIONS } from "./summarize.js";
 
 const log = logUtils.logger("mastra/memory");
 
@@ -87,6 +88,18 @@ export function needsLakebase(config: MastraPluginConfig): boolean {
   );
 }
 
+/** Options controlling how {@link MemoryBuilder} resolves each agent's memory. */
+export interface MemoryBuilderOptions {
+  /**
+   * Skip building / attaching `PgVector` (and its `semanticRecall`)
+   * for every agent. Set when Databricks Managed Memory is the active
+   * long-term backend - it fills the semantic-recall role instead, via
+   * the recall input processor and memory tools. Thread / message
+   * storage (`PostgresStore`) is unaffected.
+   */
+  suppressVector?: boolean;
+}
+
 /**
  * Construct a per-agent {@link Memory} factory bound to the supplied
  * service-principal pool (see {@link createServicePrincipalPool}).
@@ -96,8 +109,9 @@ export function needsLakebase(config: MastraPluginConfig): boolean {
 export function createMemoryBuilder(
   config: MastraPluginConfig,
   servicePrincipalPool: Pool,
+  options: MemoryBuilderOptions = {},
 ): MemoryBuilder {
-  return new MemoryBuilder(config, servicePrincipalPool);
+  return new MemoryBuilder(config, servicePrincipalPool, options);
 }
 
 /**
@@ -111,6 +125,7 @@ export class MemoryBuilder {
   constructor(
     private readonly config: MastraPluginConfig,
     private readonly servicePrincipalPool: Pool,
+    private readonly options: MemoryBuilderOptions = {},
   ) {}
 
   /**
@@ -176,6 +191,20 @@ export class MemoryBuilder {
       options: {
         lastMessages: 10,
         ...(vector ? { semanticRecall: { topK: 3, messageRange: 2 } } : {}),
+        // Auto-name each thread from its opening turn so the
+        // conversation list the UI renders shows meaningful titles
+        // instead of raw ids. Titling runs on the small / fast chat
+        // tier (see `summarize.ts`) rather than the agent's primary
+        // model, so naming a thread never spends the heavyweight model.
+        // Only meaningful when storage is on; harmless otherwise.
+        ...(storage
+          ? {
+              generateTitle: {
+                model: summaryModel(this.config),
+                instructions: TITLE_INSTRUCTIONS,
+              },
+            }
+          : {}),
       },
     });
   }
@@ -212,6 +241,9 @@ export class MemoryBuilder {
    * - object: build a dedicated `PgVector` for this agent.
    */
   private buildVector(setting: MemorySetting): PgVector | undefined {
+    // Managed Memory owns the long-term / recall role when active, so
+    // skip PgVector entirely regardless of the per-agent / plugin setting.
+    if (this.options.suppressVector) return undefined;
     if (!setting) return undefined;
     if (typeof setting === "boolean") return this.getSharedVector();
     return buildPgVector(setting);

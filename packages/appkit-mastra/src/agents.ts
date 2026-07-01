@@ -22,11 +22,15 @@ import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import { buildRenderDataTool } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
+import { buildManagedMemoryTools } from "./connectors/managed-memory/tools.js";
+import type { ManagedMemoryRuntime } from "./connectors/managed-memory/types.js";
 import { buildGenieToolkitProvider, resolveGenieSpaces } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
 import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
 import { ResultProcessor } from "./processor.js";
+import { buildManagedMemoryRecallProcessor } from "./processors/managed-memory-recall.js";
 import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
+import { buildSummarizeTool } from "./summarize.js";
 
 /**
  * Tool record accepted by every Mastra `Agent.tools` field and by the
@@ -418,31 +422,59 @@ export async function buildAgents(opts: {
   config: MastraPluginConfig;
   context: appkitUtils.PluginContextLike | undefined;
   memoryBuilder?: MemoryBuilder;
+  /**
+   * Active Databricks Managed Memory runtime, present only when managed
+   * memory was resolved and probed successfully at setup. When set,
+   * every agent gets the `save_memory` / `search_memory` tools and the
+   * auto-recall input processor; the `PgVector` path is suppressed
+   * upstream in `memory.ts`.
+   */
+  managedMemory?: ManagedMemoryRuntime;
   log: logUtils.Logger;
 }): Promise<BuiltAgents> {
-  const { config, context, memoryBuilder, log } = opts;
+  const { config, context, memoryBuilder, managedMemory, log } = opts;
   const definitions = resolveDefinitions(config);
   const ids = Object.keys(definitions);
   const defaultAgentId = config.defaultAgent ?? ids[0] ?? FALLBACK_AGENT_ID;
 
   const plugins = buildPluginsMap(config, context);
-  // System-default ambient tools every agent gets out of the box.
-  // Currently just `render_data` for inline visualizations; the
-  // user can shadow it by including a same-named tool in their own
+  // System-default ambient tools every agent gets out of the box:
+  // `render_data` for inline visualizations and `summarize` for
+  // offloading text condensing to the fast / small chat tier. The
+  // user can shadow either by including a same-named tool in their own
   // `config.tools` or per-agent `tools`. Order in {@link resolveTools}
   // is `system -> user-ambient -> per-agent`, last write wins.
   const systemTools: MastraTools = {
     render_data: buildRenderDataTool(config),
+    summarize: buildSummarizeTool(config),
   };
-  const ambientTools = { ...systemTools, ...(config.tools ?? {}) };
+  // Managed-memory tools (when active) are system-provided like
+  // `render_data`: spread before `config.tools` so a user-supplied
+  // same-named tool still wins. Skipped when `managedMemory.tools` is
+  // off (the caller sets `tools: false` before building the runtime).
+  const managedMemoryTools: MastraTools = managedMemory?.tools
+    ? buildManagedMemoryTools(managedMemory)
+    : {};
+  const ambientTools = {
+    ...systemTools,
+    ...managedMemoryTools,
+    ...(config.tools ?? {}),
+  };
   const style = resolveStyleInstructions(config);
   // Default-on protection against the model copying turn-scoped
   // chartIds from prior assistant tool results into the new
   // turn's `[chart:<id>]` markers. Opt out per-plugin via
   // `config.stripStaleCharts: false`.
   const outputProcessors = [new ResultProcessor()];
-  const inputProcessors =
-    config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor];
+  const inputProcessors = [
+    ...(config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor]),
+    // Auto-recall the user's managed-memory entries before each turn
+    // (the PgVector semantic-recall replacement). Only when managed
+    // memory is active and recall isn't explicitly disabled.
+    ...(managedMemory?.recall
+      ? [buildManagedMemoryRecallProcessor(managedMemory)]
+      : []),
+  ];
   const agents: Record<string, Agent> = {};
 
   for (const [id, def] of Object.entries(definitions)) {

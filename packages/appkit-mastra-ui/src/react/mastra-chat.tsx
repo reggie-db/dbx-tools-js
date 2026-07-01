@@ -1,3 +1,4 @@
+import type { MastraThread } from "@dbx-tools/appkit-mastra-shared";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
 import type { UIMessage } from "ai";
 import { nanoid } from "nanoid";
@@ -6,6 +7,7 @@ import {
   useMastraClient,
   useMastraModels,
   useMastraSuggestions,
+  useMastraThreads,
 } from "../lib/mastra-client.js";
 import { ChatView } from "./chat-view.js";
 import { dedupeSuggestions } from "./suggestions.js";
@@ -14,6 +16,7 @@ import type {
   ChatStatus,
   ChatViewProps,
   PendingApproval,
+  ThreadSummary,
   ToolEvent,
   ToolProgress,
 } from "./types.js";
@@ -47,6 +50,67 @@ const makeUserMessage = (text: string): UIMessage => ({
   parts: [{ type: "text", text }],
 });
 
+/** Project a wire {@link MastraThread} down to the sidebar's view. */
+const toThreadSummary = (thread: MastraThread): ThreadSummary => ({
+  id: thread.id,
+  ...(thread.title ? { title: thread.title } : {}),
+  updatedAt: thread.updatedAt,
+});
+
+/**
+ * `localStorage` key the active thread id is persisted under, namespaced
+ * by plugin mount + agent so two agents (or two apps on one origin)
+ * don't clobber each other's "current conversation".
+ */
+const threadStorageKey = (basePath: string, agentId: string): string =>
+  `dbx-mastra-thread:${basePath}:${agentId}`;
+
+/** Read the persisted active thread id, tolerating storage being unavailable. */
+const readStoredThreadId = (key: string): string | undefined => {
+  try {
+    return window.localStorage.getItem(key) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Persist the active thread id, silently ignoring storage failures. */
+const storeStoredThreadId = (key: string, id: string): void => {
+  try {
+    window.localStorage.setItem(key, id);
+  } catch {
+    // Private-mode / disabled storage: persistence is best-effort, the
+    // in-memory selection still works for the session.
+  }
+};
+
+/**
+ * `localStorage` key the conversation sidebar's open/closed state is
+ * persisted under, namespaced by plugin mount + agent so the user's
+ * show/hide choice survives reloads without clobbering other mounts.
+ */
+const sidebarStorageKey = (basePath: string, agentId: string): string =>
+  `dbx-mastra-sidebar:${basePath}:${agentId}`;
+
+/** Read the persisted sidebar open flag, falling back when unset / unavailable. */
+const readStoredSidebarOpen = (key: string, fallback: boolean): boolean => {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value === null ? fallback : value === "1";
+  } catch {
+    return fallback;
+  }
+};
+
+/** Persist the sidebar open flag, silently ignoring storage failures. */
+const storeStoredSidebarOpen = (key: string, open: boolean): void => {
+  try {
+    window.localStorage.setItem(key, open ? "1" : "0");
+  } catch {
+    // Best-effort; the in-session toggle still works without persistence.
+  }
+};
+
 // `tool-output` chunks carry arbitrary tool-defined payloads; only the
 // `{type: ...}` shape we know how to render in `ToolSessionPill` is
 // surfaced. Anything else (other tools, raw data, etc.) is ignored.
@@ -78,6 +142,15 @@ export interface UseMastraChatOptions {
    * `[]` to force no suggestions.
    */
   suggestions?: string[];
+  /**
+   * Enable built-in conversation (thread) management: the chat tracks a
+   * client-selected thread id, persists it across reloads, lists the
+   * resource's conversations, and renders a sidebar to switch between
+   * them / start new ones / delete them. On by default. Set `false` for
+   * the classic single-thread chat anchored to the per-session cookie
+   * (no sidebar, no thread tracking).
+   */
+  enableThreads?: boolean;
 }
 
 /**
@@ -112,6 +185,49 @@ export const useMastraChat = (
     mastraClient.setModelOverride(model || undefined);
   }, [mastraClient, model]);
   const agentId = options.agentId ?? mastraClient.defaultAgent;
+  // Built-in conversation management. When on, the chat always drives an
+  // explicit client thread id (rather than leaning on the per-session
+  // cookie) so it can reference, persist, and switch between the
+  // conversations a user owns. Selecting a thread routes every call
+  // (stream + history + clear) at it via `mastraClient.setThreadId`.
+  const enableThreads = options.enableThreads !== false;
+  const threadKey = threadStorageKey(mastraClient.basePath, agentId);
+  const [activeThreadId, setActiveThreadId] = useState<string | undefined>(() =>
+    enableThreads ? (readStoredThreadId(threadKey) ?? nanoid()) : undefined,
+  );
+  const {
+    threads,
+    loading: isLoadingThreads,
+    refresh: refreshThreads,
+  } = useMastraThreads(options.agentId, enableThreads);
+  // Persist the active thread id so a reload reopens the same
+  // conversation. Best-effort; storage may be unavailable.
+  useEffect(() => {
+    if (enableThreads && activeThreadId) storeStoredThreadId(threadKey, activeThreadId);
+  }, [enableThreads, threadKey, activeThreadId]);
+  // Conversation sidebar show/hide, persisted so the user's choice
+  // sticks across reloads. The view exposes a header toggle wired to
+  // `onToggleSidebar`; defaults open the first time.
+  const sidebarKey = sidebarStorageKey(mastraClient.basePath, agentId);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
+    enableThreads ? readStoredSidebarOpen(sidebarKey, true) : true,
+  );
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => {
+      const next = !prev;
+      storeStoredSidebarOpen(sidebarKey, next);
+      return next;
+    });
+  }, [sidebarKey]);
+  // Refresh the conversation list after a turn (a brand-new thread
+  // appears, or its auto-generated title lands), a clear, or a delete.
+  // Titles are generated server-side after the turn settles, so a short
+  // delayed second pass picks them up.
+  const refreshThreadsSoon = useCallback(() => {
+    if (!enableThreads) return;
+    refreshThreads();
+    window.setTimeout(refreshThreads, 2000);
+  }, [enableThreads, refreshThreads]);
   // Picker is opt-in: an omitted (or falsy) `showModelPicker` keeps it
   // hidden and skips the catalogue fetch entirely.
   const showModelPicker = Boolean(options.showModelPicker);
@@ -477,7 +593,12 @@ export const useMastraChat = (
       try {
         const stream = await open();
         await processStream(stream, assistantId, currentRunIdRef, controller.signal);
-        if (runTokenRef.current === token) setStatus("ready");
+        if (runTokenRef.current === token) {
+          setStatus("ready");
+          // A completed turn may have created the thread (first message)
+          // or triggered server-side title generation; sync the list.
+          refreshThreadsSoon();
+        }
       } catch (caught) {
         // A superseded or stopped run (token moved on) leaves the status
         // to the newer turn / `stop()`; only the still-active run
@@ -492,7 +613,7 @@ export const useMastraChat = (
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [mastraClient, processStream],
+    [mastraClient, processStream, refreshThreadsSoon],
   );
 
   const runStream = useCallback(
@@ -625,7 +746,65 @@ export const useMastraChat = (
     currentRunIdRef.current = null;
     setError(null);
     setStatus("ready");
-  }, [mastraClient, agentId, writeMessages]);
+    // Clearing deletes the thread server-side, so drop it from the list.
+    refreshThreadsSoon();
+  }, [mastraClient, agentId, writeMessages, refreshThreadsSoon]);
+
+  /**
+   * Switch the active conversation to `threadId`. Aborts any in-flight
+   * turn on the current thread, then flips `activeThreadId` - the
+   * history effect re-points the client at the thread, resets the
+   * transcript, and loads its messages. No-op when already active.
+   */
+  const selectThread = useCallback(
+    (threadId: string) => {
+      if (threadId === activeThreadId) return;
+      runTokenRef.current++;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setActiveThreadId(threadId);
+    },
+    [activeThreadId],
+  );
+
+  /**
+   * Start a fresh conversation: mint a new thread id and make it active.
+   * The thread row materializes server-side (and joins the list) on the
+   * first message; until then the transcript is just empty.
+   */
+  const newThread = useCallback(() => {
+    runTokenRef.current++;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setActiveThreadId(nanoid());
+  }, []);
+
+  /**
+   * Delete a conversation by id, then refresh the list. Deleting the
+   * active conversation rolls onto a fresh empty thread so the user is
+   * never left pointed at a thread that no longer exists.
+   */
+  const deleteThread = useCallback(
+    async (threadId: string) => {
+      try {
+        const result = await mastraClient.removeThread(threadId, { agentId });
+        log.info("thread deleted", { threadId, deleted: result.deleted });
+      } catch (error) {
+        log.error("thread delete error", {
+          threadId,
+          error: commonUtils.errorMessage(error),
+        });
+      }
+      if (threadId === activeThreadId) {
+        runTokenRef.current++;
+        abortRef.current?.abort();
+        abortRef.current = null;
+        setActiveThreadId(nanoid());
+      }
+      refreshThreads();
+    },
+    [mastraClient, agentId, activeThreadId, refreshThreads],
+  );
 
   const regenerate = useCallback(() => {
     if (!lastUserTextRef.current) return;
@@ -652,13 +831,24 @@ export const useMastraChat = (
   }, [runStream, writeMessages]);
 
   // Hydrate the transcript with the latest page of stored messages on
-  // mount. We re-run when `basePath` or `agentId` changes
-  // (e.g. picker swaps the agent), but not on every model change
-  // since the model only affects subsequent generations, not stored
-  // history.
+  // mount and whenever the active thread (or agent) changes. Pointing
+  // the client at `activeThreadId` here - before any fetch or stream -
+  // is what makes every subsequent call target the selected thread. We
+  // re-run when `basePath`, `agentId`, or `activeThreadId` changes (the
+  // model only affects subsequent generations, not stored history, so
+  // model changes don't refire this).
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    // Route the agent stream + custom routes at the active thread. When
+    // thread management is off, `activeThreadId` is undefined and the
+    // header is cleared, so the server falls back to the session cookie.
+    mastraClient.setThreadId(activeThreadId);
+    // Reset per-thread client state so switching conversations never
+    // bleeds the prior thread's transcript / pills / approvals through.
+    writeMessages([]);
+    setToolEventsByMessage({});
+    setPendingApprovalsByMessage({});
     historyInFlightRef.current = true;
     setIsLoadingHistory(true);
     mastraClient
@@ -695,7 +885,7 @@ export const useMastraChat = (
       cancelled = true;
       controller.abort();
     };
-  }, [mastraClient, agentId, writeMessages]);
+  }, [mastraClient, agentId, activeThreadId, writeMessages]);
 
   // Lazy-load the next older page when the user scrolls near the top
   // of the transcript. ChatView captures the pre-prepend scroll
@@ -762,6 +952,23 @@ export const useMastraChat = (
     hasMore: hasMoreHistory,
     isLoadingHistory,
     onClear: handleClear,
+    // Conversation management: hand ChatView the thread list + handlers
+    // only when enabled, so the sidebar stays hidden for the classic
+    // single-thread chat (ChatView keys the sidebar off these props).
+    ...(enableThreads
+      ? {
+          threads: threads.map(toThreadSummary),
+          ...(activeThreadId ? { activeThreadId } : {}),
+          isLoadingThreads,
+          onSelectThread: selectThread,
+          onNewThread: newThread,
+          onDeleteThread: deleteThread,
+          // Persisted sidebar visibility, controlled from the driver so
+          // the show/hide choice survives reloads.
+          sidebarOpen,
+          onToggleSidebar: toggleSidebar,
+        }
+      : {}),
   };
 };
 
@@ -777,8 +984,11 @@ export interface MastraChatProps extends UseMastraChatOptions {
  * (mount paths + default agent) via {@link useMastraChat}, then renders
  * the conversation through {@link ChatView}. The GenieChat-equivalent
  * drop-in: full streaming, tool-session pills, approvals, stop control,
- * and history pagination with no host wiring. The model picker is
- * opt-in via `showModelPicker`.
+ * history pagination, and built-in conversation management (a sidebar
+ * of the resource's threads with select / new / delete, persisted
+ * across reloads) - all with no host wiring. The model picker is opt-in
+ * via `showModelPicker`; thread management is on by default and can be
+ * turned off with `enableThreads: false`.
  */
 export const MastraChat = ({ className, ...options }: MastraChatProps) => {
   const chat = useMastraChat(options);

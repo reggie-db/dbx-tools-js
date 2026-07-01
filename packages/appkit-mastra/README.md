@@ -88,6 +88,94 @@ Override per plugin or per agent by passing `memory` / `storage` as
 index / schema). The fields are typed in [`config.ts`](src/config.ts);
 the wiring is in [`memory.ts`](src/memory.ts).
 
+### Conversations (threads)
+
+When storage is on, a user owns many conversation threads. The plugin
+resolves the thread a request targets from `RequestContext`, in order:
+
+1. A **client-selected thread id** - the thread-selection header
+   (`x-mastra-thread-id`) or `?threadId=` query. This is how the chat UI
+   references a specific conversation: it picks an id from the threads
+   listing (or mints one for a new chat) and stamps it on every call, so
+   streaming, history, and clear all target that thread.
+2. The **per-session cookie** (`appkit_<plugin-name>_session_id`), minted
+   on first contact, as the single-thread fallback for clients that
+   don't manage threads explicitly.
+
+The thread id pins both `agent.stream()` persistence and the history /
+threads routes, so client and server can never disagree on which
+conversation is active. Two custom routes back the UI's conversation
+management (registered alongside `/route/history`):
+
+- `GET /route/threads` (`/route/threads/:agentId`) - one page of the
+  caller's threads, newest first, **scoped to the caller's resource** so
+  a user only ever sees their own conversations.
+- `DELETE /route/threads` - delete the targeted thread (id from the
+  thread-selection header). Ownership is enforced server-side: a thread
+  is only removed when it belongs to the caller.
+
+Each thread is auto-titled from its opening turn (Mastra's
+`generateTitle`), but titling runs on the **small / fast chat tier**
+(`ModelClass.ChatFast`) via the dedicated summarizer in
+[`summarize.ts`](src/summarize.ts) - not the agent's primary model - so
+naming a conversation never spends the heavyweight model. The route
+handlers live in [`threads.ts`](src/threads.ts); the thread-id
+resolution is in [`server.ts`](src/server.ts). The drop-in `MastraChat`
+from `@dbx-tools/appkit-mastra-ui` renders the whole conversation sidebar
+over these routes with no extra wiring.
+
+### Summarization (`summarize` tool)
+
+Every agent gets a system-default ambient `summarize` tool that condenses
+arbitrary text (long content, notes, transcripts, bulky tool results) on
+the small / fast chat tier instead of the agent's primary model. It takes
+`text` plus optional `instructions` (e.g. "one sentence", "list the action
+items") and a `maxWords` soft cap, and returns `{ summary }`. The same
+small-tier summarizer backs conversation titling above. Shadow it by
+defining a same-named tool in `config.tools` (or a per-agent `tools`), and
+reuse it programmatically via the exported `summarizeText(config, text,
+opts)` / `buildSummarizeTool(config)`.
+
+### Managed Memory (Databricks Agent Memory, Beta)
+
+`managedMemory` swaps the Postgres `PgVector` semantic-recall layer for
+[Databricks Managed Agent Memory](https://docs.databricks.com/aws/en/generative-ai/agent-framework/managed-memory)
+- a Unity Catalog memory-store. When active, every agent gets two
+ambient tools (`save_memory`, `search_memory`) plus an auto-recall input
+processor that searches the user's entries with the latest message and
+injects the top matches before each turn. Entries are scoped per-user
+via OBO (the model never sets the scope). The thread / message
+transcript still uses `PostgresStore` only when `lakebase()` is
+registered - managed memory does not pull in Lakebase.
+
+```ts
+mastra({
+  // Prefer-if-available: enabled automatically when MEMORY_STORE is set
+  // and the workspace exposes the memory-stores API; otherwise PgVector.
+  managedMemory: true, // or { store, topK, autoCreate, recall, tools }
+});
+```
+
+The store is a three-level Unity Catalog name (`catalog.schema.name`),
+resolved from `managedMemory.store` or the `MEMORY_STORE` env var.
+Enable semantics:
+
+- **omitted** (default, prefer-if-available): on only when `MEMORY_STORE`
+  is set and the API is reachable; otherwise the `PgVector` path.
+- **`false`**: never use managed memory.
+- **`true`**: enable; store must come from `MEMORY_STORE`.
+- **object**: enable with explicit `store` (or `MEMORY_STORE`) plus
+  `topK`, `autoCreate`, `recall`, `tools`, `entryPath` overrides.
+
+Required Unity Catalog privileges for the app service principal:
+`CREATE MEMORY STORE` on the schema (only when `autoCreate` is on, the
+default), plus `READ MEMORY STORE` / `WRITE MEMORY STORE` on the store.
+The capability probe and optional store auto-create run once at setup as
+the service principal. Managed Memory is Beta and REST-only; on any
+probe, create, or search failure the plugin logs and falls back to the
+`PgVector` path so chat stays available. The connector lives in
+[`connectors/managed-memory/`](src/connectors/managed-memory).
+
 ## The `tools(plugins)` callback
 
 Each agent supplies either a static `tools: { ... }` record or a

@@ -17,18 +17,21 @@ export {
   useMastraConfig,
   useMastraModels,
   useMastraSuggestions,
+  useMastraThreads,
   useStatementFetch,
 } from "../lib/mastra-client.js";
 export type { ByIdFetchState } from "../lib/mastra-client.js";
 export { ChatView } from "./chat-view.js";
 export { MastraChat, useMastraChat } from "./mastra-chat.js";
 export type { MastraChatProps, UseMastraChatOptions } from "./mastra-chat.js";
+export { ThreadSidebar } from "./thread-sidebar.js";
 export type {
   ApprovalDecision,
   ChatModelOption,
   ChatStatus,
   ChatViewProps,
   PendingApproval,
+  ThreadSummary,
   ToolEvent,
   ToolProgress,
 } from "./types.js";

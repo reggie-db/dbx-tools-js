@@ -6,6 +6,7 @@
  */
 
 import { getExecutionContext } from "@databricks/appkit";
+import { THREAD_ID_HEADER, THREAD_ID_QUERY } from "@dbx-tools/appkit-mastra-shared";
 import { httpUtils, logUtils, stringUtils } from "@dbx-tools/shared";
 import {
   MASTRA_RESOURCE_ID_KEY,
@@ -125,12 +126,35 @@ export class MastraServer extends MastraServerExpress {
     res.setHeader("X-Request-Id", requestId);
   }
 
+  /**
+   * Resolve the thread id this request targets and pin it on
+   * `RequestContext` (consumed by the agent stream for persistence and
+   * by the history / threads routes). Resolution order:
+   *
+   *   1. A client-supplied thread id (the thread-selection header /
+   *      `?threadId=` query). This is how the chat UI references a
+   *      specific conversation among the many a user owns - it picks a
+   *      thread id from the `/threads` listing (or mints one for a new
+   *      conversation) and stamps it here. The id is scoped to the
+   *      caller's resource by the recall / list routes, so a client
+   *      can only ever read or write its own threads.
+   *   2. The per-session cookie (`appkit_<plugin-name>_session_id`),
+   *      minted on first contact. This is the default single-thread
+   *      fallback for clients that don't manage threads explicitly, so
+   *      existing embeds keep one stable conversation per session with
+   *      no client changes.
+   */
   configureRequestContextThreadId(
     req: express.Request,
     res: express.Response,
     requestContext: RequestContext,
   ) {
     if (requestContext.get(MASTRA_THREAD_ID_KEY)) return;
+    const requested = this.readRequestedThreadId(req);
+    if (requested) {
+      requestContext.set(MASTRA_THREAD_ID_KEY, requested);
+      return;
+    }
     const cookies = httpUtils.parseCookies(req.headers.cookie);
     const cookieName = stringUtils.toIdentifierWithOptions(
       { delimiter: "_", distinct: true },
@@ -149,6 +173,23 @@ export class MastraServer extends MastraServerExpress {
       });
     }
     requestContext.set(MASTRA_THREAD_ID_KEY, sessionId);
+  }
+
+  /**
+   * Read the client-selected thread id from the request, preferring
+   * the thread-selection header over the `?threadId=` query. Returns
+   * `null` when neither carries a non-empty value so the caller falls
+   * back to the session cookie.
+   */
+  private readRequestedThreadId(req: express.Request): string | null {
+    const headerValue = req.headers[THREAD_ID_HEADER];
+    const queryValue = req.query[THREAD_ID_QUERY];
+    return (
+      stringUtils.trimToNull(
+        Array.isArray(headerValue) ? headerValue[0] : headerValue,
+      ) ??
+      stringUtils.trimToNull(Array.isArray(queryValue) ? queryValue[0] : queryValue)
+    );
   }
 
   configureRequestContextModelOverride(

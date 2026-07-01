@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/devkit",
-  "version": "0.1.71",
+  "version": "0.1.72",
   "bin": {
     "devkit": "./dist/bin/devkit.js"
   },
@@ -19,11 +19,11 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "type": "module",
   "knip": {
     "ignoreDependencies": [
       "prettier",
       "prettier-plugin-organize-imports"
     ]
-  }
+  },
+  "type": "module"
 }

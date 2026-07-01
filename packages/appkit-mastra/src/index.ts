@@ -15,6 +15,7 @@ export * from "@dbx-tools/model";
 export * from "./agents.js";
 export * from "./chart.js";
 export * from "./config.js";
+export * from "./connectors/managed-memory/index.js";
 export * from "./genie.js";
 export * from "./mcp.js";
 export * from "./plugin.js";
@@ -23,3 +24,8 @@ export {
   extractModelOverride,
   type ModelOverrideRequest,
 } from "./serving.js";
+export {
+  buildSummarizeTool,
+  type SummarizeOptions,
+  summarizeText,
+} from "./summarize.js";

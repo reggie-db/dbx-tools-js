@@ -4,14 +4,20 @@ import {
   MASTRA_ROUTES,
   MODEL_OVERRIDE_HEADER,
   MastraClearHistoryResponseSchema,
+  MastraDeleteThreadResponseSchema,
   MastraHistoryResponseSchema,
   MastraSuggestionsResponseSchema,
+  MastraThreadsResponseSchema,
   ServingEndpointsResponseSchema,
   StatementDataSchema,
+  THREAD_ID_HEADER,
   type Chart,
   type MastraClearHistoryResponse,
   type MastraClientConfig,
+  type MastraDeleteThreadResponse,
   type MastraHistoryResponse,
+  type MastraThread,
+  type MastraThreadsResponse,
   type ServingEndpointSummary,
   type StatementData,
 } from "@dbx-tools/appkit-mastra-shared";
@@ -73,6 +79,26 @@ export class MastraPluginClient extends MastraClient {
     const headers = (this.options.headers ??= {});
     if (model) headers[MODEL_OVERRIDE_HEADER] = model;
     else delete headers[MODEL_OVERRIDE_HEADER];
+  }
+
+  /**
+   * Select (or clear) the conversation thread every subsequent request
+   * targets, sent as the thread-selection header (`THREAD_ID_HEADER`).
+   * The plugin's middleware pins `RequestContext`'s thread id to it, so
+   * the agent stream persists into - and `history()` reads from - the
+   * chosen thread instead of the default per-session one. Pass
+   * `undefined` to fall back to the session thread.
+   *
+   * Mutates the shared `options.headers` in place (like
+   * {@link setModelOverride}) so the client identity stays stable; the
+   * inherited `agent.stream()` and the custom routes
+   * ({@link history} / {@link clearHistory} / {@link threads}) all read
+   * these headers, so selecting a thread routes every call at once.
+   */
+  setThreadId(threadId?: string): void {
+    const headers = (this.options.headers ??= {});
+    if (threadId) headers[THREAD_ID_HEADER] = threadId;
+    else delete headers[THREAD_ID_HEADER];
   }
 
   /**
@@ -138,7 +164,11 @@ export class MastraPluginClient extends MastraClient {
   async clearHistory(
     options: { agentId?: string; signal?: AbortSignal } = {},
   ): Promise<MastraClearHistoryResponse> {
-    const init: RequestInit = { method: "DELETE", credentials: "include" };
+    const init: RequestInit = {
+      method: "DELETE",
+      credentials: "include",
+      headers: this.#defaultHeaders(),
+    };
     if (options.signal) init.signal = options.signal;
     const res = await fetch(
       this.#agentScoped(MASTRA_ROUTES.history, options.agentId),
@@ -146,6 +176,63 @@ export class MastraPluginClient extends MastraClient {
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return MastraClearHistoryResponseSchema.parse(await res.json());
+  }
+
+  /**
+   * Fetch one page of the caller's conversation threads from
+   * `GET ${basePath}/threads`, newest first. Used to render the
+   * conversation list / sidebar so the user can switch between the
+   * threads they own for this resource. Scoped server-side to the
+   * caller's resource id, so it only ever returns the user's own
+   * conversations.
+   */
+  async threads(
+    options: {
+      agentId?: string;
+      page?: number;
+      perPage?: number;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<MastraThreadsResponse> {
+    const params = new URLSearchParams();
+    if (options.page !== undefined) params.set("page", String(options.page));
+    if (options.perPage !== undefined) params.set("perPage", String(options.perPage));
+    const qs = params.toString();
+    const base = this.#agentScoped(MASTRA_ROUTES.threads, options.agentId);
+    return this.#getJson(
+      qs ? `${base}?${qs}` : base,
+      MastraThreadsResponseSchema,
+      options.signal,
+    );
+  }
+
+  /**
+   * Delete a single conversation thread by id via the plugin's own
+   * `DELETE ${basePath}/threads` route (named `removeThread` to avoid
+   * clashing with the inherited `MastraClient.deleteThread`, which hits
+   * Mastra's stock thread route rather than our OBO-scoped, custom
+   * mount). The id is sent as the thread-selection header for this one
+   * call (without disturbing the client's currently-selected thread,
+   * set via {@link setThreadId}), so the sidebar can remove any thread
+   * while the user stays on another. Idempotent: deleting an unknown /
+   * already-removed thread reports `deleted: false` without erroring.
+   */
+  async removeThread(
+    threadId: string,
+    options: { agentId?: string; signal?: AbortSignal } = {},
+  ): Promise<MastraDeleteThreadResponse> {
+    const init: RequestInit = {
+      method: "DELETE",
+      credentials: "include",
+      headers: { ...this.#defaultHeaders(), [THREAD_ID_HEADER]: threadId },
+    };
+    if (options.signal) init.signal = options.signal;
+    const res = await fetch(
+      this.#agentScoped(MASTRA_ROUTES.threads, options.agentId),
+      init,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return MastraDeleteThreadResponseSchema.parse(await res.json());
   }
 
   /**
@@ -180,13 +267,29 @@ export class MastraPluginClient extends MastraClient {
     return !id || id === this.defaultAgent ? path : `${path}/${encodeURIComponent(id)}`;
   }
 
+  /**
+   * Snapshot of the client's per-request override headers (model +
+   * thread selection) for the custom-route fetches that don't go
+   * through `@mastra/client-js`'s own request pipeline. Returns a fresh
+   * object each call so a caller can safely add one-off headers without
+   * mutating the shared `options.headers`. The thread-selection header
+   * here is what routes `history()` / `clearHistory()` / `threads()` to
+   * the currently-selected thread (see {@link setThreadId}).
+   */
+  #defaultHeaders(): Record<string, string> {
+    return { ...((this.options.headers as Record<string, string>) ?? {}) };
+  }
+
   /** GET + JSON-parse + schema-validate against a route that always 200s. */
   async #getJson<T>(
     url: string,
     schema: { parse: (raw: unknown) => T },
     signal?: AbortSignal,
   ): Promise<T> {
-    const init: RequestInit = { credentials: "include" };
+    const init: RequestInit = {
+      credentials: "include",
+      headers: this.#defaultHeaders(),
+    };
     if (signal) init.signal = signal;
     const res = await fetch(url, init);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -348,6 +451,68 @@ export const useMastraSuggestions = (
   }, [client, agentId, enabled]);
 
   return { questions, loading };
+};
+
+/**
+ * Fetch (and re-fetch) the caller's conversation threads for an agent
+ * via `client.threads(agentId)`. Drives the conversation list / sidebar
+ * so the user can switch between the threads they own. Newest first
+ * (`updatedAt` DESC), scoped server-side to the caller's resource.
+ *
+ * Returns a `refresh()` the chat driver calls after a turn completes
+ * (a new thread appears, or its auto-generated title lands) and after a
+ * clear / delete, so the list stays in sync without polling. Pass
+ * `enabled: false` to skip the fetch entirely (e.g. when the sidebar is
+ * hidden), in which case `threads` stays empty. A failed fetch degrades
+ * to an empty list - the conversation list is a non-critical
+ * enhancement layered over the always-available default thread.
+ */
+export const useMastraThreads = (
+  agentId?: string,
+  enabled = true,
+): {
+  threads: MastraThread[];
+  loading: boolean;
+  error: Error | null;
+  refresh: () => void;
+} => {
+  const client = useMastraClient();
+  const [threads, setThreads] = useState<MastraThread[]>([]);
+  const [loading, setLoading] = useState(enabled);
+  const [error, setError] = useState<Error | null>(null);
+  // Bumped by `refresh()` to force a re-fetch without changing any of
+  // the natural deps (client / agentId / enabled).
+  const [nonce, setNonce] = useState(0);
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      setThreads([]);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    client
+      .threads({ agentId, signal: controller.signal })
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        setThreads(res.threads);
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (controller.signal.aborted || (e as { name?: string }).name === "AbortError")
+          return;
+        setError(e instanceof Error ? e : new Error(String(e)));
+        setThreads([]);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [client, agentId, enabled, nonce]);
+
+  return { threads, loading, error, refresh };
 };
 
 /**
