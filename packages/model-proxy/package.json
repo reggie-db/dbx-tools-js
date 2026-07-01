@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/model-proxy",
-  "version": "0.1.77",
+  "version": "0.1.78",
   "bin": {
     "model-proxy": "dist/cli.js"
   },

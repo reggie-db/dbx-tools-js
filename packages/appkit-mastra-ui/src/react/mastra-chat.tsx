@@ -63,6 +63,23 @@ const toThreadSummary = (thread: MastraThread): ThreadSummary => ({
   updatedAt: thread.updatedAt,
 });
 
+/** Max characters of the first user message used as a provisional thread title. */
+const TITLE_PREVIEW_MAX = 60;
+
+/**
+ * Derive a provisional sidebar title from a user's first message:
+ * whitespace-collapsed and truncated with an ellipsis. Shown the instant
+ * a brand-new conversation gets its first question so the row stops
+ * reading "New conversation", until the server's auto-generated title
+ * lands and supersedes it.
+ */
+const deriveThreadTitle = (text: string): string => {
+  const clean = text.trim().replace(/\s+/g, " ");
+  return clean.length > TITLE_PREVIEW_MAX
+    ? `${clean.slice(0, TITLE_PREVIEW_MAX - 1)}…`
+    : clean;
+};
+
 /**
  * `localStorage` key the active thread id is persisted under, namespaced
  * by plugin mount + agent so two agents (or two apps on one origin)
@@ -294,6 +311,14 @@ export const useMastraChat = (
   const [renamedThreads, setRenamedThreads] = useState<Record<string, string>>(
     {},
   );
+  // Provisional titles derived from a thread's first user message, keyed
+  // by thread id. Shown the instant a brand-new conversation gets its
+  // first question so the row stops reading "New conversation"; dropped
+  // as soon as the server's auto-generated title lands (see the prune
+  // effect below). A manual rename (`renamedThreads`) still wins.
+  const [provisionalTitles, setProvisionalTitles] = useState<
+    Record<string, string>
+  >({});
   // Surface the active thread in the sidebar immediately (called when its
   // first message is sent). Upserts an untitled row stamped "now" so it
   // sorts to the top; the server row replaces it on the next refresh.
@@ -819,7 +844,23 @@ export const useMastraChat = (
       // As soon as a conversation gets a message, surface it in the
       // sidebar (optimistically for a brand-new, not-yet-persisted
       // thread; a no-op merge for one already in the server list).
-      if (activeThreadId) noteThreadActivity(activeThreadId);
+      if (activeThreadId) {
+        noteThreadActivity(activeThreadId);
+        // First question in a fresh thread: title the row from it right
+        // now so the sidebar stops showing the "New conversation"
+        // placeholder before the server's auto-title arrives. Only the
+        // first message titles it, and a real server title later wins.
+        if (messagesRef.current.length === 0) {
+          const provisional = deriveThreadTitle(text);
+          if (provisional) {
+            setProvisionalTitles((prev) =>
+              prev[activeThreadId]
+                ? prev
+                : { ...prev, [activeThreadId]: provisional },
+            );
+          }
+        }
+      }
       const next = [...messagesRef.current, makeUserMessage(text)];
       writeMessages(next);
       void runStream(next);
@@ -863,6 +904,11 @@ export const useMastraChat = (
     if (activeThreadId) {
       setOptimisticThreads((prev) => {
         if (!prev[activeThreadId]) return prev;
+        const { [activeThreadId]: _drop, ...rest } = prev;
+        return rest;
+      });
+      setProvisionalTitles((prev) => {
+        if (!(activeThreadId in prev)) return prev;
         const { [activeThreadId]: _drop, ...rest } = prev;
         return rest;
       });
@@ -916,10 +962,15 @@ export const useMastraChat = (
           error: commonUtils.errorMessage(error),
         });
       }
-      // Drop any optimistic row for the deleted thread so it can't
-      // linger in the sidebar after removal.
+      // Drop any optimistic row / provisional title for the deleted
+      // thread so it can't linger in the sidebar after removal.
       setOptimisticThreads((prev) => {
         if (!prev[threadId]) return prev;
+        const { [threadId]: _drop, ...rest } = prev;
+        return rest;
+      });
+      setProvisionalTitles((prev) => {
+        if (!(threadId in prev)) return prev;
         const { [threadId]: _drop, ...rest } = prev;
         return rest;
       });
@@ -1196,16 +1247,25 @@ export const useMastraChat = (
   // the server list, newest first, dropping any optimistic entry the
   // server already returns so a thread is never listed twice.
   const sidebarThreads = useMemo<ThreadSummary[]>(() => {
-    const server = threads.map(toThreadSummary).map((t) => {
+    // Title overlay precedence per row: a manual rename always wins;
+    // otherwise a provisional first-message title fills an untitled row
+    // until the server titles the thread.
+    const withOverlay = (t: ThreadSummary): ThreadSummary => {
       const renamed = renamedThreads[t.id];
-      return renamed !== undefined ? { ...t, title: renamed } : t;
-    });
+      if (renamed !== undefined) return { ...t, title: renamed };
+      if (!t.title && provisionalTitles[t.id] !== undefined) {
+        return { ...t, title: provisionalTitles[t.id] };
+      }
+      return t;
+    };
+    const server = threads.map(toThreadSummary).map(withOverlay);
     const serverIds = new Set(server.map((t) => t.id));
     const pending = Object.values(optimisticThreads)
       .filter((t) => !serverIds.has(t.id))
+      .map(withOverlay)
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
     return [...pending, ...server];
-  }, [threads, optimisticThreads, renamedThreads]);
+  }, [threads, optimisticThreads, renamedThreads, provisionalTitles]);
   // Once the server list includes a thread we were tracking optimistically,
   // drop the optimistic copy so the map doesn't grow without bound.
   useEffect(() => {
@@ -1232,6 +1292,19 @@ export const useMastraChat = (
       return next;
     });
   }, [threads, renamedThreads]);
+  // Drop a provisional first-message title once the server reports any
+  // real title for that thread, so the auto-generated title takes over.
+  useEffect(() => {
+    const settled = threads
+      .filter((t) => t.title && provisionalTitles[t.id] !== undefined)
+      .map((t) => t.id);
+    if (settled.length === 0) return;
+    setProvisionalTitles((prev) => {
+      const next = { ...prev };
+      for (const id of settled) delete next[id];
+      return next;
+    });
+  }, [threads, provisionalTitles]);
 
   return {
     messages,

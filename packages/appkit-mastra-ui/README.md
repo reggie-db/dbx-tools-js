@@ -62,11 +62,15 @@ renders a sidebar listing the threads the signed-in user owns for this
 agent, lets them switch between conversations, start a new one, rename
 one (inline text field on hover; commit on Enter / blur, cancel on
 Escape), and delete one - and persists the active thread id in
-`localStorage` so a reload reopens the same conversation. Each thread is
-auto-titled from its opening turn on the small / fast model tier (the
-plugin's `summarize` helper, not the agent's primary model), so the list
-reads like a chat history rather than a list of ids without spending the
-heavyweight model; a manual rename overrides that auto-title.
+`localStorage` so a reload reopens the same conversation. A brand-new
+conversation's row is titled from its first question instantly (a
+truncated preview), so it never lingers as "New conversation" while the
+server catches up. Each thread is then auto-titled from its opening turn
+on the small / fast model tier (the plugin's `summarize` helper, not the
+agent's primary model), so the list reads like a chat history rather than
+a list of ids without spending the heavyweight model; that auto-title
+supersedes the first-message preview, and a manual rename overrides
+both.
 
 A header toggle shows/hides the sidebar so the conversation view is
 easily turned on and off in the UI; that show/hide choice is also
