@@ -10,6 +10,13 @@
 // before `bun publish`, and reverted immediately after. So the committed
 // manifests stay slim while the published ones are complete.
 //
+// Sibling `workspace:` dependency pins are also resolved to concrete
+// versions here, from the on-disk (bumped) manifests rather than from
+// the gitignored `bun.lock`. `bun publish` would otherwise resolve
+// `workspace:*` against a possibly-stale lockfile and freeze a sibling
+// pin one version behind, so a consumer pulls a mismatched nested copy
+// of that sibling.
+//
 // Stamping is driven entirely by each manifest's own shape, never by
 // package name:
 //   - Any `exports` target that is a `.ts` source string (under any
@@ -45,6 +52,14 @@ export interface ReleaseOptions {
   dryRun?: boolean;
 }
 
+/** Dependency fields whose `workspace:` sibling pins get resolved before publish. */
+const DEP_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+] as const;
+
 /** Map a `.ts` source path to its emitted `dist` `.js` / `.d.ts` pair. */
 function distFromSource(source: string): { js: string; dts: string } {
   const stem = source
@@ -55,13 +70,67 @@ function distFromSource(source: string): { js: string; dts: string } {
 }
 
 /**
- * Return a publishable copy of `meta`: expand any source `exports`
- * pointer into a `{ types, default }` pair pointing at the built `dist`,
- * and fill in `main`, `types`, `files`, `license`, and `type` when
- * absent. Any field the manifest already sets is preserved.
+ * Resolve a `workspace:` protocol specifier to a concrete range using
+ * the sibling's `version`. `workspace:*` (and bare `workspace:`) pin the
+ * exact version, `workspace:^` / `workspace:~` carry the caret / tilde,
+ * and an explicit `workspace:<range>` keeps its range.
  */
-function stampManifest(meta: PackageJson): PackageJson {
+function resolveWorkspaceSpec(spec: string, version: string): string {
+  const range = spec.slice("workspace:".length);
+  if (range === "" || range === "*") return version;
+  if (range === "^" || range === "~") return `${range}${version}`;
+  return range;
+}
+
+/**
+ * Return a copy of `deps` with every `workspace:` sibling pin resolved
+ * to the sibling's just-bumped version from `siblingVersions`.
+ *
+ * This is done here, deterministically from the on-disk manifests,
+ * rather than left to `bun publish` (which resolves `workspace:*` from
+ * the gitignored `bun.lock`): a stale lockfile would otherwise freeze a
+ * sibling pin one version behind, so a consumer installs a mismatched
+ * nested copy of that sibling. A sibling missing from the map (e.g. a
+ * private, non-published workspace) is left untouched.
+ */
+function resolveWorkspaceDeps(
+  deps: Record<string, string>,
+  siblingVersions: Map<string, string>,
+): Record<string, string> {
+  const next: Record<string, string> = { ...deps };
+  for (const [name, spec] of Object.entries(next)) {
+    if (typeof spec !== "string" || !spec.startsWith("workspace:")) continue;
+    const version = siblingVersions.get(name);
+    if (version) next[name] = resolveWorkspaceSpec(spec, version);
+  }
+  return next;
+}
+
+/**
+ * Return a publishable copy of `meta`: resolve `workspace:` sibling
+ * pins to concrete versions (via `siblingVersions`), expand any source
+ * `exports` pointer into a `{ types, default }` pair pointing at the
+ * built `dist`, and fill in `main`, `types`, `files`, `license`, and
+ * `type` when absent. Any field the manifest already sets is preserved.
+ */
+function stampManifest(
+  meta: PackageJson,
+  siblingVersions: Map<string, string>,
+): PackageJson {
   const stamped: PackageJson = { ...meta };
+
+  // Pin sibling workspace deps to the bumped version deterministically,
+  // so published pins never lag behind a stale lockfile entry.
+  for (const field of DEP_FIELDS) {
+    const deps = meta[field];
+    if (deps && typeof deps === "object") {
+      stamped[field] = resolveWorkspaceDeps(
+        deps as Record<string, string>,
+        siblingVersions,
+      );
+    }
+  }
+
   const exportsMap = meta.exports;
   // Dist pair backing the legacy `main`/`types` fallbacks. Prefer the
   // root (`.`) export; otherwise fall back to the first subpath whose
@@ -120,6 +189,14 @@ export async function release(opts: ReleaseOptions = {}): Promise<void> {
   const pkgs = await discoverPackages(
     (pkg) => pkg.meta.private !== true && Boolean(pkg.meta.name),
   );
+  // Name -> version for every publishable sibling, used to resolve
+  // `workspace:` pins to concrete versions at stamp time.
+  const siblingVersions = new Map<string, string>();
+  for (const pkg of pkgs) {
+    if (pkg.meta.name && pkg.meta.version) {
+      siblingVersions.set(pkg.meta.name, pkg.meta.version);
+    }
+  }
   consola.log(
     `=== ${dryRun ? "Dry-run publishing" : "Publishing"} ${pkgs.length} package(s) ===`,
   );
@@ -128,7 +205,7 @@ export async function release(opts: ReleaseOptions = {}): Promise<void> {
   for (const pkg of pkgs) {
     const original = await Bun.file(pkg.jsonPath).text();
     const meta = JSON.parse(original) as PackageJson;
-    const stamped = stampManifest(meta);
+    const stamped = stampManifest(meta, siblingVersions);
     await Bun.write(pkg.jsonPath, JSON.stringify(stamped, null, 2) + "\n");
     try {
       await sh(["bun", "publish", ...(dryRun ? ["--dry-run"] : [])], { cwd: pkg.dir });
