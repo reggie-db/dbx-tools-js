@@ -9,9 +9,10 @@ import { Command, InvalidArgumentError } from "commander";
 import { build } from "../src/build.js";
 import { codegen } from "../src/codegen.js";
 import { create } from "../src/create.js";
+import { cursor, resolveCursorPrompt } from "../src/cursor.js";
 import { format } from "../src/format.js";
 import { release } from "../src/release.js";
-import { tag, type Bump, type TagOptions } from "../src/tag.js";
+import { tag, notesSinceRequested, type Bump, type TagOptions } from "../src/tag.js";
 import { verify } from "../src/verify.js";
 
 const program = new Command()
@@ -62,6 +63,30 @@ program
   });
 
 program
+  .command("cursor")
+  .description("Run cursor-agent with streamed assistant output.")
+  .argument("[prompt...]", "prompt text (or pipe via stdin when omitted)")
+  .option(
+    "-t, --timeout <seconds>",
+    "wall-clock budget in seconds (default 300)",
+    (value) => {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new InvalidArgumentError("timeout must be a positive number");
+      }
+      return Math.round(seconds * 1000);
+    },
+  )
+  .action(async (promptParts: string[], opts: { timeout?: number }) => {
+    const prompt = await resolveCursorPrompt(promptParts);
+    const code = await cursor({
+      prompt,
+      timeoutMs: opts.timeout,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
+program
   .command("tag")
   .description("Bump every workspace, commit, tag HEAD, and push to origin.")
   .argument(
@@ -83,13 +108,16 @@ program
   )
   .option(
     "--notes-since <tag>",
-    "baseline tag for release notes (e.g. v0.1.75 or 0.1.75); defaults to the latest tag",
+    "widen release-notes baseline to this tag (e.g. v0.1.75); default is the previous tag on HEAD",
   )
   .option("--no-ai-notes", "skip cursor-agent; use commit-grouped notes only")
   .action(async (bump: Bump, opts: TagOptions) => {
     await tag({
       bump,
-      ...opts,
+      dryRun: opts.dryRun,
+      publish: opts.publish,
+      aiNotes: opts.aiNotes,
+      ...(notesSinceRequested(opts.notesSince) ? { notesSince: opts.notesSince } : {}),
     });
   });
 

@@ -70,6 +70,7 @@
     "publish:dry-run": "bun packages/devkit/bin/devkit.ts release --dry-run",
     "release": "bun packages/devkit/bin/devkit.ts release",
     "tag": "bun packages/devkit/bin/devkit.ts tag",
+    "cursor": "bun packages/devkit/bin/devkit.ts cursor",
     "typecheck": "tsc --noEmit -p tsconfig.json && bun run --cwd=demo typecheck",
     "verify": "bun packages/devkit/bin/devkit.ts verify",
     "version": "bunx --bun changeset version"

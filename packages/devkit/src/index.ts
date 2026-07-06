@@ -6,7 +6,16 @@
  */
 
 export { build } from "./build.js";
+export {
+  CURSOR_AGENT_DEFAULT_TIMEOUT_MS,
+  cursorAgentAvailable,
+  cursorAgentTimedOut,
+  runCursorAgent,
+  type CursorAgentOptions,
+  type CursorAgentResult,
+} from "./cursor-agent.js";
 export { codegen } from "./codegen.js";
+export { cursor, resolveCursorPrompt, type CursorCommandOptions } from "./cursor.js";
 export { getDevkitConfig, type DevkitConfig } from "./config.js";
 export { create, type CreateOptions } from "./create.js";
 export { format } from "./format.js";

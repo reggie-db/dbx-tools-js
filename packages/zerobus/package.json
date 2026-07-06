@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/zerobus",
-  "version": "0.1.84",
+  "version": "0.1.85",
   "type": "module",
   "publishConfig": {
     "access": "public"

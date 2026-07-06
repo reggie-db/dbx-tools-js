@@ -8,9 +8,9 @@
 // stat since the previous tag when that CLI is installed; otherwise it
 // falls back to a deterministic grouping of the commits by
 // conventional-commit type. See `buildNotes` / `releaseNotes`.
-// Pass `--notes-since v0.1.75` (or bare `0.1.75`) when several recent
-// tags failed to publish and notes should cover everything since the
-// last good release instead of only since the latest tag.
+// Pass `--notes-since v0.1.75` only when you need to widen the notes
+// baseline beyond the previous tag (e.g. several recent tags failed to
+// publish). Without that flag, notes cover `previousTag..HEAD` only.
 //
 // After pushing, the function can also run the workspace publish script
 // so local release flows use the same Bun-based package publishing path
@@ -33,6 +33,12 @@
 
 import { consola } from "consola";
 import semver from "semver";
+import {
+  CURSOR_AGENT_DEFAULT_TIMEOUT_MS,
+  cursorAgentAvailable,
+  cursorAgentTimedOut,
+  runCursorAgent,
+} from "./cursor-agent.js";
 import { getDevkitConfig } from "./config.js";
 import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
@@ -50,10 +56,9 @@ export interface TagOptions {
   /** Publish the tagged versions to the local registry (default true). */
   publish?: boolean;
   /**
-   * Tag (or bare version) to use as the release-notes baseline instead
-   * of the latest git tag - e.g. `v0.1.75` or `0.1.75` when several
-   * recent tags failed to publish and notes should cover everything
-   * since the last good release.
+   * When set, widen the release-notes baseline to this tag instead of
+   * the latest tag on `HEAD` (e.g. `v0.1.75` when several recent tags
+   * failed to publish). Omit to use the previous tag only.
    */
   notesSince?: string;
   /** When false, skip `cursor-agent` and use commit-grouped notes only. */
@@ -80,8 +85,13 @@ async function gitPush(ref: string): Promise<void> {
   await git(["push", "origin", ref]);
 }
 
+/** True when the caller passed a non-empty `--notes-since` value. */
+export function notesSinceRequested(raw: string | undefined): raw is string {
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
 /**
- * Normalize a release-notes baseline to a tag name. Accepts `v0.1.75`
+ * Normalize a `--notes-since` baseline to a tag name. Accepts `v0.1.75`
  * or bare `0.1.75`.
  */
 function normalizeNotesSinceTag(raw: string): string {
@@ -194,8 +204,6 @@ const NOTE_SECTIONS: readonly [title: string, match: RegExp][] = [
   ["Chores", /^chore(\(.+\))?!?:\s*/i],
 ];
 const OTHER_SECTION = "Other";
-/** Default wall-clock budget for `cursor-agent` release-notes generation. */
-const CURSOR_NOTES_TIMEOUT_MS = 300_000;
 /** Cap diff stat bytes fed to `cursor-agent` so large ranges stay prompt-sized. */
 const CURSOR_PROMPT_STAT_MAX_CHARS = 12_000;
 const RELEASE_COMMIT_RE = /^chore: release v/i;
@@ -203,33 +211,6 @@ const RELEASE_COMMIT_RE = /^chore: release v/i;
 /** `git diff --shortstat` for a revision range, trimmed. */
 async function gitRangeShortstat(range: string): Promise<string> {
   return (await git(["diff", "--shortstat", range], { nothrow: true })).stdout.trim();
-}
-
-/** Whether an exit code looks like the process was killed on a timeout. */
-function cursorTimedOut(exitCode: number): boolean {
-  return exitCode === 143 || exitCode === 137;
-}
-
-/**
- * Read a spawned process stream to the console as it arrives and return
- * the full decoded text for callers that need the final body.
- */
-async function teeStreamToConsole(
-  stream: ReadableStream<Uint8Array> | undefined,
-  sink: NodeJS.WriteStream,
-): Promise<string> {
-  if (!stream) return "";
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value?.length) continue;
-    sink.write(value);
-    text += decoder.decode(value, { stream: true });
-  }
-  return text + decoder.decode();
 }
 
 /** Trim long diff output so agent prompts stay bounded. */
@@ -251,6 +232,7 @@ async function releaseNotes(
   prevTag: string | null,
   tagName: string,
   repo: string | null,
+  widenBaseline = false,
 ): Promise<string> {
   const range = prevTag ? `${prevTag}..HEAD` : "HEAD";
   const raw = (
@@ -295,11 +277,11 @@ async function releaseNotes(
     body = "_Initial release._";
   }
 
-  // Release-only commit chains (common when work is folded into
-  // `chore: release` bumps) leave sparse bullet lists even though the
-  // tree moved a lot - append a shortstat so `--notes-since` ranges
-  // still say something useful.
+  // When `--notes-since` widens the baseline, release-only commit chains
+  // can leave sparse bullet lists even though the tree moved a lot -
+  // append a shortstat so the range still says something useful.
   if (
+    widenBaseline &&
     prevTag &&
     includedCount > 0 &&
     (includedCount <= 2 || releaseCommitCount >= includedCount)
@@ -314,46 +296,31 @@ async function releaseNotes(
 }
 
 /**
- * Run `cursor-agent` in non-interactive print mode to turn `prompt`
- * into text. Returns the trimmed final answer, or `null` when the CLI
- * is absent, errors, times out, or produces nothing - so callers can
- * fall back. Stdout and stderr are streamed to the console as they
- * arrive; partial output is kept when a timeout kills the process.
+ * Release-notes wrapper around {@link runCursorAgent}. Returns `null`
+ * when the CLI is absent, errors, times out, or produces nothing.
  */
 async function cursorSummary(
   prompt: string,
-  timeoutMs = CURSOR_NOTES_TIMEOUT_MS,
+  timeoutMs = CURSOR_AGENT_DEFAULT_TIMEOUT_MS,
 ): Promise<string | null> {
-  if (!Bun.which("cursor-agent")) return null;
+  if (!cursorAgentAvailable()) return null;
   consola.log(
     `Running cursor-agent to draft release notes (timeout ${Math.round(timeoutMs / 1000)}s)...`,
   );
   try {
-    const proc = Bun.spawn(
-      ["cursor-agent", "-p", "--output-format", "text", "--force", prompt],
-      { stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(timeoutMs) },
-    );
-    consola.log("cursor-agent output (streaming):");
-    const [stdout, stderr] = await Promise.all([
-      teeStreamToConsole(proc.stdout, process.stdout),
-      teeStreamToConsole(proc.stderr, process.stderr),
-    ]);
-    if (stdout.length > 0) process.stdout.write("\n");
-    if (stderr.length > 0) process.stderr.write("\n");
-    const text = stdout.trim();
-    const code = await proc.exited;
-    if (code === 0 && text) return text;
-    if (cursorTimedOut(code)) {
+    const { text, exitCode, stderr } = await runCursorAgent(prompt, { timeoutMs });
+    if (exitCode === 0 && text) return text;
+    if (cursorAgentTimedOut(exitCode)) {
       consola.warn(
-        `cursor-agent timed out after ${Math.round(timeoutMs / 1000)}s (exit ${code})` +
+        `cursor-agent timed out after ${Math.round(timeoutMs / 1000)}s (exit ${exitCode})` +
           `${text ? "; partial output shown above" : ""}.`,
       );
       return text || null;
     }
     consola.warn(
-      `cursor-agent finished without usable notes (exit ${code}` +
+      `cursor-agent finished without usable notes (exit ${exitCode}` +
         `${text ? ", partial output shown above" : ", empty output"}` +
-        `${stderr.trim() ? ", see stderr above" : ""}).`,
+        `${stderr ? ", see stderr above" : ""}).`,
     );
     return text || null;
   } catch (err) {
@@ -381,7 +348,7 @@ async function cursorReleaseNotes(
   tagName: string,
   repo: string | null,
 ): Promise<string | null> {
-  if (!Bun.which("cursor-agent")) return null;
+  if (!cursorAgentAvailable()) return null;
   const range = prevTag ? `${prevTag}..HEAD` : "HEAD";
   const log = (
     await git(["log", range, "--no-merges", "--pretty=format:- %s"], { nothrow: true })
@@ -421,8 +388,9 @@ async function buildNotes(
   tagName: string,
   repo: string | null,
   aiNotes = true,
+  widenBaseline = false,
 ): Promise<{ body: string; source: "cursor-agent" | "commits" }> {
-  if (aiNotes && Bun.which("cursor-agent")) {
+  if (aiNotes && cursorAgentAvailable()) {
     consola.log(`Generating release notes for ${tagName} with cursor-agent...`);
   } else {
     consola.log(`Generating release notes for ${tagName} from commits...`);
@@ -430,11 +398,14 @@ async function buildNotes(
   if (aiNotes) {
     const ai = await cursorReleaseNotes(prevTag, tagName, repo);
     if (ai) return { body: ai, source: "cursor-agent" };
-    if (Bun.which("cursor-agent")) {
+    if (cursorAgentAvailable()) {
       consola.log("Falling back to commit-grouped release notes...");
     }
   }
-  return { body: await releaseNotes(prevTag, tagName, repo), source: "commits" };
+  return {
+    body: await releaseNotes(prevTag, tagName, repo, widenBaseline),
+    source: "commits",
+  };
 }
 
 /**
@@ -485,7 +456,8 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
 
   const latestTag =
     (await git(["describe", "--tags", "--abbrev=0"], { nothrow: true })).stdout || null;
-  const notesSinceTag = notesSince
+  const widenNotesBaseline = notesSinceRequested(notesSince);
+  const notesBaselineTag = widenNotesBaseline
     ? await resolveNotesSinceTag(notesSince)
     : latestTag;
 
@@ -493,11 +465,12 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   consola.log(`Current: ${currentVersion}`);
   consola.log(`Next:    ${nextVersion}`);
   consola.log(`Tag:     ${tagName}`);
-  consola.log(`Latest tag: ${latestTag ?? "(none)"}`);
-  consola.log(
-    `Notes since: ${notesSinceTag ?? "(none)"}` +
-      (notesSince ? " (--notes-since)" : ""),
-  );
+  if (widenNotesBaseline) {
+    consola.log(`Latest tag: ${latestTag ?? "(none)"}`);
+    consola.log(`Notes since: ${notesBaselineTag} (--notes-since)`);
+  } else {
+    consola.log(`Previous tag: ${notesBaselineTag ?? "(none)"}`);
+  }
   const headSha = await gitRevParse("--short", "HEAD");
   consola.log(`HEAD:    ${headSha} (${branch})`);
   consola.log(`Packages:`);
@@ -515,7 +488,13 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
 
   if (dryRun) {
     consola.log("--dry-run: skipping write, commit, tag, and push.");
-    const preview = await buildNotes(notesSinceTag, tagName, repo, aiNotes);
+    const preview = await buildNotes(
+      notesBaselineTag,
+      tagName,
+      repo,
+      aiNotes,
+      widenNotesBaseline,
+    );
     consola.log(`Release notes preview (${preview.source}):`);
     consola.log(preview.body);
     consola.log("");
@@ -541,7 +520,13 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   consola.log(`Pushing ${tagName} to origin...`);
   await gitPush(tagName);
 
-  const notes = await buildNotes(notesSinceTag, tagName, repo, aiNotes);
+  const notes = await buildNotes(
+    notesBaselineTag,
+    tagName,
+    repo,
+    aiNotes,
+    widenNotesBaseline,
+  );
   consola.log(`Release notes ready (${notes.source}):`);
   consola.log(notes.body);
   consola.log("");

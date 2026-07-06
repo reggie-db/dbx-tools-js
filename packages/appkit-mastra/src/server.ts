@@ -265,10 +265,19 @@ export interface MastraApiGateOptions {
 /**
  * Mount-relative agent inference paths (`/agents/:id/<verb>...`). Matched
  * by prefix on the verb so future variants (`streamVNext`, `stream/vnext`,
- * `generateVNext`) stay covered without a code change. These are the only
- * *writes* the browser client is allowed to make against stock Mastra.
+ * `generateVNext`) stay covered without a code change.
+ *
+ * Covers the plain inference verbs (`stream` / `generate` / `network`) plus
+ * the human-in-the-loop resume verbs a paused `requireApproval` tool needs
+ * to continue: `approve-tool-call` / `decline-tool-call` (streaming, and via
+ * prefix their `-generate` non-streaming variants), the `-network-` variants,
+ * and `resume-stream` (covers `resume-stream-until-idle`). Without these an
+ * approval-gated tool (e.g. `send_email`) can be requested but never approved
+ * from the browser - the resume `POST` 403s under scoped mode. These are the
+ * only *writes* the browser client is allowed to make against stock Mastra.
  */
-const AGENT_INFERENCE = /^\/agents\/[^/]+\/(stream|generate|network)/i;
+const AGENT_INFERENCE =
+  /^\/agents\/[^/]+\/(stream|generate|network|resume-stream|approve-tool-call|decline-tool-call|approve-network-tool-call|decline-network-tool-call)/i;
 
 /** Mount-relative read-only agent metadata (`/agents`, `/agents/:id`). */
 const AGENT_METADATA = /^\/agents(\/[^/]+)?$/;
