@@ -694,7 +694,10 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     // whatever tracer provider `TelemetryManager` registered during
     // `createApp`, so the OTLP endpoint / headers / sampling are
     // env-driven and shared with every other AppKit plugin.
-    const observability = await buildObservability({ serviceName: this.name });
+    const observability = await buildObservability({
+      serviceName: this.name,
+      enabled: this.config.observability,
+    });
     // Optional MCP exposure: build a Mastra MCP server from the
     // registered agents (and, opt-in, the ambient tools) and register
     // it on the Mastra instance. `@mastra/express` serves the stock MCP

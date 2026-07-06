@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-mastra-ui",
-  "version": "0.1.82",
+  "version": "0.1.83",
   "dependencies": {
     "@dbx-tools/appkit-email-ui": "workspace:*",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",

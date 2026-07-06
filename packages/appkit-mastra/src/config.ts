@@ -357,6 +357,19 @@ export interface MastraPluginConfig extends BasePluginConfig {
    */
   agentMaxSteps?: number;
   /**
+   * Wire Mastra spans into AppKit's global OTel pipeline via
+   * `@mastra/otel-bridge`.
+   *
+   * - `undefined` (default, auto): on only when
+   *   `OTEL_EXPORTER_OTLP_ENDPOINT` or
+   *   `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set. When unset, the
+   *   bridge is skipped so Mastra does not log
+   *   `[OtelBridge] No OTEL span found` on the noop tracer.
+   * - `true`: force on even without an OTLP endpoint.
+   * - `false`: force off.
+   */
+  observability?: boolean;
+  /**
    * Log user feedback (thumbs up/down + freeform comments) to MLflow as
    * trace assessments, and surface the feedback controls in the chat UI.
    *

@@ -22,16 +22,22 @@ npm install @dbx-tools/appkit-email
 
 Register the `email` plugin (validates SMTP config and verifies
 connectivity at startup) and spread the `send_email` tool into the
-agents that should be able to draft mail:
+agents that should be able to draft mail. The tool is approval-gated,
+so the `mastra` plugin must have **storage** enabled (register
+`lakebase()` before `mastra()` so it auto-enables, or pass
+`storage: true` explicitly). Without storage, app startup fails with a
+clear error instead of hanging after the user clicks Approve.
 
 ```ts
-import { createApp } from "@databricks/appkit";
+import { createApp, lakebase } from "@databricks/appkit";
 import { email, emailTool } from "@dbx-tools/appkit-email";
 
 await createApp({
   plugins: [
+    lakebase(),
     email(), // primes + verifies the shared SMTP transport
     mastra({
+      storage: true,
       agents: {
         support: createAgent({
           instructions: "...",

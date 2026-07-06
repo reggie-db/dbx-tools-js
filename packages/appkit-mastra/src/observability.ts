@@ -26,9 +26,9 @@
  * by AppKit's `TelemetryManager`. Set those once and both AppKit and
  * Mastra spans end up at the same backend.
  *
- * When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset the bridge's spans go
- * to the global noop tracer, mirroring how the `agents` plugin
- * silently no-ops in the same situation.
+ * When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset the bridge is not
+ * registered at all (unless `observability: true` forces it on), so
+ * Mastra does not emit `[OtelBridge] No OTEL span found` warnings.
  */
 
 import { logUtils, projectUtils } from "@dbx-tools/shared";
@@ -42,6 +42,19 @@ const log = logUtils.logger("mastra/observability");
 const DEFAULT_SERVICE_NAME = "mastra";
 
 export interface BuildObservabilityOptions {
+  /**
+   * Whether to wire the Mastra `OtelBridge`. Mirrors
+   * {@link MastraPluginConfig.observability}:
+   *
+   * - `undefined` (auto): on only when `OTEL_EXPORTER_OTLP_ENDPOINT` or
+   *   `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set (same signal AppKit's
+   *   `TelemetryManager` uses to register a real tracer). When unset,
+   *   skip the bridge entirely so Mastra does not emit
+   *   `[OtelBridge] No OTEL span found` warnings on the noop tracer.
+   * - `true`: force on even without an OTLP endpoint.
+   * - `false`: force off.
+   */
+  enabled?: boolean;
   /**
    * Service name attached to the Mastra `Observability` config. Used
    * as the tracer scope name on bridged OTel spans (the `service.name`
@@ -62,19 +75,41 @@ export interface BuildObservabilityOptions {
   requestContextKeys?: readonly string[];
 }
 
+/** True when AppKit's global OTel pipeline is configured to export traces. */
+export function isOtlpTracingConfigured(): boolean {
+  return Boolean(
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
+      process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+  );
+}
+
 /**
  * Build a Mastra `Observability` whose spans ride AppKit's global
  * OTel pipeline via `@mastra/otel-bridge`.
  *
- * Returns `undefined` only if someone explicitly opts out in the
- * future; today it always returns an `Observability` because the
- * bridge degrades gracefully (no-op tracer) when no global OTel SDK
- * is registered. Callers can spread `...(observability ? { observability } : {})`
- * either way to stay forward-compatible.
+ * Returns `undefined` when tracing is off: either the caller passed
+ * `enabled: false`, or auto mode finds no OTLP endpoint (the default).
+ * Skipping the bridge in that case avoids `[OtelBridge] No OTEL span
+ * found` log spam from Mastra spans that have no parent on the noop
+ * tracer.
  */
 export async function buildObservability(
   options?: BuildObservabilityOptions,
 ): Promise<Observability | undefined> {
+  const otelBase = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  const otelTracesOverride = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+  const otlpConfigured = isOtlpTracingConfigured();
+
+  if (options?.enabled === false || (options?.enabled !== true && !otlpConfigured)) {
+    log.info("Mastra observability off", {
+      reason:
+        options?.enabled === false
+          ? "disabled in plugin config"
+          : "OTEL_EXPORTER_OTLP_ENDPOINT unset",
+    });
+    return undefined;
+  }
+
   const serviceName =
     options?.serviceName ?? (await projectUtils.name()) ?? DEFAULT_SERVICE_NAME;
   const requestContextKeys = [
@@ -88,8 +123,6 @@ export async function buildObservability(
   // setting the base var to a `/v1/traces`-suffixed URL, which makes
   // the SDK POST to `.../v1/traces/v1/traces` and Phoenix 404s) are
   // obvious in startup output.
-  const otelBase = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-  const otelTracesOverride = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
   const resolvedTracesUrl = otelTracesOverride
     ? otelTracesOverride
     : otelBase
@@ -99,7 +132,7 @@ export async function buildObservability(
     serviceName,
     requestContextKeys,
     otelBase: otelBase ?? "<unset>",
-    resolvedTracesUrl: resolvedTracesUrl ?? "<noop; OTLP endpoint unset>",
+    resolvedTracesUrl: resolvedTracesUrl ?? "<unset>",
   });
 
   return new Observability({

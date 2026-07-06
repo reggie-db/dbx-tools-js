@@ -85,6 +85,7 @@ program
     "--notes-since <tag>",
     "baseline tag for release notes (e.g. v0.1.75 or 0.1.75); defaults to the latest tag",
   )
+  .option("--no-ai-notes", "skip cursor-agent; use commit-grouped notes only")
   .action(async (bump: Bump, opts: TagOptions) => {
     await tag({
       bump,

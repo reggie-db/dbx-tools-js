@@ -460,9 +460,12 @@ export async function buildAgents(opts: {
     ...(config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor]),
   ];
   const agents: Record<string, Agent> = {};
+  const approvalGatedByAgent: Array<{ agentId: string; toolIds: string[] }> = [];
 
   for (const [id, def] of Object.entries(definitions)) {
     const tools = await resolveTools(def.tools, plugins, ambientTools);
+    const gated = approvalGatedToolIds(tools);
+    if (gated.length > 0) approvalGatedByAgent.push({ agentId: id, toolIds: gated });
     const memory = memoryBuilder?.forAgent(id, def);
     agents[id] = new Agent({
       id,
@@ -502,8 +505,60 @@ export async function buildAgents(opts: {
     );
   }
 
+  assertApprovalGatedToolsHaveStorage(approvalGatedByAgent, memoryBuilder);
+
   log.info("agents ready", { ids, defaultAgentId });
   return { agents, defaultAgentId, ambientTools };
+}
+
+/**
+ * Tool ids on `tools` that are approval-gated (`requireApproval: true`).
+ * Keys are used as a fallback when a tool omits an explicit `id`.
+ */
+export function approvalGatedToolIds(tools: MastraTools): string[] {
+  if (!tools || typeof tools !== "object") return [];
+  const ids: string[] = [];
+  for (const [key, tool] of Object.entries(tools)) {
+    if (!isApprovalGatedTool(tool)) continue;
+    ids.push(resolveToolId(tool, key));
+  }
+  return ids;
+}
+
+/** True when a Mastra / AI SDK tool pauses for human approval before execute. */
+function isApprovalGatedTool(tool: unknown): boolean {
+  if (!tool || typeof tool !== "object") return false;
+  return (tool as { requireApproval?: boolean }).requireApproval === true;
+}
+
+function resolveToolId(tool: unknown, fallbackKey: string): string {
+  if (tool && typeof tool === "object" && typeof (tool as { id?: string }).id === "string") {
+    return (tool as { id: string }).id;
+  }
+  return fallbackKey;
+}
+
+/**
+ * Approval-gated tools suspend the agent loop until a human approves.
+ * Mastra persists those suspended runs in Mastra-instance-level storage
+ * (`memoryBuilder.instanceStorage()`), not per-agent memory - so boot
+ * must fail fast when such a tool is registered without storage.
+ */
+function assertApprovalGatedToolsHaveStorage(
+  gated: Array<{ agentId: string; toolIds: string[] }>,
+  memoryBuilder: MemoryBuilder | undefined,
+): void {
+  if (gated.length === 0) return;
+  if (memoryBuilder?.instanceStorage()) return;
+
+  const detail = gated
+    .map(({ agentId, toolIds }) => `${agentId}: ${toolIds.join(", ")}`)
+    .join("; ");
+  throw new Error(
+    "mastra: approval-gated tools require plugin storage (PostgresStore) to persist suspended runs. " +
+      `Affected agents/tools: ${detail}. ` +
+      "Register lakebase() before mastra() so storage auto-enables, or pass storage: true explicitly.",
+  );
 }
 
 /**
