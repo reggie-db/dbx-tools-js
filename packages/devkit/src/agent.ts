@@ -59,7 +59,7 @@ export function agentTimedOut(exitCode: number): boolean {
 
 /** argv for `ucode codex exec <prompt>`. */
 function agentExecArgs(prompt: string): string[] {
-  return ["ucode", "codex", "exec", prompt];
+  return ["ucode", "codex", "exec", "--yolo", prompt];
 }
 
 /** Pull assistant prose out of `ucode codex exec` stdout. */
