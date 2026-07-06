@@ -173,6 +173,15 @@ function stampManifest(
   stamped.files ??= ["dist"];
   stamped.license ??= DEFAULT_LICENSE;
   stamped.type ??= "module";
+  // Scoped packages default to restricted (private) on npm; without an
+  // explicit public access flag the first publish 402s on the free plan.
+  if (
+    typeof stamped.name === "string" &&
+    stamped.name.startsWith("@") &&
+    !stamped.publishConfig
+  ) {
+    stamped.publishConfig = { access: "public" };
+  }
   return stamped;
 }
 
