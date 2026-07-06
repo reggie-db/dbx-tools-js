@@ -4,7 +4,7 @@
 // which builds every publishable workspace and runs the publish step.
 //
 // After pushing the tag, it creates a GitHub Release. The body is
-// written by `cursor-agent` (the Cursor CLI) from the commits + diff
+// written by Codex (`ucode codex exec`) from the commits + diff
 // stat since the previous tag when that CLI is installed; otherwise it
 // falls back to a deterministic grouping of the commits by
 // conventional-commit type. See `buildNotes` / `releaseNotes`.
@@ -34,11 +34,11 @@
 import { consola } from "consola";
 import semver from "semver";
 import {
-  CURSOR_AGENT_DEFAULT_TIMEOUT_MS,
-  cursorAgentAvailable,
-  cursorAgentTimedOut,
-  runCursorAgent,
-} from "./cursor.js";
+  AGENT_DEFAULT_TIMEOUT_MS,
+  agentAvailable,
+  agentTimedOut,
+  runAgent,
+} from "./agent.js";
 import { getDevkitConfig } from "./config.js";
 import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
@@ -61,7 +61,7 @@ export interface TagOptions {
    * failed to publish). Omit to use the previous tag only.
    */
   notesSince?: string;
-  /** When false, skip `cursor-agent` and use commit-grouped notes only. */
+  /** When false, skip Codex and use commit-grouped notes only. */
   aiNotes?: boolean;
 }
 
@@ -204,7 +204,7 @@ const NOTE_SECTIONS: readonly [title: string, match: RegExp][] = [
   ["Chores", /^chore(\(.+\))?!?:\s*/i],
 ];
 const OTHER_SECTION = "Other";
-/** Cap diff stat bytes fed to `cursor-agent` so large ranges stay prompt-sized. */
+/** Cap diff stat bytes fed to Codex so large ranges stay prompt-sized. */
 const CURSOR_PROMPT_STAT_MAX_CHARS = 12_000;
 const RELEASE_COMMIT_RE = /^chore: release v/i;
 
@@ -296,29 +296,29 @@ async function releaseNotes(
 }
 
 /**
- * Release-notes wrapper around {@link runCursorAgent}. Returns `null`
- * when the CLI is absent, errors, times out, or produces nothing.
+ * Release-notes wrapper around {@link runAgent}. Returns `null` when
+ * Codex is absent, errors, times out, or produces nothing.
  */
-async function cursorSummary(
+async function agentSummary(
   prompt: string,
-  timeoutMs = CURSOR_AGENT_DEFAULT_TIMEOUT_MS,
+  timeoutMs = AGENT_DEFAULT_TIMEOUT_MS,
 ): Promise<string | null> {
-  if (!cursorAgentAvailable()) return null;
+  if (!(await agentAvailable())) return null;
   consola.log(
-    `Running cursor-agent to draft release notes (timeout ${Math.round(timeoutMs / 1000)}s)...`,
+    `Running ucode codex to draft release notes (timeout ${Math.round(timeoutMs / 1000)}s)...`,
   );
   try {
-    const { text, exitCode, stderr } = await runCursorAgent(prompt, { timeoutMs });
+    const { text, exitCode, stderr } = await runAgent(prompt, { timeoutMs });
     if (exitCode === 0 && text) return text;
-    if (cursorAgentTimedOut(exitCode)) {
+    if (agentTimedOut(exitCode)) {
       consola.warn(
-        `cursor-agent timed out after ${Math.round(timeoutMs / 1000)}s (exit ${exitCode})` +
+        `ucode codex timed out after ${Math.round(timeoutMs / 1000)}s (exit ${exitCode})` +
           `${text ? "; partial output shown above" : ""}.`,
       );
       return text || null;
     }
     consola.warn(
-      `cursor-agent finished without usable notes (exit ${exitCode}` +
+      `ucode codex finished without usable notes (exit ${exitCode}` +
         `${text ? ", partial output shown above" : ", empty output"}` +
         `${stderr ? ", see stderr above" : ""}).`,
     );
@@ -327,28 +327,28 @@ async function cursorSummary(
     const message = errorMessage(err);
     if (/timed out|timeout|aborted/i.test(message)) {
       consola.warn(
-        `cursor-agent timed out after ${Math.round(timeoutMs / 1000)}s: ${message}`,
+        `ucode codex timed out after ${Math.round(timeoutMs / 1000)}s: ${message}`,
       );
       return null;
     }
-    consola.warn(`cursor-agent failed: ${message}`);
+    consola.warn(`ucode codex failed: ${message}`);
     return null;
   }
 }
 
 /**
- * Ask `cursor-agent` to write the release notes for `<prevTag>..HEAD`,
- * feeding it the commit subjects and per-file diff stat as context so
- * it never has to explore the tree. Returns `null` (caller falls back
- * to {@link releaseNotes}) when the CLI is unavailable, there's nothing
- * to summarize, or the agent fails.
+ * Ask Codex to write the release notes for `<prevTag>..HEAD`, feeding
+ * it the commit subjects and per-file diff stat as context so it never
+ * has to explore the tree. Returns `null` (caller falls back to
+ * {@link releaseNotes}) when Codex is unavailable, there's nothing to
+ * summarize, or the agent fails.
  */
-async function cursorReleaseNotes(
+async function agentReleaseNotes(
   prevTag: string | null,
   tagName: string,
   repo: string | null,
 ): Promise<string | null> {
-  if (!cursorAgentAvailable()) return null;
+  if (!(await agentAvailable())) return null;
   const range = prevTag ? `${prevTag}..HEAD` : "HEAD";
   const log = (
     await git(["log", range, "--no-merges", "--pretty=format:- %s"], { nothrow: true })
@@ -371,7 +371,7 @@ async function cursorReleaseNotes(
     `\n\nFile change summary:\n${stat || "(none)"}`,
   ].join("");
 
-  const body = await cursorSummary(prompt);
+  const body = await agentSummary(prompt);
   if (!body) return null;
   return repo && prevTag
     ? `${body}\n\n**Full changelog**: https://github.com/${repo}/compare/${prevTag}...${tagName}`
@@ -379,9 +379,9 @@ async function cursorReleaseNotes(
 }
 
 /**
- * Build the release-notes body, preferring a `cursor-agent`-written
- * summary and falling back to the deterministic commit grouping. The
- * returned `source` is just for logging which generator was used.
+ * Build the release-notes body, preferring a Codex-written summary and
+ * falling back to the deterministic commit grouping. The returned
+ * `source` is just for logging which generator was used.
  */
 async function buildNotes(
   prevTag: string | null,
@@ -389,16 +389,16 @@ async function buildNotes(
   repo: string | null,
   aiNotes = true,
   widenBaseline = false,
-): Promise<{ body: string; source: "cursor-agent" | "commits" }> {
-  if (aiNotes && cursorAgentAvailable()) {
-    consola.log(`Generating release notes for ${tagName} with cursor-agent...`);
+): Promise<{ body: string; source: "codex" | "commits" }> {
+  if (aiNotes && (await agentAvailable())) {
+    consola.log(`Generating release notes for ${tagName} with ucode codex...`);
   } else {
     consola.log(`Generating release notes for ${tagName} from commits...`);
   }
   if (aiNotes) {
-    const ai = await cursorReleaseNotes(prevTag, tagName, repo);
-    if (ai) return { body: ai, source: "cursor-agent" };
-    if (cursorAgentAvailable()) {
+    const ai = await agentReleaseNotes(prevTag, tagName, repo);
+    if (ai) return { body: ai, source: "codex" };
+    if (await agentAvailable()) {
       consola.log("Falling back to commit-grouped release notes...");
     }
   }

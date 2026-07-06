@@ -38,8 +38,8 @@ commands you want:
 | `devkit verify`                             | Fail on imports of sibling packages not declared as dependencies.                                    |
 | `devkit create [--plugin\|--shared] <slug>` | Scaffold a new package under `packages/<slug>/`.                                                     |
 | `devkit release [--dry-run]`                | Build, then publish each package with a stamped (complete) manifest.                                 |
-| `devkit tag [patch\|minor\|major]`          | Version bump, commit, tag, push, and create a GitHub Release. `--notes-since v0.1.75` widens the notes baseline; default is the previous tag. `--no-ai-notes` skips `cursor-agent`. |
-| `devkit cursor [prompt]`                    | Run `cursor-agent` with streamed output (`-t` / `--timeout` seconds). Prompt via args or stdin. |
+| `devkit tag [patch\|minor\|major]`          | Version bump, commit, tag, push, and create a GitHub Release. `--notes-since v0.1.75` widens the notes baseline; default is the previous tag. `--no-ai-notes` skips Codex release notes. |
+| `devkit agent [prompt]`                     | Run `ucode codex exec` (`-t` / `--timeout` seconds). Prompt via args or stdin. Requires `ucode codex --version`. |
 
 Typecheck stays a plain `tsc` call:
 

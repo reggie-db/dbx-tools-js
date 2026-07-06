@@ -9,7 +9,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { build } from "../src/build.js";
 import { codegen } from "../src/codegen.js";
 import { create } from "../src/create.js";
-import { cursor, resolveCursorPrompt } from "../src/cursor.js";
+import { agent, resolveAgentPrompt } from "../src/agent.js";
 import { format } from "../src/format.js";
 import { release } from "../src/release.js";
 import { tag, notesSinceRequested, type Bump, type TagOptions } from "../src/tag.js";
@@ -63,8 +63,8 @@ program
   });
 
 program
-  .command("cursor")
-  .description("Run cursor-agent with streamed assistant output.")
+  .command("agent")
+  .description("Run ucode codex exec with assistant output.")
   .argument("[prompt...]", "prompt text (or pipe via stdin when omitted)")
   .option(
     "-t, --timeout <seconds>",
@@ -78,8 +78,8 @@ program
     },
   )
   .action(async (promptParts: string[], opts: { timeout?: number }) => {
-    const prompt = await resolveCursorPrompt(promptParts);
-    const code = await cursor({
+    const prompt = await resolveAgentPrompt(promptParts);
+    const code = await agent({
       prompt,
       timeoutMs: opts.timeout,
     });
@@ -110,7 +110,7 @@ program
     "--notes-since <tag>",
     "widen release-notes baseline to this tag (e.g. v0.1.75); default is the previous tag on HEAD",
   )
-  .option("--no-ai-notes", "skip cursor-agent; use commit-grouped notes only")
+  .option("--no-ai-notes", "skip ucode codex; use commit-grouped notes only")
   .action(async (bump: Bump, opts: TagOptions) => {
     await tag({
       bump,
