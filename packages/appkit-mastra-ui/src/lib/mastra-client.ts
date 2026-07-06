@@ -29,6 +29,7 @@ import {
 import { commonUtils } from "@dbx-tools/shared";
 import { MastraClient } from "@mastra/client-js";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { asMastraStreamResponse, type MastraStreamResponse } from "./mastra-stream.js";
 
 /**
  * `@mastra/client-js` `MastraClient` extended with the Mastra plugin's
@@ -116,6 +117,54 @@ export class MastraPluginClient extends MastraClient {
     const headers = (this.options.headers ??= {});
     if (threadId) headers[THREAD_ID_HEADER] = threadId;
     else delete headers[THREAD_ID_HEADER];
+  }
+
+  /**
+   * Resume a suspended `requireApproval` tool via `approve-tool-call`.
+   * Reads SSE directly instead of `agent.approveToolCall()` so the
+   * stock client's internal `processChatResponse_vNext` tee does not
+   * throw when the resume stream emits `tool-result` without a new
+   * `tool-call`.
+   */
+  async approveToolCallStream(
+    agentId: string,
+    params: { runId: string; toolCallId: string },
+  ): Promise<MastraStreamResponse> {
+    return this.#toolApprovalStream(agentId, "approve-tool-call", params);
+  }
+
+  /**
+   * Deny a suspended `requireApproval` tool via `decline-tool-call`.
+   * Same direct SSE reader as {@link approveToolCallStream}.
+   */
+  async declineToolCallStream(
+    agentId: string,
+    params: { runId: string; toolCallId: string },
+  ): Promise<MastraStreamResponse> {
+    return this.#toolApprovalStream(agentId, "decline-tool-call", params);
+  }
+
+  async #toolApprovalStream(
+    agentId: string,
+    route: "approve-tool-call" | "decline-tool-call",
+    params: { runId: string; toolCallId: string },
+  ): Promise<MastraStreamResponse> {
+    const response = (await this.request(
+      `/agents/${encodeURIComponent(agentId)}/${route}`,
+      {
+        method: "POST",
+        body: params,
+        stream: true,
+      },
+    )) as Response;
+    if (!response.body) throw new Error("No response body");
+    return asMastraStreamResponse(
+      new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      }),
+    );
   }
 
   /**

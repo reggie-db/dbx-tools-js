@@ -370,17 +370,6 @@ export const AssistantBubble = ({
             </CollapsibleContent>
           </Collapsible>
         )}
-        {pendingApprovals.map((p) => (
-          <ToolApprovalCard
-            key={p.toolCallId}
-            toolName={p.toolName}
-            toolCallId={p.toolCallId}
-            runId={p.runId}
-            input={p.input}
-            onResolve={onResolveToolApproval}
-          />
-        ))}
-        {events && events.length > 0 && <ToolSessionPill events={events} />}
         {/*
          * Render each text part as its own block. A multi-step turn
          * carries one text part per step (see Stream.tsx segmentation),
@@ -396,6 +385,17 @@ export const AssistantBubble = ({
             />
           ) : null,
         )}
+        {events && events.length > 0 && <ToolSessionPill events={events} />}
+        {pendingApprovals.map((p) => (
+          <ToolApprovalCard
+            key={p.toolCallId}
+            toolName={p.toolName}
+            toolCallId={p.toolCallId}
+            runId={p.runId}
+            input={p.input}
+            onResolve={onResolveToolApproval}
+          />
+        ))}
         {hasText && (isLast || onExport || onFeedback) && (
           <div className="flex items-center gap-1">
             {isLast && regenerate && (

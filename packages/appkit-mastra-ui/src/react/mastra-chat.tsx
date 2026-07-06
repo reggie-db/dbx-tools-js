@@ -13,6 +13,7 @@ import {
   useMastraSuggestions,
   useMastraThreads,
 } from "../lib/mastra-client.js";
+import type { MastraStreamResponse } from "../lib/mastra-stream.js";
 import { ChatView } from "./chat-view.js";
 import { dedupeSuggestions } from "./suggestions.js";
 import type {
@@ -37,7 +38,9 @@ import type {
 // tool call emits a `tool-call-approval` chunk carrying
 // `{ runId, payload: { toolCallId, toolName, args } }`. We surface that
 // as an out-of-band entry in `pendingApprovalsByMessage` and wire
-// `onResolveToolApproval` to `agent.approveToolCall` / `declineToolCall`,
+// `onResolveToolApproval` to {@link MastraPluginClient.approveToolCallStream}
+// / `declineToolCallStream`, which read SSE directly and avoid a stock
+// `@mastra/client-js` bug on resumed approval streams.
 // both of which return a fresh stream Response we run through the same
 // chunk handler.
 //
@@ -426,7 +429,7 @@ export const useMastraChat = (
    */
   const processStream = useCallback(
     async (
-      stream: Awaited<ReturnType<ReturnType<typeof mastraClient.getAgent>["stream"]>>,
+      stream: MastraStreamResponse,
       assistantId: string,
       runIdRef: { current: string | null },
       signal: AbortSignal,
@@ -711,9 +714,7 @@ export const useMastraChat = (
   const driveStream = useCallback(
     async (
       assistantId: string,
-      open: () => Promise<
-        Awaited<ReturnType<ReturnType<typeof mastraClient.getAgent>["stream"]>>
-      >,
+      open: () => Promise<MastraStreamResponse>,
     ) => {
       const controller = new AbortController();
       abortRef.current?.abort();
@@ -769,7 +770,7 @@ export const useMastraChat = (
             .filter((p): p is { type: "text"; text: string } => p.type === "text")
             .map((p) => ({ role: m.role, content: p.text })),
         ) as Parameters<typeof agent.stream>[0];
-        return agent.stream(messagesForAgent, { runId });
+        return agent.stream(messagesForAgent, { runId }) as Promise<MastraStreamResponse>;
       });
     },
     [driveStream, mastraClient, agentId],
@@ -791,10 +792,10 @@ export const useMastraChat = (
 
   /**
    * Approve or deny an in-flight `requireApproval` tool call. The
-   * suspended workflow lives on the server keyed by `runId`; we
-   * call `agent.approveToolCall` / `declineToolCall` to resume it
-   * and pipe the resulting chunk stream back into the same bubble
-   * `runStream` was building.
+   * suspended workflow lives on the server keyed by `runId`; we resume
+   * via {@link MastraPluginClient.approveToolCallStream} /
+   * `declineToolCallStream` and pipe the SSE chunk stream back into
+   * the same bubble `runStream` was building.
    */
   const handleApproval = useCallback(
     async (decision: ApprovalDecision) => {
@@ -826,12 +827,11 @@ export const useMastraChat = (
         toolCallId,
         runId,
       });
-      await driveStream(assistantId, () => {
-        const agent = mastraClient.getAgent(agentId);
-        return decision.approved
-          ? agent.approveToolCall({ runId, toolCallId })
-          : agent.declineToolCall({ runId, toolCallId });
-      });
+      await driveStream(assistantId, () =>
+        decision.approved
+          ? mastraClient.approveToolCallStream(agentId, { runId, toolCallId })
+          : mastraClient.declineToolCallStream(agentId, { runId, toolCallId }),
+      );
     },
     [driveStream, mastraClient, agentId],
   );
