@@ -276,7 +276,7 @@ export interface MastraAgentDefinition {
    *
    * - `undefined` (default): inherit `config.storage`. When that's
    *   enabled, the agent gets its **own per-agent `PostgresStore`**
-   *   keyed by `schemaName: "mastra_<agentId>"` so threads and
+   *   keyed by {@link agentStorageSchemaName} so threads and
    *   messages stay isolated between agents in the same database.
    * - `false`: disable storage for this agent only (purely in-memory).
    * - `true`: enable with the per-agent default schema.

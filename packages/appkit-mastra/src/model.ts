@@ -23,11 +23,12 @@
 
 import { getExecutionContext } from "@databricks/appkit";
 import { type ModelClass, parseModelClass, selectModel } from "@dbx-tools/model";
-import { commonUtils, logUtils, netUtils, stringUtils } from "@dbx-tools/shared";
+import { commonUtils, logUtils, netUtils } from "@dbx-tools/shared";
 import type { MastraModelConfig } from "@mastra/core/llm";
 import type { RequestContext } from "@mastra/core/request-context";
 
 import { MASTRA_USER_KEY, type MastraPluginConfig, type User } from "./config.js";
+import { rewriteServingBody } from "./serving-sanitize.js";
 import { MASTRA_MODEL_OVERRIDE_KEY, resolveServingConfig } from "./serving.js";
 
 export {
@@ -125,25 +126,12 @@ export async function buildModel(
 const SERVING_ENDPOINTS_PATH_PREFIX = "/serving-endpoints/";
 
 /**
- * OpenAI-flavoured chat message shape we need to mutate. We do not
- * import the OpenAI / AI SDK types because both packages keep these
- * fields under internal namespaces; the wire payload is the contract
- * here and it's stable enough to inline.
- */
-interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content?: string;
-  tool_calls?: Array<{ id: string; type: string; function: unknown }>;
-  tool_call_id?: string;
-}
-
-/**
  * Install a single shared `globalThis.fetch` wrapper for every POST to
  * `/serving-endpoints/...`. The wrapper does two things:
  *
  *   1. Rewrites the outgoing `messages` array to repair Mastra/AI SDK
  *      stream-replay quirks that Databricks-hosted Claude rejects (see
- *      {@link sanitizeServingMessages}).
+ *      {@link rewriteServingBody} in `./serving-sanitize.js`).
  *   2. At `LOG_LEVEL=debug`, dumps the (post-sanitize) JSON body so
  *      4xx debugging doesn't have to fight AI SDK's `[Array]`
  *      formatter.
@@ -177,87 +165,3 @@ const setupFetchInterceptor = commonUtils.memoize((): void => {
     return original(input, init);
   }) as typeof globalThis.fetch;
 });
-
-/**
- * Parse, sanitize, and re-serialize a `/serving-endpoints/...` POST
- * body. Returns the original string verbatim when the body is not
- * JSON, has no `messages`, or no rewrite was needed; this lets the
- * caller skip the allocation of a new `init` object in the common
- * pass-through case.
- */
-function rewriteServingBody(body: string): string {
-  let parsed: { messages?: unknown };
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return body;
-  }
-  if (!Array.isArray(parsed.messages)) return body;
-  const changed = sanitizeServingMessages(parsed.messages as ChatMessage[]);
-  return changed ? JSON.stringify(parsed) : body;
-}
-
-/**
- * Repair a Mastra/AI SDK message replay that Databricks-hosted Claude
- * rejects with `"This model does not support assistant message
- * prefill. The conversation must end with a user message."`.
- *
- * The bug pattern: when an assistant turn streams text *and* a
- * `tool_call`, the AI SDK persists them as two separate assistant
- * entries (text-only and tool-call-only). On the next agent step the
- * tool-call entry is replayed *before* the tool result and the
- * text entry is replayed *after* it, so the conversation ends with a
- * trailing assistant text message. Anthropic interprets that as a
- * prefill request and rejects it on Databricks (the upstream Bedrock
- * route disallows prefill).
- *
- * Fix: when the last message is an assistant text with no `tool_calls`
- * and the chain immediately before it is `assistant(tool_calls=...)`
- * followed only by `tool(...)` results, fold the trailing text back
- * into the `content` of that opening assistant and drop the duplicate.
- * The result is the canonical OpenAI shape
- * `[..., user, assistant(text + tool_calls), tool(...)]` which both
- * Databricks Claude and every other endpoint accept.
- *
- * Mutates `messages` in place; returns `true` when something changed
- * so the caller knows whether to re-serialize.
- */
-function sanitizeServingMessages(messages: ChatMessage[]): boolean {
-  if (messages.length < 2) return false;
-  const last = messages[messages.length - 1];
-  if (
-    !last ||
-    last.role !== "assistant" ||
-    (last.tool_calls && last.tool_calls.length > 0)
-  ) {
-    return false;
-  }
-
-  // Walk back through any contiguous tool-result messages to find the
-  // assistant turn that opened this tool sequence.
-  let i = messages.length - 2;
-  while (i >= 0 && messages[i]?.role === "tool") i--;
-  if (i < 0) return false;
-  const opener = messages[i];
-  if (
-    !opener ||
-    opener.role !== "assistant" ||
-    !opener.tool_calls ||
-    opener.tool_calls.length === 0
-  ) {
-    return false;
-  }
-
-  // `trimToNull` collapses the `typeof string && trimmed` dance and
-  // drops blank fragments before the `\n\n` join below, so the merge
-  // never introduces stray leading / trailing whitespace.
-  const merged = [
-    stringUtils.trimToNull(opener.content),
-    stringUtils.trimToNull(last.content),
-  ]
-    .filter((s): s is string => s !== null)
-    .join("\n\n");
-  opener.content = merged;
-  messages.pop();
-  return true;
-}

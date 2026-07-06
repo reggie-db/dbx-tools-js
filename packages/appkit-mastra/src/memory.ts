@@ -5,7 +5,7 @@
  * with two independent knobs:
  *
  * - **Storage** (threads / messages via `PostgresStore`): defaults to
- *   **per-agent** namespacing via `schemaName: "mastra_<agentId>"` so
+ *   **per-agent** namespacing via {@link agentStorageSchemaName} so
  *   conversation history stays isolated between agents in the same
  *   database. `PostgresStore` auto-creates the schema with
  *   `CREATE SCHEMA IF NOT EXISTS` on init.
@@ -37,6 +37,7 @@ import { Pool, type PoolConfig } from "pg";
 
 import type { MastraAgentDefinition, MastraMemoryConfigOverride } from "./agents.js";
 import type { MastraPluginConfig } from "./config.js";
+import { agentStorageSchemaName } from "./storage-schema.js";
 import { summaryModel, TITLE_INSTRUCTIONS } from "./summarize.js";
 
 const log = logUtils.logger("mastra/memory");
@@ -121,7 +122,7 @@ export class MemoryBuilder {
    * the `requireApproval` flow) will not be available.
    *
    * The store lives in a dedicated `mastra_instance` schema so it
-   * never collides with per-agent `mastra_<agentId>` namespaces.
+   * never collides with per-agent {@link agentStorageSchemaName} namespaces.
    * Workflow snapshots are not per-agent state; they belong to the
    * `Mastra` instance that owns the workflow execution.
    */
@@ -203,7 +204,7 @@ export class MemoryBuilder {
     if (typeof setting === "boolean") {
       return new PostgresStore({
         id: `mastra-store__${agentId}`,
-        schemaName: `mastra_${agentId}`,
+        schemaName: agentStorageSchemaName(agentId),
         pool: this.servicePrincipalPool,
       });
     }

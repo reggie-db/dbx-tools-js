@@ -18,7 +18,7 @@
  *   from `./memory.js`. Both auto-default to `true` when the
  *   `lakebase` plugin is registered (unless the caller passed
  *   `false` or a custom config). Storage namespaces per agent via
- *   `schemaName: "mastra_<agentId>"`; the vector store is a single
+ *   {@link agentStorageSchemaName} per agent; the vector store is a single
  *   shared singleton across every agent.
  * - Server: the Express subapp wiring lives in `./server.js`.
  * - HTTP: AppKit mounts this plugin under `/api/mastra`. Alongside the
