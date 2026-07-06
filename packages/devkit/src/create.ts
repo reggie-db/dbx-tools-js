@@ -154,14 +154,16 @@ export async function create(options: CreateOptions): Promise<void> {
   // `package.json`: the bare minimum. The one-line `exports` pointer at
   // the package's own source is the single entry every tool (Node, tsc,
   // Vite, bun, tsdown) resolves; everything else a published tarball
-  // needs is stamped in at release time. Plugins also pre-declare the
-  // AppKit peer + the shared utils dep so consumers don't have to wire
-  // them.
+  // needs is stamped in at release time. Scoped packages are public on
+  // npm by default (the free plan does not cover private scoped pkgs).
+  // Plugins also pre-declare the AppKit peer + the shared utils dep so
+  // consumers don't have to wire them.
   const basePackageJson = {
     name: pkgName,
     version: initialVersion,
     type: "module" as const,
     exports: { ".": "./src/index.ts" },
+    publishConfig: { access: "public" as const },
   };
 
   // Plugins and standard packages depend on the shared-helpers package
