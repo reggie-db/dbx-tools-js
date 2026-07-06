@@ -98,7 +98,7 @@ export async function runAgent(
   if (!capture) {
     const proc = Bun.spawn(args, {
       cwd: opts.cwd,
-      stdin: "ignore",
+      stdin: Bun.file("/dev/null"),
       stdout: "inherit",
       stderr: "inherit",
       signal: AbortSignal.timeout(timeoutMs),
