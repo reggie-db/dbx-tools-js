@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cursorAgentTimedOut } from "../src/cursor-agent.js";
+import { cursorAgentTimedOut } from "../src/cursor.js";
 
 describe("cursorAgentTimedOut", () => {
   test("recognizes SIGTERM and SIGKILL exit codes", () => {

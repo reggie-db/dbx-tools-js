@@ -38,7 +38,7 @@ import {
   cursorAgentAvailable,
   cursorAgentTimedOut,
   runCursorAgent,
-} from "./cursor-agent.js";
+} from "./cursor.js";
 import { getDevkitConfig } from "./config.js";
 import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";

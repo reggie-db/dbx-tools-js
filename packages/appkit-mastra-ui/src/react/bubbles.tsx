@@ -97,9 +97,19 @@ const ToolApprovalCard = ({
   disabled?: boolean;
 }) => {
   const [pending, setPending] = useState(false);
+  // Which decision the user made, or null while still awaiting one. Set
+  // optimistically on click so the Approve/Deny buttons are replaced by a
+  // resolved indicator immediately and the action can't be taken twice.
+  const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
+  // Set when the resume request fails - typically because the suspended run
+  // is no longer available (expired / already settled server-side). Replaces
+  // the optimistic decision with an "expired" notice rather than a false
+  // success.
+  const [expired, setExpired] = useState(false);
   const handle = (approved: boolean) => {
-    if (!onResolve || pending) return;
+    if (!onResolve || pending || decision) return;
     setPending(true);
+    setDecision(approved ? "approved" : "denied");
     Promise.resolve(
       approved
         ? onResolve({ approved: true, toolName, toolCallId, runId, input })
@@ -111,7 +121,9 @@ const ToolApprovalCard = ({
             input,
             reason: "User denied the request from the chat UI.",
           }),
-    ).finally(() => setPending(false));
+    )
+      .catch(() => setExpired(true))
+      .finally(() => setPending(false));
   };
 
   // Pretty preview for the known email shape; everything else falls
@@ -133,33 +145,61 @@ const ToolApprovalCard = ({
           {JSON.stringify(input, null, 2)}
         </pre>
       )}
-      <div className="mt-3 flex items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="default"
-          disabled={disabled || pending || !onResolve}
-          onClick={() => handle(true)}
-        >
-          <CheckIcon className="size-3" />
-          Approve
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={disabled || pending || !onResolve}
-          onClick={() => handle(false)}
-        >
-          <XIcon className="size-3" />
-          Deny
-        </Button>
-        {!onResolve && (
-          <span className="ml-1 text-[11px] text-muted-foreground">
-            (approval handler not wired on this page)
+      {expired ? (
+        // The suspended run could not be resumed (expired / already settled).
+        // Hide the buttons and explain why the action is no longer possible.
+        <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <MessageSquareIcon className="size-3.5" />
+          <span>This approval is no longer available.</span>
+        </div>
+      ) : decision ? (
+        // Once acted on, hide the buttons and show the resolved decision so
+        // the same approval can't be approved/denied twice.
+        <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {decision === "approved" ? (
+            <CheckIcon className="size-3.5 text-success" />
+          ) : (
+            <XIcon className="size-3.5 text-destructive" />
+          )}
+          <span>
+            {decision === "approved"
+              ? pending
+                ? "Approving…"
+                : "Approved"
+              : pending
+                ? "Denying…"
+                : "Denied"}
           </span>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="default"
+            disabled={disabled || pending || !onResolve}
+            onClick={() => handle(true)}
+          >
+            <CheckIcon className="size-3" />
+            Approve
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={disabled || pending || !onResolve}
+            onClick={() => handle(false)}
+          >
+            <XIcon className="size-3" />
+            Deny
+          </Button>
+          {!onResolve && (
+            <span className="ml-1 text-[11px] text-muted-foreground">
+              (approval handler not wired on this page)
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -177,6 +217,21 @@ const ToolApprovalCard = ({
  * render a card.
  */
 const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] => {
+  // Tool calls that already settled (rehydrated from history with an
+  // AI-SDK-v5 tool part in `output-available` / `output-error`). Their
+  // approval was already resolved before this render (e.g. approved/denied
+  // in a prior session, then the page was refreshed), so the card is no
+  // longer actionable and is dropped entirely rather than showing dead
+  // Approve/Deny buttons.
+  const resolvedToolCallIds = new Set<string>();
+  for (const part of parts ?? []) {
+    const p = part as { toolCallId?: unknown; state?: unknown };
+    if (typeof p.toolCallId !== "string") continue;
+    if (p.state === "output-available" || p.state === "output-error") {
+      resolvedToolCallIds.add(p.toolCallId);
+    }
+  }
+
   const out: PendingApproval[] = [];
   for (const part of parts ?? []) {
     const type = (part as { type?: unknown }).type;
@@ -192,6 +247,7 @@ const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] =
     if (typeof d.toolName !== "string") continue;
     if (!APPROVAL_GATED_TOOLS.has(d.toolName)) continue;
     if (typeof d.toolCallId !== "string") continue;
+    if (resolvedToolCallIds.has(d.toolCallId)) continue;
     out.push({
       toolName: d.toolName,
       toolCallId: d.toolCallId,
