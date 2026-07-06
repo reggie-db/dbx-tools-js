@@ -33,7 +33,7 @@ import semver from "semver";
 import { getDevkitConfig } from "./config.js";
 import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
-import { fail, nonEmptyLines } from "./script.js";
+import { fail, errorMessage, nonEmptyLines } from "./script.js";
 import { sh } from "./shell.js";
 
 export type Bump = "major" | "minor" | "patch";
@@ -236,6 +236,9 @@ async function cursorSummary(
   timeoutMs = 120_000,
 ): Promise<string | null> {
   if (!Bun.which("cursor-agent")) return null;
+  consola.log(
+    `Running cursor-agent to draft release notes (timeout ${Math.round(timeoutMs / 1000)}s)...`,
+  );
   try {
     const proc = Bun.spawn(
       ["cursor-agent", "-p", "--output-format", "text", "--force", prompt],
@@ -243,8 +246,13 @@ async function cursorSummary(
     );
     const text = (await new Response(proc.stdout).text()).trim();
     const code = await proc.exited;
-    return code === 0 && text ? text : null;
-  } catch {
+    if (code === 0 && text) return text;
+    consola.warn(
+      `cursor-agent finished without usable notes (exit ${code}${text ? "" : ", empty output"}).`,
+    );
+    return null;
+  } catch (err) {
+    consola.warn(`cursor-agent failed: ${errorMessage(err)}`);
     return null;
   }
 }
@@ -298,8 +306,16 @@ async function buildNotes(
   tagName: string,
   repo: string | null,
 ): Promise<{ body: string; source: "cursor-agent" | "commits" }> {
+  if (Bun.which("cursor-agent")) {
+    consola.log(`Generating release notes for ${tagName} with cursor-agent...`);
+  } else {
+    consola.log(`Generating release notes for ${tagName} from commits...`);
+  }
   const ai = await cursorReleaseNotes(prevTag, tagName, repo);
   if (ai) return { body: ai, source: "cursor-agent" };
+  if (Bun.which("cursor-agent")) {
+    consola.log("Falling back to commit-grouped release notes...");
+  }
   return { body: await releaseNotes(prevTag, tagName, repo), source: "commits" };
 }
 
@@ -400,7 +416,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   await gitPush(tagName);
 
   const notes = await buildNotes(prevTag, tagName, repo);
-  consola.log(`Release notes (${notes.source}):`);
+  consola.log(`Release notes ready (${notes.source}):`);
   consola.log(notes.body);
   consola.log("");
   await publishGithubRelease(tagName, notes.body);
@@ -416,13 +432,14 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
     // there is nothing to freeze against. If the refresh fails, skip the
     // local publish rather than shipping stale pins - CI publishes from
     // the pushed tag regardless.
-    consola.log("Refreshing bun.lock to the bumped versions before publish...");
+    consola.log("Refreshing bun.lock to the bumped versions before local publish...");
     const install = await sh(["bun", "install"], { nothrow: true });
     if (install.exitCode !== 0) {
       consola.warn(
         "bun install failed; skipping local publish so stale sibling pins aren't shipped. CI will publish from the tag.",
       );
     } else {
+      consola.log("Publishing packages to the local registry (bun run release)...");
       await sh(["bun", "run", "release"], { nothrow: true });
     }
   }
