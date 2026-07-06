@@ -263,6 +263,14 @@ export class MemoryBuilder {
 function buildSharedPgVector(pool: Pool): PgVector {
   const vector = new PgVector({
     id: `pg${randomUUID()}`,
+    // Keep the recall index out of `public`: on a Lakebase database the app
+    // service principal has no CREATE on `public` (PG15+ locks it down), so a
+    // default-schema PgVector fails on CREATE INDEX with "permission denied for
+    // schema public". PgVector runs CREATE SCHEMA IF NOT EXISTS for a named
+    // schema, so the SP creates and owns `mastra_instance` (the same
+    // instance-level schema the workflow-snapshot store uses) and the index
+    // lands there. Table names don't collide with the storage tables.
+    schemaName: "mastra_instance",
     host: "-1",
     port: -1,
     database: "_",
