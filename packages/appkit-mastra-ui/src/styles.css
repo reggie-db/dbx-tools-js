@@ -14,18 +14,16 @@
  * provides and restyles to match the surrounding brand for free.
  *
  * What it does provide:
- *   1. The `@dbx-tools/appkit-email-ui` stylesheet, which brings
- *      Streamdown's base stylesheet (the markdown/code-block layout the
- *      chat bubbles and email preview render through), the email-ui
- *      `@source`, and the shiki token-paint shim. The chat embeds that
- *      package's `EmailPreview`, so its styles must load here.
+ *   1. Streamdown's base stylesheet (markdown / code-block layout).
  *   2. `@source` so the consumer's Tailwind scans this package's class
- *      strings and generates the utilities the components rely on. The
- *      path is relative to this file and resolves against the published
- *      `src/` tree (shipped in `files`), so it works both in-repo (dev,
- *      source condition) and for installed consumers.
+ *      strings and generates the utilities the components rely on.
+ *   3. The shiki token-paint shim (shared with the markdown renderer).
  */
 
-@import "@dbx-tools/appkit-email-ui/styles.css";
+@import "streamdown/styles.css";
 
 @source "./react";
+
+[data-streamdown="code-block-body"] code span {
+  color: var(--sdm-c, inherit);
+}

@@ -8,8 +8,9 @@ Generated from the AppKit `app init` template, then adapted to:
 - Boot through [`@dbx-tools/appkit-config`](../packages/appkit-config)'s
   `createApp` (Lakebase env auto-discovery) and mount
   [`@dbx-tools/appkit-mastra`](../packages/appkit-mastra) alongside
-  `server`, `genie`, `lakebase`, and
-  [`@dbx-tools/appkit-email`](../packages/appkit-email).
+  `server`, `genie`, `lakebase`,
+  [`@dbx-tools/appkit-email`](../packages/appkit-email), and
+  [`@dbx-tools/appkit-skills`](../packages/appkit-skills).
 - Give the agent the plugin's Genie toolset and `GENIE_INSTRUCTIONS` so
   it can answer from the configured space (`DATABRICKS_GENIE_SPACE_ID`)
   with live streaming progress and inline Echarts charts - the contract
@@ -19,6 +20,10 @@ Generated from the AppKit `app init` template, then adapted to:
   from [`@dbx-tools/appkit-email`](../packages/appkit-email)); the
   `email()` plugin primes the transport and `MastraChat` renders the
   approval card before anything is sent.
+- Give the agent GitHub-hosted skills via `workspace: skillWorkspace` from
+  [`@dbx-tools/appkit-skills`](../packages/appkit-skills); the `skills()`
+  plugin caches configured sources and Mastra injects `<available_skills>`
+  from each `SKILL.md` automatically.
 - Render the chat with the prebuilt `MastraChat` drop-in (`/stream`)
   from [`@dbx-tools/appkit-mastra-ui`](../packages/appkit-mastra-ui),
   with the model picker enabled. The demo is a consumer of that
@@ -39,7 +44,7 @@ demo/
   tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # createApp (appkit-config) -> autopg() then AppKit createApp({ plugins: [server(), genie(), lakebase(), email(), mastra()] })
+    server.ts             # createApp -> plugins: [server(), genie(), lakebase(), email(), skills(), mastra()]
   client/
     index.html
     vite.config.ts        # React + Tailwind v4 + workspace `source` condition

@@ -1,5 +1,6 @@
 import { genie, lakebase, server } from "@databricks/appkit";
 import { createApp } from "@dbx-tools/appkit-config";
+import { skills, skillWorkspace } from "@dbx-tools/appkit-skills";
 import { email, emailTool } from "@dbx-tools/appkit-email";
 import {
   createAgent,
@@ -71,6 +72,7 @@ import { z } from "zod";
 // `GET /api/mastra/models` lists the cached catalogue.
 const support = createAgent({
   name: "support",
+  workspace: skillWorkspace,
   instructions: [
     "You are a data analyst helping customers explore a Databricks",
     "Genie space. Default to driving the Genie tools (`ask_genie`,",
@@ -128,6 +130,10 @@ await createApp({
     // Validates SMTP config + verifies connectivity at startup, and
     // primes the transport the approval-gated `send_email` tool reuses.
     email(),
+    // Caches GitHub skill sources; `skillWorkspace` injects catalog + tools.
+    skills({
+      sources: ["databricks-solutions/ai-dev-kit#subdirectory=databricks-skills"],
+    }),
     mastra({
       storage: true,
       memory: true,

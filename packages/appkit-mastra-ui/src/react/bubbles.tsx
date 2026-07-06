@@ -12,7 +12,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@databricks/appkit-ui/react";
-import { EmailPreview, type EmailMessage } from "@dbx-tools/appkit-email-ui/react";
 import type { UIMessage } from "ai";
 import {
   CheckIcon,
@@ -64,22 +63,9 @@ const RoleAvatar = ({ role }: { role: UIMessage["role"] }) => (
 );
 
 /**
- * Tools that are approval-gated server-side (`requireApproval: true`).
- * Any tool-invocation part on this list that lands in
- * `state: 'input-available'` triggers the approval card. Add a new
- * gated tool's id here to wire it into the same flow.
- */
-const APPROVAL_GATED_TOOLS = new Set<string>(["send_email"]);
-
-/**
- * Inline approval prompt rendered above the assistant's prose when
- * a tool with `requireApproval: true` is paused in the agent loop.
- * Approve fires {@link ApprovalDecision} with the input the
- * model passed in; Deny fires it with `approved: false` and a
- * fixed reason. The parent (Chat / Stream pages) translates that
- * into the AI-SDK-V5 `addToolOutput` call (or the equivalent for
- * other transports), which resolves the suspended tool call and
- * resumes the agent.
+ * Inline approval prompt rendered when a `requireApproval: true` tool is
+ * paused in the agent loop. Approve / deny flows through
+ * {@link ApprovalDecision} to the parent resume handler.
  */
 const ToolApprovalCard = ({
   toolName,
@@ -97,14 +83,7 @@ const ToolApprovalCard = ({
   disabled?: boolean;
 }) => {
   const [pending, setPending] = useState(false);
-  // Which decision the user made, or null while still awaiting one. Set
-  // optimistically on click so the Approve/Deny buttons are replaced by a
-  // resolved indicator immediately and the action can't be taken twice.
   const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
-  // Set when the resume request fails - typically because the suspended run
-  // is no longer available (expired / already settled server-side). Replaces
-  // the optimistic decision with an "expired" notice rather than a false
-  // success.
   const [expired, setExpired] = useState(false);
   const handle = (approved: boolean) => {
     if (!onResolve || pending || decision) return;
@@ -126,35 +105,21 @@ const ToolApprovalCard = ({
       .finally(() => setPending(false));
   };
 
-  // Pretty preview for the known email shape; everything else falls
-  // back to a generic JSON dump so a new approval-gated tool works
-  // without touching this component.
-  const isEmail = toolName === "send_email";
-  const email = isEmail ? (input as Partial<EmailMessage>) : null;
-
   return (
     <div className="not-prose my-2 rounded-md border border-warning/40 bg-warning/5 p-3">
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-warning">
         <MessageSquareIcon className="size-3.5" />
         <span>Approval needed: {humanizeToolName(toolName)}</span>
       </div>
-      {email ? (
-        <EmailPreview email={email} />
-      ) : (
-        <pre className="overflow-x-auto rounded bg-background/40 p-2 text-[11px]">
-          {JSON.stringify(input, null, 2)}
-        </pre>
-      )}
+      <pre className="overflow-x-auto rounded bg-background/40 p-2 text-[11px]">
+        {JSON.stringify(input, null, 2)}
+      </pre>
       {expired ? (
-        // The suspended run could not be resumed (expired / already settled).
-        // Hide the buttons and explain why the action is no longer possible.
         <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <MessageSquareIcon className="size-3.5" />
           <span>This approval is no longer available.</span>
         </div>
       ) : decision ? (
-        // Once acted on, hide the buttons and show the resolved decision so
-        // the same approval can't be approved/denied twice.
         <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           {decision === "approved" ? (
             <CheckIcon className="size-3.5 text-success" />
@@ -205,24 +170,10 @@ const ToolApprovalCard = ({
 };
 
 /**
- * Pull every approval-pending tool call out of an assistant
- * message's parts. A paused `requireApproval: true` tool surfaces as
- * a dedicated `data-tool-call-approval` data part carrying
- * `{ runId, toolCallId, toolName, args }` in the AI SDK v5 UI message
- * shape (e.g. rehydrated from history via `toAISdkV5Messages`). We
- * read those parts directly (matching the canonical Mastra UI Dojo
- * example,
- * `mastra-ai/ui-dojo/.../tool-approval.tsx`) and additionally filter
- * by {@link APPROVAL_GATED_TOOLS} so unrelated `data-*` parts don't
- * render a card.
+ * Pull every approval-pending tool call out of an assistant message's
+ * `data-tool-call-approval` parts.
  */
 const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] => {
-  // Tool calls that already settled (rehydrated from history with an
-  // AI-SDK-v5 tool part in `output-available` / `output-error`). Their
-  // approval was already resolved before this render (e.g. approved/denied
-  // in a prior session, then the page was refreshed), so the card is no
-  // longer actionable and is dropped entirely rather than showing dead
-  // Approve/Deny buttons.
   const resolvedToolCallIds = new Set<string>();
   for (const part of parts ?? []) {
     const p = part as { toolCallId?: unknown; state?: unknown };
@@ -245,7 +196,6 @@ const collectPendingApprovals = (parts: UIMessage["parts"]): PendingApproval[] =
       args?: unknown;
     };
     if (typeof d.toolName !== "string") continue;
-    if (!APPROVAL_GATED_TOOLS.has(d.toolName)) continue;
     if (typeof d.toolCallId !== "string") continue;
     if (resolvedToolCallIds.has(d.toolCallId)) continue;
     out.push({
@@ -357,6 +307,14 @@ export const AssistantBubble = ({
        * `min-width: auto`, which sizes to content and overflows.
        */}
       <ItemContent className="min-w-0 gap-2">
+        {/*
+         * Tool session pill leads the message. Charts and tables are
+         * embedded inline in the prose (via `[chart:<id>]` / `[data:<id>]`
+         * markers rendered by {@link MarkdownWithEmbeds}), so keeping the
+         * pill above the text parts guarantees the "what the agent did"
+         * summary always sits before its resulting charts and answer.
+         */}
+        {events && events.length > 0 && <ToolSessionPill events={events} />}
         {reasoning && (
           <Collapsible defaultOpen={isReasoningStreaming}>
             <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
@@ -385,7 +343,6 @@ export const AssistantBubble = ({
             />
           ) : null,
         )}
-        {events && events.length > 0 && <ToolSessionPill events={events} />}
         {pendingApprovals.map((p) => (
           <ToolApprovalCard
             key={p.toolCallId}

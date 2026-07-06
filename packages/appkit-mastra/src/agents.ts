@@ -18,6 +18,7 @@ import type { AgentConfig, ToolsInput } from "@mastra/core/agent";
 import { Agent } from "@mastra/core/agent";
 import type { Tool } from "@mastra/core/tools";
 import { createTool } from "@mastra/core/tools";
+import type { Workspace } from "@mastra/core/workspace";
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import { buildRenderDataTool } from "./chart.js";
@@ -223,6 +224,9 @@ export type MastraToolsFn = (
   plugins: MastraPlugins,
 ) => MastraTools | Promise<MastraTools>;
 
+/** Function form of {@link MastraAgentDefinition.workspace}. */
+export type MastraAgentWorkspaceResolver = () => Workspace | undefined;
+
 /**
  * A code-defined Mastra agent. Mirrors the shape AppKit's `agents`
  * plugin uses for `AgentDefinition`. The registry key under
@@ -284,6 +288,16 @@ export interface MastraAgentDefinition {
    *   `PostgresStore` config (custom schema, connection, etc.).
    */
   storage?: boolean | MastraStorageConfigOverride;
+  /**
+   * Mastra {@link Workspace} for this agent. When it exposes skills,
+   * Mastra injects `<available_skills>` metadata each turn and mounts
+   * `skill` / `skill_search` / `skill_read` at runtime.
+   *
+   * Use a zero-arg function so resolution happens at agent registration
+   * (for example `skillWorkspace` from `@dbx-tools/appkit-skills`
+   * after `aiDevKit()` has primed the cache).
+   */
+  workspace?: Workspace | MastraAgentWorkspaceResolver;
 }
 
 /**
@@ -464,6 +478,7 @@ export async function buildAgents(opts: {
 
   for (const [id, def] of Object.entries(definitions)) {
     const tools = await resolveTools(def.tools, plugins, ambientTools);
+    const workspace = resolveAgentWorkspace(def.workspace);
     const gated = approvalGatedToolIds(tools);
     if (gated.length > 0) approvalGatedByAgent.push({ agentId: id, toolIds: gated });
     const memory = memoryBuilder?.forAgent(id, def);
@@ -482,6 +497,7 @@ export async function buildAgents(opts: {
       },
       tools,
       ...(memory ? { memory } : {}),
+      ...(workspace ? { workspace } : {}),
       inputProcessors,
       outputProcessors,
     });
@@ -706,6 +722,13 @@ async function resolveTools(
   if (!defTools) return { ...ambientTools };
   const resolved = typeof defTools === "function" ? await defTools(plugins) : defTools;
   return { ...ambientTools, ...resolved };
+}
+
+function resolveAgentWorkspace(
+  workspace: MastraAgentDefinition["workspace"],
+): Workspace | undefined {
+  if (!workspace) return undefined;
+  return typeof workspace === "function" ? workspace() : workspace;
 }
 
 /**
