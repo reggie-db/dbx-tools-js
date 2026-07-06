@@ -38,7 +38,7 @@ commands you want:
 | `devkit verify`                             | Fail on imports of sibling packages not declared as dependencies.                                    |
 | `devkit create [--plugin\|--shared] <slug>` | Scaffold a new package under `packages/<slug>/`.                                                     |
 | `devkit release [--dry-run]`                | Build, then publish each package with a stamped (complete) manifest.                                 |
-| `devkit tag [patch\|minor\|major]`          | Version bump, commit, tag, push, and create a GitHub Release.                                        |
+| `devkit tag [patch\|minor\|major]`          | Version bump, commit, tag, push, and create a GitHub Release. Use `--notes-since v0.1.75` when release notes should cover everything since an earlier good tag. |
 
 Typecheck stays a plain `tsc` call:
 

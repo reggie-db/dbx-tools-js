@@ -8,6 +8,9 @@
 // stat since the previous tag when that CLI is installed; otherwise it
 // falls back to a deterministic grouping of the commits by
 // conventional-commit type. See `buildNotes` / `releaseNotes`.
+// Pass `--notes-since v0.1.75` (or bare `0.1.75`) when several recent
+// tags failed to publish and notes should cover everything since the
+// last good release instead of only since the latest tag.
 //
 // After pushing, the function can also run the workspace publish script
 // so local release flows use the same Bun-based package publishing path
@@ -46,6 +49,13 @@ export interface TagOptions {
   dryRun?: boolean;
   /** Publish the tagged versions to the local registry (default true). */
   publish?: boolean;
+  /**
+   * Tag (or bare version) to use as the release-notes baseline instead
+   * of the latest git tag - e.g. `v0.1.75` or `0.1.75` when several
+   * recent tags failed to publish and notes should cover everything
+   * since the last good release.
+   */
+  notesSince?: string;
 }
 
 /**
@@ -66,6 +76,27 @@ async function gitStatus(): Promise<string> {
 /** `git push origin <ref>` (commit branch or tag). */
 async function gitPush(ref: string): Promise<void> {
   await git(["push", "origin", ref]);
+}
+
+/**
+ * Normalize a release-notes baseline to a tag name. Accepts `v0.1.75`
+ * or bare `0.1.75`.
+ */
+function normalizeNotesSinceTag(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) fail("--notes-since: value must not be empty");
+  return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
+}
+
+/** Resolve and verify a `--notes-since` tag exists locally. */
+async function resolveNotesSinceTag(raw: string): Promise<string> {
+  const tagName = normalizeNotesSinceTag(raw);
+  if (!(await gitRevParse("--verify", `refs/tags/${tagName}`))) {
+    fail(
+      `--notes-since: tag ${tagName} does not exist locally (fetch tags or pick another baseline)`,
+    );
+  }
+  return tagName;
 }
 
 /**
@@ -325,7 +356,7 @@ async function buildNotes(
  * registry. See the file header for the full local-state policy.
  */
 export async function tag(opts: TagOptions = {}): Promise<void> {
-  const { bump = "patch", dryRun = false, publish = true } = opts;
+  const { bump = "patch", dryRun = false, publish = true, notesSince } = opts;
 
   // Tagging commits, tags, and pushes - all of which need git and a
   // repo. Fail upfront with a clear message rather than partway through.
@@ -364,14 +395,21 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
     fail(`Tag ${tagName} already exists on origin. Pick a different bump.`);
   }
 
-  const prevTag =
+  const latestTag =
     (await git(["describe", "--tags", "--abbrev=0"], { nothrow: true })).stdout || null;
+  const notesSinceTag = notesSince
+    ? await resolveNotesSinceTag(notesSince)
+    : latestTag;
 
   consola.log(`Bump:    ${bump}`);
   consola.log(`Current: ${currentVersion}`);
   consola.log(`Next:    ${nextVersion}`);
   consola.log(`Tag:     ${tagName}`);
-  consola.log(`Prev:    ${prevTag ?? "(none)"}`);
+  consola.log(`Latest tag: ${latestTag ?? "(none)"}`);
+  consola.log(
+    `Notes since: ${notesSinceTag ?? "(none)"}` +
+      (notesSince ? " (--notes-since)" : ""),
+  );
   const headSha = await gitRevParse("--short", "HEAD");
   consola.log(`HEAD:    ${headSha} (${branch})`);
   consola.log(`Packages:`);
@@ -389,7 +427,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
 
   if (dryRun) {
     consola.log("--dry-run: skipping write, commit, tag, and push.");
-    const preview = await buildNotes(prevTag, tagName, repo);
+    const preview = await buildNotes(notesSinceTag, tagName, repo);
     consola.log(`Release notes preview (${preview.source}):`);
     consola.log(preview.body);
     consola.log("");
@@ -415,7 +453,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
   consola.log(`Pushing ${tagName} to origin...`);
   await gitPush(tagName);
 
-  const notes = await buildNotes(prevTag, tagName, repo);
+  const notes = await buildNotes(notesSinceTag, tagName, repo);
   consola.log(`Release notes ready (${notes.source}):`);
   consola.log(notes.body);
   consola.log("");
