@@ -3,7 +3,9 @@ import { describe, expect, it } from "bun:test";
 import {
   findContainingCidr,
   ipInCidr,
+  isEmail,
   parseCidr,
+  parseEmails,
   parseIp,
   pathMatch,
   urlBuilder,
@@ -300,5 +302,75 @@ describe("findContainingCidr", () => {
     ];
     expect(findContainingCidr("10.9.9.9", ranges)?.region).toBe("v4");
     expect(findContainingCidr("2001:db8::1", ranges)?.region).toBe("v6");
+  });
+});
+
+describe("parseEmails", () => {
+  it("returns an empty list for null / undefined / blank input", () => {
+    expect(parseEmails(undefined)).toEqual([]);
+    expect(parseEmails(null)).toEqual([]);
+    expect(parseEmails("")).toEqual([]);
+    expect(parseEmails("   ")).toEqual([]);
+    expect(parseEmails([])).toEqual([]);
+  });
+
+  it("splits a CSV / semicolon / whitespace string into addresses", () => {
+    expect(parseEmails("a@x.com, b@y.com; c@z.com")).toEqual([
+      "a@x.com",
+      "b@y.com",
+      "c@z.com",
+    ]);
+    expect(parseEmails("a@x.com   b@y.com")).toEqual(["a@x.com", "b@y.com"]);
+  });
+
+  it("flattens arrays and splits each entry, trimming blanks", () => {
+    expect(parseEmails(["a@x.com", "  b@y.com , c@z.com ", ""])).toEqual([
+      "a@x.com",
+      "b@y.com",
+      "c@z.com",
+    ]);
+  });
+
+  it("de-duplicates case-insensitively, keeping first-seen casing", () => {
+    expect(parseEmails("A@x.com, a@x.com, A@X.com")).toEqual(["A@x.com"]);
+  });
+
+  it("preserves casing by default and lower-cases on request", () => {
+    expect(parseEmails("Alice@Example.com")).toEqual(["Alice@Example.com"]);
+    expect(parseEmails("Alice@Example.com", { lowercase: true })).toEqual([
+      "alice@example.com",
+    ]);
+  });
+
+  it("keeps duplicates when dedupe is disabled", () => {
+    expect(parseEmails("a@x.com, a@x.com", { dedupe: false })).toEqual([
+      "a@x.com",
+      "a@x.com",
+    ]);
+  });
+
+  it("does not validate - passes wildcard patterns through", () => {
+    expect(parseEmails("*@corp.com, user@other.com", { lowercase: true })).toEqual([
+      "*@corp.com",
+      "user@other.com",
+    ]);
+  });
+});
+
+describe("isEmail", () => {
+  it("accepts well-formed addresses (trimming first)", () => {
+    expect(isEmail("alice@example.com")).toBe(true);
+    expect(isEmail("  bob.smith+tag@sub.example.co.uk  ")).toBe(true);
+  });
+
+  it("rejects malformed addresses", () => {
+    expect(isEmail("nope")).toBe(false);
+    expect(isEmail("no@domain")).toBe(false);
+    expect(isEmail("@example.com")).toBe(false);
+    expect(isEmail("a b@example.com")).toBe(false);
+  });
+
+  it("is purely syntactic - a wildcard pattern passes the shape check", () => {
+    expect(isEmail("*@example.com")).toBe(true);
   });
 });

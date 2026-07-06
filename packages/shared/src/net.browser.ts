@@ -2,10 +2,13 @@
  * Browser-safe networking helpers built around {@link urlBuilder}: a
  * tolerant `URL` coercion + chainable builder that gracefully handles
  * partial inputs (bare hosts, path-only strings, `{ url }` wrappers),
- * plus a small IPv4 / IPv6 address + CIDR toolkit (parsing and
- * membership lookups). No node-only imports, so this module is the
- * canonical home for anything URL- or IP-shaped that also has to run
- * in a Vite / Webpack / esbuild client bundle.
+ * a small IPv4 / IPv6 address + CIDR toolkit (parsing and membership
+ * lookups), and email-address parsing ({@link parseEmails} /
+ * {@link isEmail}) that normalizes the CSV / single-string / array
+ * inputs email recipient and allow-list fields accept into a clean
+ * `string[]`. No node-only imports, so this module is the canonical
+ * home for anything URL-, IP-, or email-shaped that also has to run in
+ * a Vite / Webpack / esbuild client bundle.
  *
  * The server-side `./net.ts` re-exports everything here verbatim and
  * tacks on its own node-only helpers (e.g. DNS resolution), so the
@@ -24,6 +27,11 @@ const URL_SCHEME_SEPARATOR = "://";
 const IP_BITS: Readonly<Record<IpVersion, number>> = { 4: 32, 6: 128 };
 const IPV4_OCTET = /^\d{1,3}$/;
 const IPV6_HEXTET = /^[0-9a-fA-F]{1,4}$/;
+
+/** Delimiters between addresses in a free-text / CSV email list. */
+const EMAIL_LIST_SEPARATOR = /[\s,;]+/;
+/** Pragmatic `local@domain.tld` shape check (not full RFC 5322). */
+const EMAIL_ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -253,6 +261,84 @@ function parseUrl(input: string): URL | null {
     } catch {}
   }
   return null;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Email addresses
+// ────────────────────────────────────────────────────────────────
+
+/** Options for {@link parseEmails}. */
+export interface ParseEmailsOptions {
+  /** Lower-case every address (useful for allow-lists / matching). Off by default. */
+  lowercase?: boolean;
+  /**
+   * Drop later case-insensitive duplicates, keeping first-seen casing.
+   * On by default - a recipient or pattern list rarely wants repeats.
+   */
+  dedupe?: boolean;
+}
+
+/**
+ * Normalize the shapes an email address field accepts - a single string,
+ * a comma / semicolon / whitespace separated list, an array of either,
+ * or nothing - into a clean `string[]`. Each entry is split on the list
+ * separators, trimmed, and de-emptied; blanks and non-string array
+ * members are dropped. By default duplicates are removed
+ * case-insensitively (first-seen casing wins) and casing is otherwise
+ * preserved; pass `lowercase` to fold everything to lower case (e.g. for
+ * an allow-list). This is the one place recipient lists, CC/BCC inputs,
+ * and sender allow-lists across the repo agree on how free-text email
+ * input is read. Never throws; does not validate - pair with
+ * {@link isEmail} when you need to reject malformed addresses.
+ *
+ * @example
+ * parseEmails("a@x.com, b@y.com; a@x.com"); // ["a@x.com", "b@y.com"]
+ * parseEmails(["A@x.com", " b@y.com "]);      // ["A@x.com", "b@y.com"]
+ * parseEmails("*@corp.com", { lowercase: true }); // ["*@corp.com"]
+ * parseEmails(undefined);                     // []
+ */
+export function parseEmails(
+  input: string | readonly string[] | null | undefined,
+  options: ParseEmailsOptions = {},
+): string[] {
+  if (input === null || input === undefined) return [];
+  const { lowercase = false, dedupe = true } = options;
+  const entries = Array.isArray(input) ? input : [input as string];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "string") continue;
+    for (const token of entry.split(EMAIL_LIST_SEPARATOR)) {
+      const trimmed = token.trim();
+      if (!trimmed) continue;
+      const address = lowercase ? trimmed.toLowerCase() : trimmed;
+      if (dedupe) {
+        const key = address.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      out.push(address);
+    }
+  }
+  return out;
+}
+
+/**
+ * Pragmatic `local@domain.tld` shape check: non-empty local and domain
+ * parts around a single `@`, with a dotted domain and no whitespace.
+ * Deliberately loose (not full RFC 5322) - enough to catch obvious typos
+ * and give CLI / form feedback, not to gate delivery. Trims first. This
+ * is a purely syntactic test, so a wildcard allow-list pattern like
+ * `*@example.com` passes; distinguishing a pattern from a real address
+ * is the sender policy's job, not this validator's.
+ *
+ * @example
+ * isEmail("alice@example.com"); // true
+ * isEmail("nope");              // false (no @)
+ * isEmail("no@domain");         // false (no dotted domain)
+ */
+export function isEmail(value: string): boolean {
+  return EMAIL_ADDRESS.test(value.trim());
 }
 
 // ────────────────────────────────────────────────────────────────

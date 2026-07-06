@@ -88,18 +88,6 @@ export function needsLakebase(config: MastraPluginConfig): boolean {
   );
 }
 
-/** Options controlling how {@link MemoryBuilder} resolves each agent's memory. */
-export interface MemoryBuilderOptions {
-  /**
-   * Skip building / attaching `PgVector` (and its `semanticRecall`)
-   * for every agent. Set when Databricks Managed Memory is the active
-   * long-term backend - it fills the semantic-recall role instead, via
-   * the recall input processor and memory tools. Thread / message
-   * storage (`PostgresStore`) is unaffected.
-   */
-  suppressVector?: boolean;
-}
-
 /**
  * Construct a per-agent {@link Memory} factory bound to the supplied
  * service-principal pool (see {@link createServicePrincipalPool}).
@@ -109,9 +97,8 @@ export interface MemoryBuilderOptions {
 export function createMemoryBuilder(
   config: MastraPluginConfig,
   servicePrincipalPool: Pool,
-  options: MemoryBuilderOptions = {},
 ): MemoryBuilder {
-  return new MemoryBuilder(config, servicePrincipalPool, options);
+  return new MemoryBuilder(config, servicePrincipalPool);
 }
 
 /**
@@ -125,15 +112,8 @@ export class MemoryBuilder {
   constructor(
     private readonly config: MastraPluginConfig,
     private readonly servicePrincipalPool: Pool,
-    private readonly options: MemoryBuilderOptions = {},
   ) {}
 
-  /**
-   * Build a `Memory` for `agentId` after the plugin/agent cascade.
-   * Returns `undefined` when the agent has neither storage nor a
-   * vector store enabled - Mastra accepts a missing `memory` field
-   * and treats the agent as stateless.
-   */
   /**
    * Build the Mastra-instance-level storage used for workflow
    * snapshots. Returns `undefined` when plugin-level `storage` is
@@ -162,6 +142,12 @@ export class MemoryBuilder {
     });
   }
 
+  /**
+   * Build a `Memory` for `agentId` after the plugin/agent cascade.
+   * Returns `undefined` when the agent has neither storage nor a
+   * vector store enabled - Mastra accepts a missing `memory` field
+   * and treats the agent as stateless.
+   */
   forAgent(agentId: string, def: MastraAgentDefinition): Memory | undefined {
     const storageSetting = def.storage ?? this.config.storage;
     const memorySetting = def.memory ?? this.config.memory;
@@ -241,9 +227,6 @@ export class MemoryBuilder {
    * - object: build a dedicated `PgVector` for this agent.
    */
   private buildVector(setting: MemorySetting): PgVector | undefined {
-    // Managed Memory owns the long-term / recall role when active, so
-    // skip PgVector entirely regardless of the per-agent / plugin setting.
-    if (this.options.suppressVector) return undefined;
     if (!setting) return undefined;
     if (typeof setting === "boolean") return this.getSharedVector();
     return buildPgVector(setting);

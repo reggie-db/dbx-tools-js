@@ -1162,6 +1162,14 @@ export const useMastraChat = (
     }),
     [mastraClient],
   );
+  // Speaker label for the human turns in an export. The resource id is
+  // the signed-in user's identity (every thread the client lists is its
+  // own), so any owned thread supplies it; fall back to a bare "User"
+  // before the first thread lands.
+  const exportUserLabel = useMemo(() => {
+    const resourceId = threads.find((t) => t.resourceId)?.resourceId;
+    return resourceId ? `User (${resourceId})` : "User";
+  }, [threads]);
   const exportConversation = useCallback(
     async (format: ExportFormat) => {
       const title =
@@ -1173,6 +1181,7 @@ export const useMastraChat = (
           format,
           resolver: exportResolver,
           title,
+          userLabel: exportUserLabel,
         });
       } catch (error) {
         log.error("conversation export error", {
@@ -1181,7 +1190,7 @@ export const useMastraChat = (
         });
       }
     },
-    [exportResolver, activeThreadId, threads],
+    [exportResolver, activeThreadId, threads, exportUserLabel],
   );
   const exportMessage = useCallback(
     async (message: UIMessage, format: ExportFormat) => {
@@ -1192,6 +1201,7 @@ export const useMastraChat = (
           resolver: exportResolver,
           title: "Message",
           filename: "message",
+          userLabel: exportUserLabel,
         });
       } catch (error) {
         log.error("message export error", {
@@ -1200,7 +1210,7 @@ export const useMastraChat = (
         });
       }
     },
-    [exportResolver],
+    [exportResolver, exportUserLabel],
   );
 
   // Submit thumbs / comment feedback for an assistant message to MLflow

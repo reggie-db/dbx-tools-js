@@ -9,15 +9,35 @@
  * callers.
  *
  * Configuration is the manifest-published {@link EmailPluginConfig}
- * (SMTP host/port/credentials, sender domain or explicit `from`), with
- * unprefixed `SMTP_*` / `EMAIL_*` environment fallbacks.
+ * (SMTP host/port/credentials, sender domain or explicit `from`, and an
+ * optional `allowedSenders` restriction), with unprefixed `SMTP_*` /
+ * `EMAIL_*` environment fallbacks.
+ *
+ * The plugin mounts one route under its base path (`/api/email`):
+ * `GET /senders` returns the permitted `From` options for the calling
+ * user, so a compose UI can offer them in a dropdown.
  */
 
-import { Plugin, toPlugin, type PluginManifest } from "@databricks/appkit";
-import type { EmailMessage, EmailResult } from "@dbx-tools/appkit-email-shared";
+import {
+  getExecutionContext,
+  Plugin,
+  toPlugin,
+  type IAppRouter,
+  type PluginManifest,
+} from "@databricks/appkit";
+import type {
+  EmailMessage,
+  EmailResult,
+  EmailSenders,
+} from "@dbx-tools/appkit-email-shared";
 import { commonUtils, logUtils } from "@dbx-tools/shared";
+import type express from "express";
 import { EMAIL_CONFIG_SCHEMA, type EmailPluginConfig } from "./config.js";
+import { isSenderAllowed, listSenderOptions, resolveSenderAddress } from "./sender.js";
 import { getEmailRuntime, sendEmail } from "./transport.js";
+
+/** Mount-relative route (under `/api/email`) for the sender-options lookup. */
+const SENDERS_ROUTE = "/senders";
 
 /**
  * AppKit plugin that configures and verifies the SMTP transport used by
@@ -45,8 +65,9 @@ export class EmailPlugin extends Plugin<EmailPluginConfig> {
    * SMTP mode, verify connectivity - a failed verify is logged as a
    * warning rather than thrown, so the app still boots and the first
    * send surfaces the real error via the approval flow. With no SMTP
-   * credentials the runtime is in file/outbox mode, logged here so it's
-   * obvious mail is being written to disk rather than sent.
+   * credentials the runtime is in file/outbox mode (only when
+   * `EMAIL_OUTBOX_MODE` is set), logged here so it's obvious mail is
+   * being written to disk rather than sent.
    */
   override async setup(): Promise<void> {
     const { transporter, config } = getEmailRuntime(this.config);
@@ -70,6 +91,22 @@ export class EmailPlugin extends Plugin<EmailPluginConfig> {
     }
   }
 
+  /**
+   * Expose the sender-options lookup so UI compose views can populate a
+   * `From` dropdown from the configured allow-list. Mounted under the
+   * plugin base path, i.e. `GET /api/email/senders`. Runs in the OBO
+   * user scope so domain wildcards resolve against the caller's own
+   * local part.
+   */
+  override injectRoutes(router: IAppRouter): void {
+    router.get(SENDERS_ROUTE, (req, res, next) => {
+      this.userScopedSelf(req)
+        .listSenders()
+        .then((senders) => res.json(senders))
+        .catch(next);
+    });
+  }
+
   override exports() {
     return {
       /**
@@ -79,7 +116,50 @@ export class EmailPlugin extends Plugin<EmailPluginConfig> {
        */
       sendEmail: (message: EmailMessage, from: string): Promise<EmailResult> =>
         sendEmail(message, from),
+      /**
+       * Sender options for the current user (the `GET /senders` payload).
+       * AppKit wraps this with `asUser(req)` for OBO scoping.
+       */
+      listSenders: (): Promise<EmailSenders> => this.listSenders(),
     };
+  }
+
+  /**
+   * Compute the `From` options offered to the current user: the concrete
+   * addresses the configured allow-list permits (domain wildcards
+   * expanded against the OBO user's local part), the default among them,
+   * and whether the list is an enforced restriction. See
+   * {@link listSenderOptions}.
+   */
+  private async listSenders(): Promise<EmailSenders> {
+    const { config } = getEmailRuntime();
+    const ctx = getExecutionContext();
+    const userEmail = "isUserContext" in ctx ? ctx.userEmail : undefined;
+    const senders = listSenderOptions(config, userEmail);
+    // Prefer the address a send would actually default to; fall back to
+    // the first offered option when that can't be resolved / permitted.
+    let defaultSender = senders[0];
+    try {
+      const resolved = resolveSenderAddress(config, userEmail).toLowerCase();
+      if (isSenderAllowed(resolved, config.allowedSenders)) defaultSender = resolved;
+    } catch {
+      // Keep the first offered option (or none) as the default.
+    }
+    return {
+      senders,
+      ...(defaultSender ? { defaultSender } : {}),
+      restricted: config.allowedSenders.length > 0,
+    };
+  }
+
+  /**
+   * Return `this.asUser(req)` when the request carries an OBO token,
+   * otherwise `this`. Avoids the noisy AppKit "asUser without token"
+   * warning on every request in local dev; behavior is unchanged in
+   * production where a missing token means a real OBO call.
+   */
+  private userScopedSelf(req: express.Request): this {
+    return req.header("x-forwarded-access-token") ? (this.asUser(req) as this) : this;
   }
 }
 

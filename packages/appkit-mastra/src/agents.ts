@@ -22,14 +22,10 @@ import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import { buildRenderDataTool } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
-import { buildManagedMemoryTools } from "./connectors/managed-memory/tools.js";
-import type { ManagedMemoryRuntime } from "./connectors/managed-memory/types.js";
 import { buildGenieToolkitProvider, resolveGenieSpaces } from "./genie.js";
 import type { MemoryBuilder } from "./memory.js";
 import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
-import { ResultProcessor } from "./processor.js";
-import { buildManagedMemoryRecallProcessor } from "./processors/managed-memory-recall.js";
-import { stripStaleChartsProcessor } from "./processors/strip-stale-charts.js";
+import { ResultProcessor, stripStaleChartsProcessor } from "./processors.js";
 import { buildSummarizeTool } from "./summarize.js";
 
 /**
@@ -406,6 +402,16 @@ function composeInstructions(agentInstructions: string, style: string | null): s
 }
 
 /**
+ * Generated description for an agent whose definition omits one. Kept
+ * generic (the agent's own name is the only reliable signal at build
+ * time) so it reads sensibly as the `ask_<id>` MCP tool's description
+ * and in agent metadata.
+ */
+function defaultAgentDescription(name: string): string {
+  return `Conversational AI agent "${name}".`;
+}
+
+/**
  * Resolve every entry in `config.agents` into a Mastra `Agent`
  * instance. When `config.agents` is omitted the plugin registers a
  * single built-in `default` analyst so the bare `mastra()` call still
@@ -422,17 +428,9 @@ export async function buildAgents(opts: {
   config: MastraPluginConfig;
   context: appkitUtils.PluginContextLike | undefined;
   memoryBuilder?: MemoryBuilder;
-  /**
-   * Active Databricks Managed Memory runtime, present only when managed
-   * memory was resolved and probed successfully at setup. When set,
-   * every agent gets the `save_memory` / `search_memory` tools and the
-   * auto-recall input processor; the `PgVector` path is suppressed
-   * upstream in `memory.ts`.
-   */
-  managedMemory?: ManagedMemoryRuntime;
   log: logUtils.Logger;
 }): Promise<BuiltAgents> {
-  const { config, context, memoryBuilder, managedMemory, log } = opts;
+  const { config, context, memoryBuilder, log } = opts;
   const definitions = resolveDefinitions(config);
   const ids = Object.keys(definitions);
   const defaultAgentId = config.defaultAgent ?? ids[0] ?? FALLBACK_AGENT_ID;
@@ -448,16 +446,8 @@ export async function buildAgents(opts: {
     render_data: buildRenderDataTool(config),
     summarize: buildSummarizeTool(config),
   };
-  // Managed-memory tools (when active) are system-provided like
-  // `render_data`: spread before `config.tools` so a user-supplied
-  // same-named tool still wins. Skipped when `managedMemory.tools` is
-  // off (the caller sets `tools: false` before building the runtime).
-  const managedMemoryTools: MastraTools = managedMemory?.tools
-    ? buildManagedMemoryTools(managedMemory)
-    : {};
   const ambientTools = {
     ...systemTools,
-    ...managedMemoryTools,
     ...(config.tools ?? {}),
   };
   const style = resolveStyleInstructions(config);
@@ -468,12 +458,6 @@ export async function buildAgents(opts: {
   const outputProcessors = [new ResultProcessor()];
   const inputProcessors = [
     ...(config.stripStaleCharts === false ? [] : [stripStaleChartsProcessor]),
-    // Auto-recall the user's managed-memory entries before each turn
-    // (the PgVector semantic-recall replacement). Only when managed
-    // memory is active and recall isn't explicitly disabled.
-    ...(managedMemory?.recall
-      ? [buildManagedMemoryRecallProcessor(managedMemory)]
-      : []),
   ];
   const agents: Record<string, Agent> = {};
 
@@ -483,7 +467,11 @@ export async function buildAgents(opts: {
     agents[id] = new Agent({
       id,
       name: def.name ?? id,
-      ...(def.description !== undefined ? { description: def.description } : {}),
+      // Always carry a non-empty description: it's surfaced to MCP
+      // clients (which reject a description-less agent) and in agent
+      // metadata. Fall back to a generated one when the definition
+      // omits it.
+      description: def.description?.trim() || defaultAgentDescription(def.name ?? id),
       instructions: composeInstructions(def.instructions, style),
       model: resolveModel(config, def.model),
       defaultOptions: {

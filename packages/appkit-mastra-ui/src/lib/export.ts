@@ -56,6 +56,12 @@ export interface ExportChatOptions {
   title?: string;
   /** Download filename stem (no extension). Defaults to a slug of the title. */
   filename?: string;
+  /**
+   * Label for the human speaker (the `user` role). Defaults to
+   * `"User"`; callers that know the signed-in identity pass a resource
+   * id / email form like `"User (someone@example.com)"`.
+   */
+  userLabel?: string;
 }
 
 /** Fixed Echarts SSR canvas; the SVG scales to the print column via CSS. */
@@ -79,9 +85,10 @@ export async function exportChat(options: ExportChatOptions): Promise<void> {
   const { messages, format, resolver } = options;
   const title = options.title?.trim() || "Conversation";
   const stem = options.filename?.trim() || slugify(title);
+  const userLabel = options.userLabel?.trim() || "User";
 
   if (format === "markdown") {
-    const md = await buildMarkdown(messages, resolver, title);
+    const md = await buildMarkdown(messages, resolver, title, userLabel);
     downloadTextFile(`${stem}.md`, md, "text/markdown;charset=utf-8");
     return;
   }
@@ -90,7 +97,7 @@ export async function exportChat(options: ExportChatOptions): Promise<void> {
   // embeds resolve, then swap in the finished document and print.
   const win = window.open("", "_blank");
   win?.document.write(PREPARING_HTML);
-  const html = await buildHtmlDocument(messages, resolver, title);
+  const html = await buildHtmlDocument(messages, resolver, title, userLabel);
   if (!win) {
     // Popup blocked: fall back to an HTML file download so the export
     // (charts included) still lands.
@@ -143,9 +150,13 @@ function messageText(message: UIMessage): string {
     .join("");
 }
 
-/** Human label for a message role. */
-function roleLabel(role: UIMessage["role"]): string {
-  if (role === "user") return "You";
+/**
+ * Human label for a message role. The `user` role uses `userLabel`
+ * (the signed-in identity, e.g. `"User (someone@example.com)"`);
+ * `assistant` is fixed; any other role is title-cased.
+ */
+function roleLabel(role: UIMessage["role"], userLabel: string): string {
+  if (role === "user") return userLabel;
   if (role === "assistant") return "Assistant";
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
@@ -157,6 +168,7 @@ async function buildHtmlDocument(
   messages: UIMessage[],
   resolver: EmbedResolver,
   title: string,
+  userLabel: string,
 ): Promise<string> {
   const articles: string[] = [];
   for (const message of messages) {
@@ -164,7 +176,7 @@ async function buildHtmlDocument(
     if (!body) continue;
     articles.push(
       `<article class="msg msg-${escapeHtml(message.role)}">` +
-        `<div class="role">${escapeHtml(roleLabel(message.role))}</div>` +
+        `<div class="role">${escapeHtml(roleLabel(message.role, userLabel))}</div>` +
         `<div class="content">${body}</div></article>`,
     );
   }
@@ -277,12 +289,13 @@ async function buildMarkdown(
   messages: UIMessage[],
   resolver: EmbedResolver,
   title: string,
+  userLabel: string,
 ): Promise<string> {
   const blocks: string[] = [`# ${title}`, `_Exported ${new Date().toLocaleString()}_`];
   for (const message of messages) {
     const body = await messageBodyMarkdown(message, resolver);
     if (!body.trim()) continue;
-    blocks.push(`## ${roleLabel(message.role)}`);
+    blocks.push(`## ${roleLabel(message.role, userLabel)}`);
     blocks.push(body);
   }
   return `${blocks.join("\n\n")}\n`;
@@ -418,9 +431,20 @@ const PREPARING_HTML =
   "<body>Preparing export...</body></html>";
 
 /**
- * Inline stylesheet for the exported document. Tuned for print: a
- * readable measure, role-labelled message blocks, framed charts / tables
- * that don't split across pages, and a hidden print-button chrome.
+ * Inline stylesheet for the exported document. Tuned for print:
+ *
+ *   - A readable measure with role-labelled message blocks.
+ *   - Content flows naturally across pages: whole messages are NOT
+ *     `break-inside: avoid` (a long turn that couldn't fit the
+ *     remaining space would otherwise be shoved to the next page,
+ *     leaving the current one half-blank). Only atomic units stay
+ *     unbroken - a chart image, a code block, and individual table
+ *     rows - while long tables split across pages and repeat their
+ *     header (`thead { display: table-header-group }`).
+ *   - `@page { margin: 0 }` collapses the page margin box so the
+ *     browser's own print header/footer (the `about:blank` URL, the
+ *     date, and `n/N` page numbers) have nowhere to render and drop
+ *     out; the visible page margin is re-supplied as body padding.
  */
 const PRINT_CSS = `
   :root { color-scheme: light; }
@@ -433,24 +457,30 @@ const PRINT_CSS = `
   .doc-header { max-width: 820px; margin: 0 auto 24px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; }
   .doc-header h1 { font-size: 22px; margin: 0 0 4px; }
   .doc-meta { font-size: 12px; color: #64748b; }
-  .msg { margin: 0 0 20px; break-inside: avoid; }
-  .msg .role { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #64748b; margin-bottom: 4px; }
+  .msg { margin: 0 0 20px; }
+  .msg .role { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #64748b; margin-bottom: 4px; break-after: avoid; }
   .msg-user .content { background: #f1f5f9; border-radius: 8px; padding: 10px 14px; }
   .msg .content > *:first-child { margin-top: 0; }
   .msg .content > *:last-child { margin-bottom: 0; }
   .plain { white-space: pre-wrap; margin: 0; }
   p { margin: 0 0 10px; }
-  h1, h2, h3, h4 { line-height: 1.3; margin: 18px 0 8px; }
+  h1, h2, h3, h4 { line-height: 1.3; margin: 18px 0 8px; break-after: avoid; break-inside: avoid; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; background: #f1f5f9; padding: .1em .3em; border-radius: 4px; }
   pre { background: #0f172a; color: #e2e8f0; padding: 12px 14px; border-radius: 8px; overflow-x: auto; break-inside: avoid; }
   pre code { background: none; padding: 0; color: inherit; }
   a { color: #2563eb; }
-  .embed { margin: 12px 0; break-inside: avoid; }
-  .embed-chart { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
+  .embed { margin: 12px 0; }
+  .embed-chart { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; break-inside: avoid; }
   .embed-chart svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
   th, td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; vertical-align: top; }
   th { background: #f8fafc; font-weight: 600; }
   .embed-note { font-size: 12px; color: #64748b; margin-top: 6px; }
-  @media print { body { padding: 0; } a { color: inherit; text-decoration: none; } }
+  @page { margin: 0; }
+  @media print {
+    body { padding: 16mm 18mm; }
+    a { color: inherit; text-decoration: none; }
+  }
 `;

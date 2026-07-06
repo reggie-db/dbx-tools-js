@@ -53,15 +53,16 @@ export function emailTool(opts: EmailToolOptions = {}) {
   return createTool({
     id: opts.id ?? "send_email",
     description: stringUtils.toDescription(`
-      Send an email on the user's behalf. Pass a recipient address,
-      subject, and body; the user is prompted to approve the send before
-      it goes out (this tool is approval-gated). Use it only when the
-      user explicitly asks to send / forward / share something via
-      email - never autonomously. Keep subjects short and bodies
-      self-contained: the recipient has none of the chat context. Write
-      the body in GitHub-Flavored Markdown - headings, lists, and real
-      Markdown tables - not ASCII art (no "=====" dividers or
-      space/pipe-drawn tables); it is rendered to HTML before sending.
+      Send an email on the user's behalf. Pass one or more recipient
+      addresses (with optional cc / bcc and file attachments), a subject,
+      and a body; the user is prompted to approve the send before it goes
+      out (this tool is approval-gated). Use it only when the user
+      explicitly asks to send / forward / share something via email -
+      never autonomously. Keep subjects short and bodies self-contained:
+      the recipient has none of the chat context. Write the body in
+      GitHub-Flavored Markdown - headings, lists, and real Markdown
+      tables - not ASCII art (no "=====" dividers or space/pipe-drawn
+      tables); it is rendered to HTML before sending.
     `),
     inputSchema: emailMessageSchema,
     outputSchema: emailResultSchema,

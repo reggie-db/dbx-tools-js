@@ -70,12 +70,6 @@ import {
 import { buildAgents, FALLBACK_AGENT_ID, type BuiltAgents } from "./agents.js";
 import { fetchChart } from "./chart.js";
 import type { MastraPluginConfig } from "./config.js";
-import {
-  ensureStore,
-  getStore,
-  resolveManagedMemoryTarget,
-  type ManagedMemoryRuntime,
-} from "./connectors/managed-memory/index.js";
 import { collectSpaceSuggestions, resolveGenieSpaces } from "./genie.js";
 import { historyRoute } from "./history.js";
 import { buildMcpServer, type ResolvedMcp } from "./mcp.js";
@@ -305,6 +299,23 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
   }
 
   override injectRoutes(router: IAppRouter): void {
+    // Expose the MCP transport at the clean `/mcp` (plus the legacy
+    // `/sse` + `/messages`) under the plugin mount. `@mastra/express`
+    // mounts MCP under `/mcp/<serverId>/<transport>`, and the serverId
+    // defaults to the plugin name, so the raw route reads
+    // `/api/mastra/mcp/mastra/mcp` (doubled segment). This runs before
+    // the catch-all and rewrites the alias to the underlying route, so
+    // the public path is just `/api/<plugin>/mcp`; the query string
+    // (e.g. the SSE `sessionId`) is preserved.
+    router.use((req, _res, next) => {
+      const target = this.mcpRouteAlias(req.path);
+      if (target) {
+        const q = req.url.indexOf("?");
+        req.url = q >= 0 ? target + req.url.slice(q) : target;
+      }
+      next();
+    });
+
     // `GET /models` exposes the cached endpoint list so clients can
     // populate model pickers, validate `?model=` choices, etc. Must
     // be registered before the catch-all that forwards everything to
@@ -464,7 +475,10 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       if (
         !isMastraRequestAllowed(req.method, req.path, {
           access: this.config.apiAccess ?? "scoped",
-          mcpEnabled: Boolean(this.config.mcp),
+          // Reflect the *resolved* MCP state, not raw `config.mcp`: MCP is
+          // on by default (`config.mcp` undefined), so gate on whether the
+          // server was actually built and mounted.
+          mcpEnabled: this.mcp !== null,
         })
       ) {
         res
@@ -501,6 +515,22 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     next: express.NextFunction,
   ): void {
     this.mastraApp!(req, res, next);
+  }
+
+  /**
+   * Map a clean, mount-relative MCP alias path to the underlying
+   * `@mastra/express` route. Returns `null` when MCP is off or the path
+   * isn't an alias. Collapses the stock `/mcp/<serverId>/<transport>`
+   * layout (serverId defaults to the plugin name) down to `/mcp`,
+   * `/sse`, and `/messages`.
+   */
+  private mcpRouteAlias(path: string): string | null {
+    if (!this.mcp) return null;
+    const id = this.mcp.serverId;
+    if (path === "/mcp") return `/mcp/${id}/mcp`;
+    if (path === "/sse") return `/mcp/${id}/sse`;
+    if (path === "/messages") return `/mcp/${id}/messages`;
+    return null;
   }
 
   /**
@@ -607,59 +637,6 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     return listServingEndpoints(client, host, { ttlMs: serving.ttlMs });
   }
 
-  /**
-   * Resolve and probe the Databricks Managed Memory backend at setup.
-   *
-   * Returns the runtime (store + recall sizing + tool / recall toggles)
-   * when managed memory is enabled and the workspace memory-stores API
-   * is reachable, else `undefined` so the caller uses the PgVector path.
-   *
-   * The probe runs as the service principal (setup is outside any
-   * `asUser` scope, so `getExecutionContext()` yields the SP client):
-   * the SP owns the store and is the identity that can `CREATE MEMORY
-   * STORE`. When `autoCreate` is on the store is created if missing.
-   *
-   * A misconfiguration where managed memory is explicitly enabled but no
-   * store name is resolvable throws ({@link resolveManagedMemoryTarget})
-   * - that is a wiring bug, not a runtime condition. Every other failure
-   * (feature unavailable, permission denied, network) is caught, logged,
-   * and degraded to a PgVector fallback so chat stays available.
-   */
-  private async resolveManagedMemory(): Promise<ManagedMemoryRuntime | undefined> {
-    const target = resolveManagedMemoryTarget(this.config);
-    if (!target) return undefined;
-    try {
-      const client = getExecutionContext().client;
-      const available = target.autoCreate
-        ? await ensureStore(client, target.storeName, target.description)
-        : (await getStore(client, target.storeName)) !== null;
-      if (!available) {
-        this.log.warn("managed-memory:unavailable; using PgVector fallback", {
-          store: target.storeName,
-        });
-        return undefined;
-      }
-      this.log.info("managed-memory:active", {
-        store: target.storeName,
-        topK: target.topK,
-        autoCreate: target.autoCreate,
-      });
-      return {
-        storeName: target.storeName,
-        topK: target.topK,
-        entryPath: target.entryPath,
-        tools: target.tools,
-        recall: target.recall,
-      };
-    } catch (err) {
-      this.log.warn("managed-memory:probe failed; using PgVector fallback", {
-        store: target.storeName,
-        error: commonUtils.errorMessage(err),
-      });
-      return undefined;
-    }
-  }
-
   private async buildAgentAndServer(): Promise<void> {
     // Per-agent memory factory. When any storage / memory setting needs
     // Postgres, stand up a dedicated service-principal pool first so
@@ -678,22 +655,12 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
         .getPgConfig();
       this.servicePrincipalPool = await createServicePrincipalPool(spPgConfig);
     }
-    // Resolve the long-term / recall backend before building memory and
-    // agents. When Managed Memory is active it takes the PgVector role,
-    // so the memory builder suppresses PgVector and the agents pick up
-    // the recall processor + memory tools. A probe / create failure logs
-    // and falls back to PgVector (or stateless when no Lakebase).
-    const managedMemory = await this.resolveManagedMemory();
-
     const memoryBuilder = this.servicePrincipalPool
-      ? createMemoryBuilder(this.config, this.servicePrincipalPool, {
-          suppressVector: managedMemory !== undefined,
-        })
+      ? createMemoryBuilder(this.config, this.servicePrincipalPool)
       : undefined;
 
     this.log.debug("build:start", {
       lakebase: memoryBuilder !== undefined,
-      managedMemory: managedMemory !== undefined,
       stripStaleCharts: this.config.stripStaleCharts !== false,
     });
 
@@ -707,7 +674,6 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
       config: this.config,
       context: this.context,
       memoryBuilder,
-      ...(managedMemory ? { managedMemory } : {}),
       log: this.log,
     });
 

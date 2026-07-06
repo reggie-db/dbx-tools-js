@@ -1,30 +1,17 @@
-import { Button, cn } from "@databricks/appkit-ui/react";
-import type { EmailMessage } from "@dbx-tools/appkit-email-shared";
+import { Button } from "@databricks/appkit-ui/react";
 import { CheckIcon, MailIcon, XIcon } from "lucide-react";
-import { Streamdown } from "streamdown";
+import { EmailBody } from "./email-body.js";
+import { attachmentNames, joinAddresses, type EmailDraft } from "./fields.js";
 
 // Presentational pieces for an outbound email awaiting a human Approve /
-// Deny: the field preview (To / Subject / Body, body rendered as
-// markdown) and a self-contained approval card wrapping it. State and
-// the resolve transport belong to the caller; these components only
-// render and report intent.
+// Deny: the field preview (To / Cc / Subject / Body / Files, body
+// rendered as markdown) and a self-contained approval card wrapping it.
+// State and the resolve transport belong to the caller; these components
+// only render and report intent. The editable counterpart is
+// `EmailComposeView` in `./email-compose`; both share `./fields` and
+// `./email-body`.
 
-/** A partially-filled email, as it streams in from a tool call. */
-export type EmailDraft = Partial<EmailMessage>;
-
-/** Compact, muted markdown renderer for the email body preview. */
-const EmailBody = ({ children }: { children: string }) => (
-  <Streamdown
-    controls={false}
-    className={cn(
-      "prose prose-sm dark:prose-invert max-w-none break-words",
-      "text-[11px] leading-snug text-muted-foreground",
-      "[&_strong]:text-foreground [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_ul]:pl-4 [&_ol]:pl-4",
-    )}
-  >
-    {children}
-  </Streamdown>
-);
+export type { EmailDraft } from "./fields.js";
 
 /** Props for {@link EmailPreview}. */
 export interface EmailPreviewProps {
@@ -32,34 +19,52 @@ export interface EmailPreviewProps {
 }
 
 /**
- * Render an email draft as a labelled `To` / `Subject` / `Body` list.
- * The body is markdown so links, lists, and emphasis render rather than
- * showing raw syntax. Fields that are empty are omitted.
+ * Render an email draft as a labelled `To` / `Cc` / `Subject` / `Body` /
+ * `Files` list. `to` / `cc` may carry one or more addresses; the body is
+ * markdown so links, lists, and emphasis render rather than showing raw
+ * syntax. Fields that are empty are omitted.
  */
-export const EmailPreview = ({ email }: EmailPreviewProps) => (
-  <dl className="space-y-1 text-xs">
-    {email.to && (
-      <div className="flex gap-2">
-        <dt className="w-16 shrink-0 text-muted-foreground">To</dt>
-        <dd className="truncate">{email.to}</dd>
-      </div>
-    )}
-    {email.subject && (
-      <div className="flex gap-2">
-        <dt className="w-16 shrink-0 text-muted-foreground">Subject</dt>
-        <dd className="truncate font-medium">{email.subject}</dd>
-      </div>
-    )}
-    {email.body && (
-      <div className="flex gap-2">
-        <dt className="w-16 shrink-0 text-muted-foreground">Body</dt>
-        <dd className="min-w-0 flex-1 break-words text-foreground">
-          <EmailBody>{email.body}</EmailBody>
-        </dd>
-      </div>
-    )}
-  </dl>
-);
+export const EmailPreview = ({ email }: EmailPreviewProps) => {
+  const to = joinAddresses(email.to);
+  const cc = joinAddresses(email.cc);
+  const attachments = attachmentNames(email.attachments);
+  return (
+    <dl className="space-y-1 text-xs">
+      {to && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 text-muted-foreground">To</dt>
+          <dd className="truncate">{to}</dd>
+        </div>
+      )}
+      {cc && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 text-muted-foreground">Cc</dt>
+          <dd className="truncate">{cc}</dd>
+        </div>
+      )}
+      {email.subject && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 text-muted-foreground">Subject</dt>
+          <dd className="truncate font-medium">{email.subject}</dd>
+        </div>
+      )}
+      {email.body && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 text-muted-foreground">Body</dt>
+          <dd className="min-w-0 flex-1 break-words text-foreground">
+            <EmailBody>{email.body}</EmailBody>
+          </dd>
+        </div>
+      )}
+      {attachments && (
+        <div className="flex gap-2">
+          <dt className="w-16 shrink-0 text-muted-foreground">Files</dt>
+          <dd className="min-w-0 flex-1 truncate">{attachments}</dd>
+        </div>
+      )}
+    </dl>
+  );
+};
 
 /** Props for {@link EmailApprovalCard}. */
 export interface EmailApprovalCardProps {

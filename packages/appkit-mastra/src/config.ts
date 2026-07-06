@@ -15,7 +15,6 @@ import {
 import type { PgVectorConfig, PostgresStoreConfig } from "@mastra/pg";
 
 import type { MastraAgentDefinition, MastraTools } from "./agents.js";
-import type { ManagedMemoryConfig } from "./connectors/managed-memory/types.js";
 import type { GenieSpacesConfig } from "./genie.js";
 
 /**
@@ -132,40 +131,8 @@ export interface MastraPluginConfig extends BasePluginConfig {
   /**
    * PgVector store for Mastra memory recall. `true` reuses the
    * `lakebase` plugin's pool; an object opens a dedicated store.
-   *
-   * When {@link managedMemory} is active it takes over the long-term /
-   * semantic-recall role and `PgVector` is not built, regardless of
-   * this setting; thread / message transcript (`storage`) is
-   * unaffected.
    */
   memory?: boolean | MastraMemoryConfig;
-  /**
-   * Databricks Managed Agent Memory (Beta) as the long-term /
-   * semantic-recall backend, replacing the Postgres `PgVector` role.
-   * When active, every agent gets `save_memory` / `search_memory` tools
-   * and an auto-recall input processor that injects the user's top
-   * entries before each turn; entries are scoped per-user via OBO. The
-   * thread / message transcript still uses `PostgresStore` only when
-   * the `lakebase` plugin is registered - managed memory does not pull
-   * in Lakebase.
-   *
-   * - `undefined` (default, prefer-if-available): enabled only when the
-   *   `MEMORY_STORE` env var names a store and the workspace exposes the
-   *   memory-stores API; otherwise the `PgVector` path is used.
-   * - `false`: never use managed memory.
-   * - `true`: enable; the store must be named via the `MEMORY_STORE`
-   *   env var (a missing store is a setup error).
-   * - {@link ManagedMemoryConfig}: enable with explicit `store`
-   *   (or `MEMORY_STORE`), recall size, auto-create, and tool / recall
-   *   toggles.
-   *
-   * The store is a three-level Unity Catalog name (`catalog.schema.name`).
-   * The app service principal needs `CREATE MEMORY STORE` on the schema
-   * when auto-create is on, plus `READ/WRITE MEMORY STORE`. On any probe
-   * or create failure the plugin logs and falls back to the `PgVector`
-   * path so chat stays available.
-   */
-  managedMemory?: boolean | ManagedMemoryConfig;
   /**
    * Code-defined agents. Accepts three shapes for convenience:
    *
@@ -411,11 +378,15 @@ export interface MastraPluginConfig extends BasePluginConfig {
    * Expose the plugin's agents (and optionally tools) as a Mastra MCP
    * server so external MCP clients - Claude Desktop, Cursor, the Mastra
    * playground, or another agent - can call them over the standard MCP
-   * transports. Disabled by default.
+   * transports. Enabled by default (agents only): wrapping the
+   * already-registered agents costs nothing extra, so the endpoint is on
+   * out of the box; only the ambient tools (which assume an in-process
+   * chat turn) stay off unless explicitly opted in.
    *
-   * - `undefined` / `false`: no MCP endpoints.
-   * - `true`: expose every registered agent as an `ask_<agentId>` MCP
-   *   tool under a server whose id is the plugin name.
+   * - `undefined` (default) / `true`: expose every registered agent as
+   *   an `ask_<agentId>` MCP tool under a server whose id is the plugin
+   *   name.
+   * - `false`: no MCP endpoints.
    * - {@link MastraMcpConfig}: fine-grained control over the server id,
    *   advertised metadata, and which agents / tools are exposed.
    *

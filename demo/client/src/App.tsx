@@ -1,3 +1,4 @@
+import Conversations from "@/pages/Conversations";
 import Stream from "@/pages/Stream";
 import { Button, Separator } from "@databricks/appkit-ui/react";
 import {
@@ -27,6 +28,12 @@ const ROUTES: RouteDef[] = [
     label: "Stream",
     description: "@mastra/client-js agent.stream()",
     element: <Stream />,
+  },
+  {
+    path: "/conversations",
+    label: "Conversations",
+    description: "Multi-conversation storage with thread switcher",
+    element: <Conversations />,
   },
 ];
 

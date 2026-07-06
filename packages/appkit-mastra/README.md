@@ -143,46 +143,6 @@ defining a same-named tool in `config.tools` (or a per-agent `tools`), and
 reuse it programmatically via the exported `summarizeText(config, text,
 opts)` / `buildSummarizeTool(config)`.
 
-### Managed Memory (Databricks Agent Memory, Beta)
-
-`managedMemory` swaps the Postgres `PgVector` semantic-recall layer for
-[Databricks Managed Agent Memory](https://docs.databricks.com/aws/en/generative-ai/agent-framework/managed-memory)
-- a Unity Catalog memory-store. When active, every agent gets two
-ambient tools (`save_memory`, `search_memory`) plus an auto-recall input
-processor that searches the user's entries with the latest message and
-injects the top matches before each turn. Entries are scoped per-user
-via OBO (the model never sets the scope). The thread / message
-transcript still uses `PostgresStore` only when `lakebase()` is
-registered - managed memory does not pull in Lakebase.
-
-```ts
-mastra({
-  // Prefer-if-available: enabled automatically when MEMORY_STORE is set
-  // and the workspace exposes the memory-stores API; otherwise PgVector.
-  managedMemory: true, // or { store, topK, autoCreate, recall, tools }
-});
-```
-
-The store is a three-level Unity Catalog name (`catalog.schema.name`),
-resolved from `managedMemory.store` or the `MEMORY_STORE` env var.
-Enable semantics:
-
-- **omitted** (default, prefer-if-available): on only when `MEMORY_STORE`
-  is set and the API is reachable; otherwise the `PgVector` path.
-- **`false`**: never use managed memory.
-- **`true`**: enable; store must come from `MEMORY_STORE`.
-- **object**: enable with explicit `store` (or `MEMORY_STORE`) plus
-  `topK`, `autoCreate`, `recall`, `tools`, `entryPath` overrides.
-
-Required Unity Catalog privileges for the app service principal:
-`CREATE MEMORY STORE` on the schema (only when `autoCreate` is on, the
-default), plus `READ MEMORY STORE` / `WRITE MEMORY STORE` on the store.
-The capability probe and optional store auto-create run once at setup as
-the service principal. Managed Memory is Beta and REST-only; on any
-probe, create, or search failure the plugin logs and falls back to the
-`PgVector` path so chat stays available. The connector lives in
-[`connectors/managed-memory/`](src/connectors/managed-memory).
-
 ## The `tools(plugins)` callback
 
 Each agent supplies either a static `tools: { ... }` record or a
@@ -336,19 +296,25 @@ available in-process from a sibling plugin via
 
 ## MCP server
 
-Set `mcp` to expose the plugin's agents (and, opt-in, its tools) as a
-Mastra [`MCPServer`](https://mastra.ai/docs/tools-mcp/mcp-overview) so
-external MCP clients - Claude Desktop, Cursor, the Mastra playground, or
-another agent - can call them over the standard MCP transports. The
-server is registered on the Mastra instance via `mcpServers`, so
-`@mastra/express` serves the stock MCP routes under the plugin mount; no
-bespoke route is added.
+The plugin's agents are exposed as a Mastra
+[`MCPServer`](https://mastra.ai/docs/tools-mcp/mcp-overview) **by
+default** so external MCP clients - Claude Desktop, Cursor, the Mastra
+playground, or another agent - can call them over the standard MCP
+transports. The server is registered on the Mastra instance via
+`mcpServers`, so `@mastra/express` serves the stock MCP routes under the
+plugin mount; no bespoke route is added. It's on out of the box because
+wrapping the already-registered agents is free - only the ambient tools
+(which assume an in-process chat turn) stay off unless opted in.
 
 ```ts
 import { mastra } from "@dbx-tools/appkit-mastra";
 
-// Expose every registered agent as an `ask_<agentId>` MCP tool.
-mastra({ mcp: true });
+// MCP is on by default: every registered agent is an `ask_<agentId>`
+// MCP tool with no extra config.
+mastra({});
+
+// Turn it off entirely.
+mastra({ mcp: false });
 
 // Or tune the server id / metadata and expose extra tools.
 mastra({
@@ -361,12 +327,15 @@ mastra({
 });
 ```
 
-With `mcp` enabled the transports mount under the plugin base path
-(`/api/<plugin>`):
+With `mcp` enabled the transports mount at clean paths under the plugin
+base path (`/api/<plugin>`):
 
-- Streamable HTTP: `POST /api/<plugin>/mcp/<serverId>/mcp`
-- SSE (legacy): `GET /api/<plugin>/mcp/<serverId>/sse` +
-  `POST /api/<plugin>/mcp/<serverId>/messages`
+- Streamable HTTP: `POST /api/<plugin>/mcp`
+- SSE (legacy): `GET /api/<plugin>/sse` + `POST /api/<plugin>/messages`
+
+(`@mastra/express` mounts these under `/mcp/<serverId>/<transport>`
+internally - the plugin rewrites the clean alias to that route, so a
+client never sees the doubled `/mcp/<serverId>/mcp` segment.)
 
 `serverId` defaults to the plugin name. Requests run under the same
 AppKit OBO scope as the chat routes, so an agent invoked over MCP

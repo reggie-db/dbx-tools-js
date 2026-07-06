@@ -9,6 +9,14 @@
 /** HTTP header inspected for a per-request model override. */
 export const MODEL_OVERRIDE_HEADER = "x-mastra-model";
 
+/**
+ * HTTP header that pins a specific thread id for the request. When
+ * present, the server uses it as the conversation thread id instead of
+ * the session cookie, enabling the client to switch between stored
+ * conversations without resetting the cookie.
+ */
+export const THREAD_OVERRIDE_HEADER = "x-mastra-thread-id";
+
 /** Query string parameter inspected for a per-request model override. */
 export const MODEL_OVERRIDE_QUERY = "model";
 

@@ -1,12 +1,21 @@
-// React surface for the `send_email` approval flow: a presentational
-// preview of the drafted message plus a self-contained Approve / Deny
-// card built around it, styled with AppKit tokens.
+// React surface for `@dbx-tools/appkit-email`: a read-only Approve / Deny
+// card for the `send_email` tool's approval flow, the field preview it
+// wraps, and a standard editable compose view for use outside a chat
+// bubble. All three share `./fields` and `./email-body`, so a drafted
+// message renders identically across them. Styled with AppKit tokens.
 
-export type { EmailMessage } from "@dbx-tools/appkit-email-shared";
+export type { EmailAttachment, EmailMessage } from "@dbx-tools/appkit-email-shared";
+export { EmailBody, type EmailBodyProps } from "./email-body.js";
+export type { EmailDraft } from "./fields.js";
+export {
+  attachmentNames,
+  joinAddresses,
+  parseAddresses,
+} from "./fields.js";
 export {
   EmailApprovalCard,
   EmailPreview,
   type EmailApprovalCardProps,
-  type EmailDraft,
   type EmailPreviewProps,
 } from "./email-approval-card.js";
+export { EmailComposeView, type EmailComposeProps } from "./email-compose.js";

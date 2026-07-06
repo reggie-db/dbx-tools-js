@@ -3,10 +3,9 @@
  * host and a fresh bearer header off an OBO-scoped `WorkspaceClient`
  * (`client.config.getHost()` + `authenticate()`), then issues a plain
  * `fetch`. Used by modules that hit REST surfaces without a typed SDK
- * method (e.g. the MLflow assessments API and the managed-memory Beta
- * API); returns the raw `Response` so callers decide how to treat
- * status codes. Also carries the defensive `Response` body readers those
- * callers share.
+ * method (e.g. the MLflow assessments API); returns the raw `Response`
+ * so callers decide how to treat status codes. Also carries the
+ * defensive `Response` body readers those callers share.
  */
 
 import type { appkitUtils } from "@dbx-tools/shared";

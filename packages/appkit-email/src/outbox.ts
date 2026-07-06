@@ -6,7 +6,9 @@
  * zero email configuration - open the file in a browser to see exactly
  * what would have gone out (the HTML matches the SMTP send, headers
  * table aside). The body is rendered + style-inlined by
- * {@link renderEmailHtml}.
+ * {@link renderEmailHtml}. Attachments are listed by filename in the
+ * header table but not written to disk - the outbox previews the
+ * envelope, it doesn't reproduce the wire payload.
  */
 
 import type { EmailMessage } from "@dbx-tools/appkit-email-shared";
@@ -31,10 +33,11 @@ function headerRows(
 ): Array<readonly [string, string]> {
   const rows: Array<readonly [string, string | undefined]> = [
     ["From", from],
-    ["To", message.to],
+    ["To", message.to.join(", ")],
     ["Cc", message.cc?.join(", ")],
     ["Bcc", message.bcc?.join(", ")],
     ["Subject", message.subject],
+    ["Attachments", message.attachments?.map((att) => att.filename).join(", ")],
     ["Date", new Date().toISOString()],
   ];
   return rows.filter((row): row is [string, string] => Boolean(row[1]));

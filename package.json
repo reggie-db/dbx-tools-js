@@ -1,8 +1,8 @@
 {
   "name": "dbx-tools-js",
   "catalog": {
-    "@databricks/appkit": "^0.41",
-    "@databricks/appkit-ui": "^0.41",
+    "@databricks/appkit": "^0.43",
+    "@databricks/appkit-ui": "^0.43",
     "@databricks/sdk-experimental": "^0.17",
     "@mastra/ai-sdk": "^1",
     "@mastra/client-js": "^1",
@@ -37,6 +37,7 @@
     "@changesets/cli": "^2.31.0",
     "@databricks/sdk-experimental": "^0.17.0",
     "@dbx-tools/devkit": "workspace:*",
+    "commander": "^15.0.0",
     "@types/bun": "^1.3.14",
     "@types/express": "^5.0.6",
     "@types/json-schema": "^7.0.15",
@@ -56,7 +57,7 @@
     "postcss-selector-parser": "7.1.0"
   },
   "peerDependencies": {
-    "@databricks/appkit": "^0.41.6"
+    "@databricks/appkit": "^0.43.0"
   },
   "private": true,
   "scripts": {

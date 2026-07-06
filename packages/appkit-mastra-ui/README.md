@@ -116,6 +116,14 @@ inline SVG via Echarts' server-side renderer (so it renders offline with
 no runtime), and `[data:<id>]` markers resolve to real tables (GFM tables
 in Markdown). Expired / unknown embeds are skipped.
 
+Human turns are labelled with the signed-in identity (e.g.
+`User (someone@example.com)`), derived from the resource id the thread
+list carries. The PDF is tuned for clean print output: messages and long
+tables flow across page boundaries (tables repeat their header) instead
+of being pushed whole onto a new page, and the browser's print
+header/footer (the `about:blank` URL, date, and page numbers) is
+suppressed.
+
 The headless driver exposes `onExportConversation(format)` and
 `onExportMessage(message, format)` on the `useMastraChat` prop bag when
 `enableExport` is set; the underlying `exportChat(...)` helper and the

@@ -24,15 +24,26 @@ import {
 } from "@dbx-tools/appkit-email-shared";
 
 const draft: EmailMessage = emailMessageSchema.parse({
-  to: "alice@example.com",
+  to: ["alice@example.com", "bob@example.com"],
   subject: "Status",
   body: "# Update\n- shipped\n- tested",
+  cc: ["lead@example.com"],
+  attachments: [{ filename: "report.pdf", path: "/tmp/report.pdf" }],
 });
 ```
 
-`emailMessageSchema` is the `send_email` tool's input (recipient,
-subject, Markdown body, optional `cc` / `bcc`); `emailResultSchema` is
-the dispatch result returned to the model.
+`emailMessageSchema` is the `send_email` tool's input: one or more `to`
+recipients, a subject, a Markdown `body`, and optional `cc` / `bcc`
+arrays and `attachments`. Each attachment carries a `filename` plus
+either inline `content` (with an optional `encoding` such as `base64`)
+or a `path` (local file, `data:` URI, or https URL), and an optional
+`contentType`. `emailResultSchema` is the dispatch result returned to
+the model (`recipient` echoes the comma-joined `to` list).
+
+`emailSendersSchema` / `EmailSenders` type the plugin's `GET /senders`
+payload - the permitted `From` options for the current user (`senders`),
+the `defaultSender` among them, and whether the list is an enforced
+`restricted` allow-list - so a compose UI can populate a sender dropdown.
 
 > Note: array fields intentionally omit `.min()` / `.nonempty()` so the
 > generated JSON schema carries no `minItems`, which some Model Serving
