@@ -1,16 +1,16 @@
 {
   "name": "@dbx-tools/model",
-  "version": "0.1.95",
+  "version": "0.1.96",
   "dependencies": {
     "@dbx-tools/model-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "fuse.js": "^7.0.0"
+    "fuse.js": "^7.4.2"
   },
   "exports": {
     ".": "./src/index.ts"
   },
   "peerDependencies": {
-    "@databricks/appkit": "catalog:"
+    "@databricks/appkit": "^0.43.0"
   },
   "type": "module"
 }

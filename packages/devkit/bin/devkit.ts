@@ -13,6 +13,7 @@ import { agent, resolveAgentPrompt } from "../src/agent.js";
 import { format } from "../src/format.js";
 import { release } from "../src/release.js";
 import { tag, notesSinceRequested, type Bump, type TagOptions } from "../src/tag.js";
+import { update, forwardedUpdateArgs } from "../src/update.js";
 import { verify } from "../src/verify.js";
 
 const program = new Command()
@@ -46,6 +47,16 @@ program
   .command("verify")
   .description("Fail on imports of sibling packages not declared as dependencies.")
   .action(verify);
+
+program
+  .command("update")
+  .description(
+    "Pin root catalog entries to latest stable versions, then bun update at the repo root.",
+  )
+  .allowUnknownOption()
+  .action(async () => {
+    await update(forwardedUpdateArgs());
+  });
 
 program
   .command("create")

@@ -1,10 +1,10 @@
 {
   "name": "@dbx-tools/genie-shared",
-  "version": "0.1.95",
+  "version": "0.1.96",
   "dependencies": {
     "@dbx-tools/sdk-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "zod": "catalog:"
+    "zod": "^4.4.3"
   },
   "exports": {
     ".": "./src/index.ts"

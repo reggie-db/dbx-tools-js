@@ -1,20 +1,20 @@
 {
   "name": "@dbx-tools/devkit",
-  "version": "0.1.95",
+  "version": "0.1.96",
   "bin": {
     "devkit": "./dist/bin/devkit.js"
   },
   "dependencies": {
     "@types/semver": "^7.7.1",
-    "commander": "catalog:",
+    "commander": "^15.0.0",
     "consola": "^3.4.2",
     "p-memoize": "^8.0.0",
-    "pacwich": "^0.1.0",
-    "prettier": "^3.8.4",
+    "pacwich": "^0.1.2",
+    "prettier": "^3.9.3",
     "prettier-plugin-organize-imports": "^4.3.0",
-    "semver": "^7.8.1",
+    "semver": "^7.8.5",
     "ts-to-zod": "^5.1.0",
-    "typescript": "catalog:"
+    "typescript": "^5.9.3"
   },
   "exports": {
     ".": "./src/index.ts"

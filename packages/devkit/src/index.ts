@@ -37,4 +37,13 @@ export { release, type ReleaseOptions } from "./release.js";
 export { errorMessage, fail, nonEmptyLines } from "./script.js";
 export { bunx, sh, type ShellResult } from "./shell.js";
 export { tag, type Bump, type TagOptions } from "./tag.js";
+export {
+  forwardedUpdateArgs,
+  isStableVersion,
+  latestStableInRange,
+  runBunUpdate,
+  stableCaretRange,
+  update,
+  updateCatalog,
+} from "./update.js";
 export { verify } from "./verify.js";

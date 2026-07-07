@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { RequestContext } from "@mastra/core/request-context";
+import { CompositeFilesystem } from "@mastra/core/workspace";
 
 import {
   MASTRA_SCOPES_KEY,
@@ -50,9 +51,12 @@ describe("createWorkspace assistant skill mounts", () => {
       });
       requestContext.set(MASTRA_USER_EMAIL_KEY, "alice@example.com");
 
-      const fs = await workspace.resolveFilesystem({ requestContext });
-      expect(fs?.name).toBe("CompositeFilesystem");
-      expect(fs?.mountPaths.sort()).toEqual([
+      const resolved = await workspace.resolveFilesystem({ requestContext });
+      expect(resolved).toBeInstanceOf(CompositeFilesystem);
+      if (!(resolved instanceof CompositeFilesystem)) {
+        throw new Error("expected CompositeFilesystem");
+      }
+      expect(resolved.mountPaths.sort()).toEqual([
         "/workspace_skills",
         "/workspace_user_skills",
       ]);

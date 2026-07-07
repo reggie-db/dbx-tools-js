@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createTool } from "@mastra/core/tools";
-import { approvalGatedToolIds } from "../src/agents.js";
+import { approvalGatedToolIds, type MastraTools } from "../src/agents.js";
 
 describe("approvalGatedToolIds", () => {
   test("detects tools with requireApproval", () => {
@@ -21,11 +21,9 @@ describe("approvalGatedToolIds", () => {
   });
 
   test("falls back to the record key when a tool omits id", () => {
-    const gated = createTool({
-      description: "Gated",
-      requireApproval: true,
-      execute: async () => ({}),
-    });
-    expect(approvalGatedToolIds({ my_tool: gated })).toEqual(["my_tool"]);
+    const tools = {
+      my_tool: { requireApproval: true },
+    } as MastraTools;
+    expect(approvalGatedToolIds(tools)).toEqual(["my_tool"]);
   });
 });

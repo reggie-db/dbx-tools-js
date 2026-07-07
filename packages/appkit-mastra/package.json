@@ -1,32 +1,32 @@
 {
   "name": "@dbx-tools/appkit-mastra",
-  "version": "0.1.95",
+  "version": "0.1.96",
   "dependencies": {
-    "@databricks/sdk-experimental": "catalog:",
+    "@databricks/sdk-experimental": "^0.17.0",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
     "@dbx-tools/genie": "workspace:*",
     "@dbx-tools/genie-shared": "workspace:*",
     "@dbx-tools/model": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "@mastra/ai-sdk": "catalog:",
-    "@mastra/core": "catalog:",
-    "@mastra/express": "catalog:",
-    "@mastra/fastembed": "catalog:",
-    "@mastra/mcp": "catalog:",
-    "@mastra/memory": "catalog:",
-    "@mastra/observability": "catalog:",
-    "@mastra/otel-bridge": "catalog:",
-    "@mastra/pg": "catalog:",
-    "@opentelemetry/api": "catalog:",
-    "pg": "^8.20.0",
-    "zod": "catalog:"
+    "@mastra/ai-sdk": "^1.6.0",
+    "@mastra/core": "^1.47.0",
+    "@mastra/express": "^1.4.2",
+    "@mastra/fastembed": "^1.2.0",
+    "@mastra/mcp": "^1.12.0",
+    "@mastra/memory": "^1.21.2",
+    "@mastra/observability": "^1.15.2",
+    "@mastra/otel-bridge": "^1.4.0",
+    "@mastra/pg": "^1.14.2",
+    "@opentelemetry/api": "^1.9.1",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
   },
   "exports": {
     ".": "./src/index.ts"
   },
   "peerDependencies": {
-    "@databricks/appkit": "catalog:",
-    "express": "catalog:"
+    "@databricks/appkit": "^0.43.0",
+    "express": "^5.2.1"
   },
   "type": "module"
 }
