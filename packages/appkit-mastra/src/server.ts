@@ -11,7 +11,7 @@ import {
   THREAD_ID_HEADER,
   THREAD_ID_QUERY,
 } from "@dbx-tools/appkit-mastra-shared";
-import { httpUtils, logUtils, stringUtils } from "@dbx-tools/shared";
+import { httpUtils, logUtils, stringUtils, tokenUtils } from "@dbx-tools/shared";
 import {
   MASTRA_RESOURCE_ID_KEY,
   MASTRA_THREAD_ID_KEY,
@@ -26,6 +26,7 @@ import { resolveFeedbackEnabled } from "./mlflow.js";
 
 import {
   MASTRA_REQUEST_ID_KEY,
+  MASTRA_SCOPES_KEY,
   MASTRA_USER_EMAIL_KEY,
   MASTRA_USER_KEY,
   MASTRA_USER_NAME_KEY,
@@ -37,7 +38,7 @@ import {
   MASTRA_MODEL_OVERRIDE_KEY,
   resolveServingConfig,
 } from "./serving.js";
-
+const log = logUtils.logger("mastra/server");
 /**
  * OpenTelemetry's sentinel for "no valid trace" - 32 zero hex chars.
  * `trace.getActiveSpan()` returns a non-recording span with this id
@@ -70,12 +71,14 @@ export class MastraServer extends MastraServerExpress {
 
   override registerAuthMiddleware(): void {
     super.registerAuthMiddleware();
-    this.app.use((req, res, next) => {
+    this.app.use(async (req, res, next) => {
       const requestContext = res.locals.requestContext! as RequestContext;
-      this.configureRequestContextUser(requestContext);
+      await this.configureRequestContextUser(requestContext);
       this.configureRequestContextThreadId(req, res, requestContext);
       this.configureRequestContextModelOverride(req, requestContext);
       this.configureRequestContextRequestId(req, res, requestContext);
+      this.configureRequestContextScopes(req, requestContext);
+
       this.configureMlflowTraceId(res);
       this.log.debug("auth:middleware", {
         method: req.method,
@@ -95,7 +98,7 @@ export class MastraServer extends MastraServerExpress {
     });
   }
 
-  configureRequestContextUser(requestContext: RequestContext) {
+  async configureRequestContextUser(requestContext: RequestContext) {
     if (
       [MASTRA_USER_KEY, MASTRA_RESOURCE_ID_KEY].every((key) => requestContext.get(key))
     )
@@ -114,13 +117,23 @@ export class MastraServer extends MastraServerExpress {
     // OBO requests. Service-context calls (background tasks, server
     // start-up) leave these undefined and we skip the stamp so
     // downstream trace metadata stays absent rather than empty.
+    let userName: string | undefined;
+    let email: string | undefined;
     if ("isUserContext" in executionContext) {
-      if (executionContext.userName) {
-        requestContext.set(MASTRA_USER_NAME_KEY, executionContext.userName);
-      }
-      if (executionContext.userEmail) {
-        requestContext.set(MASTRA_USER_EMAIL_KEY, executionContext.userEmail);
-      }
+      userName = executionContext.userName;
+      email = executionContext.userEmail;
+    } else if (process.env.NODE_ENV === "development") {
+      const currentUser = await executionContext.client.currentUser.me();
+      userName = currentUser?.userName;
+      email = currentUser?.emails
+        ?.filter((email) => email.primary)
+        .find((email) => email.value)?.value as string;
+    }
+    if (userName) {
+      requestContext.set(MASTRA_USER_NAME_KEY, userName);
+    }
+    if (email) {
+      requestContext.set(MASTRA_USER_EMAIL_KEY, email);
     }
   }
 
@@ -146,6 +159,24 @@ export class MastraServer extends MastraServerExpress {
     const requestId = upstream?.trim() || randomUUID();
     requestContext.set(MASTRA_REQUEST_ID_KEY, requestId);
     res.setHeader("X-Request-Id", requestId);
+  }
+
+  /**
+   * Stamp OAuth scopes from the forwarded access token on
+   * {@link MASTRA_SCOPES_KEY} for workspace mount gating.
+   */
+  configureRequestContextScopes(
+    req: express.Request,
+    requestContext: RequestContext,
+  ) {
+    const scopes = new Set<string>();
+    for (const scope of tokenUtils.getAccessTokenScopes(req)) {
+      scopes.add(scope);
+    }
+    for (const scope of tokenUtils.getAccessTokenScopes(req, "authorization")) {
+      scopes.add(scope);
+    }
+    requestContext.set(MASTRA_SCOPES_KEY, [...scopes]);
   }
 
   /**

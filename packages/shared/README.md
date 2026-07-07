@@ -19,15 +19,16 @@ import {
   netUtils,
   projectUtils,
   stringUtils,
+  tokenUtils,
 } from "@dbx-tools/shared";
 ```
 
-> `apiUtils`, `appkitUtils`, `projectUtils`, and `cloudUtils` import
-> Node-only modules (`@databricks/appkit`, `node:fs`, `node:dns`) and are
-> intentionally **not** re-exported from the browser entry. Vite / Webpack
-> / esbuild builds that honor the `browser` condition will resolve
-> `@dbx-tools/shared` to a barrel that omits them - import them only from
-> server-side code.
+> `apiUtils`, `appkitUtils`, `projectUtils`, `cloudUtils`, and
+> `tokenUtils` import Node-only modules (`@databricks/appkit`, `node:fs`,
+> `node:dns`, `Buffer`) and are intentionally **not** re-exported from
+> the browser entry. Vite / Webpack / esbuild builds that honor the
+> `browser` condition will resolve `@dbx-tools/shared` to a barrel that
+> omits them - import them only from server-side code.
 
 ## `appkitUtils` - typed sibling-plugin lookup
 
@@ -175,6 +176,27 @@ const context = apiUtils.toContext(abortSignal);
 `toContext` returns a `Context` whose `cancellationToken` is backed by
 the supplied signal, so aborting it tears down the in-flight SDK call.
 Want TTL'd results? Wrap the call in `CacheManager.getOrExecute`.
+
+## `tokenUtils` - access-token JWT helpers (server only)
+
+Parse OAuth scopes and other claims from bearer tokens or the
+`x-forwarded-access-token` header Databricks Apps forward from the
+browser session:
+
+```ts
+import { tokenUtils } from "@dbx-tools/shared";
+
+const scopes = [...tokenUtils.getAccessTokenScopes(req)];
+const canReadWorkspaceFiles = tokenUtils.includesAccessTokenScope(scopes, [
+  "workspace",
+  "all-apis",
+]);
+
+const payload = tokenUtils.getAccessTokenPayload(req, "Authorization");
+```
+
+Used by `@dbx-tools/appkit-mastra` to stamp `MASTRA_SCOPES_KEY` on each
+request before workspace skill mounts are resolved.
 
 ## `stringUtils` - identifier + slug helpers
 

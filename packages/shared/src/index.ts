@@ -25,5 +25,6 @@ export * as appkitUtils from "./appkit.js";
 export * as cloudUtils from "./cloud.js";
 export * as netUtils from "./net.js";
 export * as projectUtils from "./project.js";
+export * as tokenUtils from "./token.js";
 
 export * from "./index.client.js";

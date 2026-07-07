@@ -9,8 +9,7 @@ Generated from the AppKit `app init` template, then adapted to:
   `createApp` (Lakebase env auto-discovery) and mount
   [`@dbx-tools/appkit-mastra`](../packages/appkit-mastra) alongside
   `server`, `genie`, `lakebase`,
-  [`@dbx-tools/appkit-email`](../packages/appkit-email), and
-  [`@dbx-tools/appkit-skills`](../packages/appkit-skills).
+  [`@dbx-tools/appkit-email`](../packages/appkit-email).
 - Give the agent the plugin's Genie toolset and `GENIE_INSTRUCTIONS` so
   it can answer from the configured space (`DATABRICKS_GENIE_SPACE_ID`)
   with live streaming progress and inline Echarts charts - the contract
@@ -20,10 +19,11 @@ Generated from the AppKit `app init` template, then adapted to:
   from [`@dbx-tools/appkit-email`](../packages/appkit-email)); the
   `email()` plugin primes the transport and `MastraChat` renders the
   approval card before anything is sent.
-- Give the agent GitHub-hosted skills via `workspace: skillWorkspace` from
-  [`@dbx-tools/appkit-skills`](../packages/appkit-skills); the `skills()`
-  plugin caches configured sources and Mastra injects `<available_skills>`
-  from each `SKILL.md` automatically.
+- Give the agent read-only Assistant skills from Databricks workspace
+  paths. Every `createAgent` applies `createWorkspace()` by default,
+  which mounts `/Workspace/.assistant/skills` at `/workspace_skills`
+  and `/Users/<email>/.assistant/skills` at `/workspace_user_skills`
+  for Mastra `SKILL.md` discovery.
 - Render the chat with the prebuilt `MastraChat` drop-in (`/stream`)
   from [`@dbx-tools/appkit-mastra-ui`](../packages/appkit-mastra-ui),
   with the model picker enabled. The demo is a consumer of that
@@ -44,7 +44,7 @@ demo/
   tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # createApp -> plugins: [server(), genie(), lakebase(), email(), skills(), mastra()]
+    server.ts             # createApp -> plugins: [server(), genie(), lakebase(), email(), mastra({ agents })]
   client/
     index.html
     vite.config.ts        # React + Tailwind v4 + workspace `source` condition

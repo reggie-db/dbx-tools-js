@@ -23,7 +23,10 @@ What it simplifies, by use case:
 
 - **Ship a chat agent inside a Databricks App.** `appkit-mastra` mounts
   a [Mastra](https://mastra.ai) agent as an AppKit plugin with a
-  streaming chat route and Lakebase-backed conversation memory;
+  streaming chat route, Lakebase-backed conversation memory, and a
+  per-request Databricks workspace that discovers Assistant `SKILL.md`
+  files from `/Workspace/.assistant/skills` and
+  `/Users/<email>/.assistant/skills`;
   `appkit-mastra-ui` is the matching drop-in React chat component. No
   bespoke SSE wiring, no manual Postgres session store.
 - **Add Genie (natural-language-to-SQL) to an app.** `genie` streams
@@ -56,15 +59,16 @@ linked alongside; every package's own README covers its usage in depth.
 
 | Package                                                                                                                          | Role                                                                                                                                                 |
 | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@dbx-tools/shared`](packages/shared)                                                                                           | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper. Browser-safe surface via `index.client.ts`.                                |
+| [`@dbx-tools/shared`](packages/shared)                                                                                           | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper, access-token scope parsing (`tokenUtils`). Browser-safe surface via `index.client.ts`. |
 | [`@dbx-tools/sdk-shared`](packages/sdk-shared)                                                                                   | Zod schemas generated from the Databricks SDK `.d.ts` types.                                                                                         |
 | [`@dbx-tools/genie`](packages/genie) · [shared](packages/genie-shared)                                                           | Genie streaming drivers: `genieChat` (raw) + `genieEventChat` (semantic events).                                                                     |
 | [`@dbx-tools/model`](packages/model) · [shared](packages/model-shared)                                                           | Workspace-aware model selection: fuzzy name resolution + capability-class ranking.                                                                   |
 | [`@dbx-tools/model-proxy`](packages/model-proxy)                                                                                 | Local OpenAI-compatible proxy in front of Databricks Model Serving (ships a CLI).                                                                    |
 | [`@dbx-tools/appkit-config`](packages/appkit-config)                                                                             | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env).                                                                |
-| [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + a chat route + Lakebase memory; drop-in React chat UI.                                                        |
+| [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + chat route + Lakebase memory + per-request Databricks workspace (Assistant `SKILL.md` trees); drop-in React chat UI. |
 | [`@dbx-tools/appkit-email`](packages/appkit-email) · [shared](packages/appkit-email-shared) · [ui](packages/appkit-email-ui)     | AppKit plugin + approval-gated `send_email` Mastra tool (SMTP, OBO sender); Approve / Deny card UI.                                                  |
 | [`@dbx-tools/devkit`](packages/devkit)                                                                                           | The `devkit` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
+| [`@dbx-tools/zerobus`](packages/zerobus)                                                                                         | Thin wrapper over the Databricks Zerobus ingest SDK.                                                                                                 |
 | [`@dbx-tools/appkit-demo`](demo)                                                                                                 | Private, runnable Databricks App that wires everything together.                                                                                     |
 
 ## Develop

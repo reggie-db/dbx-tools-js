@@ -18,7 +18,9 @@ history / listing in [`history.ts`](src/history.ts) /
 [`threads.ts`](src/threads.ts), Model Serving resolution in
 [`model.ts`](src/model.ts) / [`serving.ts`](src/serving.ts), Genie
 tooling in [`genie.ts`](src/genie.ts), the chart pipeline in
-[`chart.ts`](src/chart.ts), and MLflow feedback logging in
+[`chart.ts`](src/chart.ts), Databricks workspace mounts in
+[`workspaces.ts`](src/workspaces.ts) / [`filesystems.ts`](src/filesystems.ts),
+and MLflow feedback logging in
 [`mlflow.ts`](src/mlflow.ts) (over the shared REST helper in
 [`rest.ts`](src/rest.ts)).
 
@@ -92,7 +94,57 @@ Override per plugin or per agent by passing `memory` / `storage` as
 index / schema). The fields are typed in [`config.ts`](src/config.ts);
 the wiring is in [`memory.ts`](src/memory.ts).
 
-### Conversations (threads)
+## Workspace and Assistant skills
+
+Every `createAgent` call applies a Mastra `Workspace` by default via
+`createWorkspace()` ([`workspaces.ts`](src/workspaces.ts)). The
+workspace is resolved per request and backed by the OBO user's
+`WorkspaceClient` through [`filesystems.ts`](src/filesystems.ts).
+
+Unless you opt out, `assistantSkills: true` mounts read-only Databricks
+trees where Mastra looks for `SKILL.md` files:
+
+| Databricks path | Workspace mount |
+| --- | --- |
+| `/Workspace/.assistant/skills` | `/workspace_skills` |
+| `/Users/<email>/.assistant/skills` | `/workspace_user_skills` |
+
+Production mounts require `workspace` or `all-apis` on the forwarded
+access token. [`server.ts`](src/server.ts) stamps parsed scopes on
+`MASTRA_SCOPES_KEY` using `tokenUtils` from `@dbx-tools/shared`.
+`NODE_ENV=development` skips the scope gate.
+
+```ts
+import { createAgent, createWorkspace } from "@dbx-tools/appkit-mastra";
+
+// Default: Assistant skills on.
+const support = createAgent({ instructions: "..." });
+
+// Extra per-request mounts (merged with built-in skill mounts).
+const analyst = createAgent({
+  instructions: "...",
+  workspace: createWorkspace({
+    mounts: [
+      async () => ({
+        mounts: { "/data": myFilesystem },
+        skillPaths: [],
+      }),
+    ],
+  }),
+});
+
+// Disable built-in skill mounts.
+const bare = createAgent({
+  instructions: "...",
+  workspace: createWorkspace({ assistantSkills: false }),
+});
+```
+
+Exported for direct use: `createWorkspace`, `DatabricksWorkspaceFilesystem`,
+`emptyFilesystem`, and path helpers (`normalizeDatabricksBasePath`,
+`isDbfsPath`, `resolveDatabricksAbsolutePath`, ...).
+
+## Conversations (threads)
 
 When storage is on, a user owns many conversation threads. The plugin
 resolves the thread a request targets from `RequestContext`, in order:

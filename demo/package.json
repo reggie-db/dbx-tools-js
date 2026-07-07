@@ -4,7 +4,6 @@
   "dependencies": {
     "@databricks/appkit": "catalog:",
     "@databricks/appkit-ui": "catalog:",
-    "@dbx-tools/appkit-skills": "workspace:*",
     "@dbx-tools/appkit-config": "workspace:*",
     "@dbx-tools/appkit-email": "workspace:*",
     "@dbx-tools/appkit-mastra": "workspace:*",

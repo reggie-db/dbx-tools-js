@@ -61,8 +61,18 @@ Writer events are flat `{ type, ...fields }`; chart specs are held
 off-band on `RequestContext` and referenced by `[chart:<id>]`
 markers in model output. The plugin's Genie integration talks to
 Genie directly via `@dbx-tools/genie`, not through AppKit's stock
-`genie` plugin. See
-[`.cursor/rules/appkit-mastra-patterns.mdc`](.cursor/rules/appkit-mastra-patterns.mdc).
+`genie` plugin.
+
+Every `createAgent` call defaults `workspace` to `createWorkspace()`
+(`workspaces.ts`), which mounts read-only Assistant skill trees from
+Databricks workspace paths (`/workspace_skills`,
+`/workspace_user_skills`) when the OBO token carries `workspace` or
+`all-apis` scope (`tokenUtils` on `@dbx-tools/shared`, stamped as
+`MASTRA_SCOPES_KEY` in `server.ts`). Override with
+`workspace: createWorkspace({ assistantSkills: false, mounts: [...] })`
+or a custom Mastra `Workspace`.
+
+See [`.cursor/rules/appkit-mastra-patterns.mdc`](.cursor/rules/appkit-mastra-patterns.mdc).
 
 ### 5. AppKit naming conventions
 

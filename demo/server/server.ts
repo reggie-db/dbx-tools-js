@@ -1,6 +1,5 @@
 import { genie, lakebase, server } from "@databricks/appkit";
 import { createApp } from "@dbx-tools/appkit-config";
-import { skills, skillWorkspace } from "@dbx-tools/appkit-skills";
 import { email, emailTool } from "@dbx-tools/appkit-email";
 import {
   createAgent,
@@ -43,6 +42,10 @@ import { z } from "zod";
 // `@dbx-tools/genie` for streaming + `getStatement`-backed row
 // hydration; no inner Genie orchestrator agent.
 //
+// Assistant skills: `createAgent` defaults `workspace` to
+// `createWorkspace()`, which mounts read-only Databricks paths
+// `/Workspace/.assistant/skills` and `/Users/<email>/.assistant/skills`.
+//
 // Required env vars (see .env.example):
 // - DATABRICKS_SERVING_ENDPOINT_NAME=databricks-claude-sonnet-4-6
 // - LAKEBASE_PROJECT (or LAKEBASE_ENDPOINT) - autopg fills in the rest
@@ -60,8 +63,8 @@ import { z } from "zod";
 //
 // The `tools(plugins)` callback receives a typed plugin index that
 // auto-discovers any registered AppKit `ToolProvider` plugin
-// (`analytics`, `files`, `lakebase`, `genie`, ...). Unknown names
-// return `undefined` so it's safe to guard with `?.`.
+// (`analytics`, `files`, `lakebase`, `genie`, ...). Unknown
+// names return `undefined` so it's safe to guard with `?.`.
 //
 // `model` falls back to `DATABRICKS_SERVING_ENDPOINT_NAME` then to a
 // built-in default. Whatever id wins is fuzzy-matched against the
@@ -72,7 +75,6 @@ import { z } from "zod";
 // `GET /api/mastra/models` lists the cached catalogue.
 const support = createAgent({
   name: "support",
-  workspace: skillWorkspace,
   instructions: [
     "You are a data analyst helping customers explore a Databricks",
     "Genie space. Default to driving the Genie tools (`ask_genie`,",
@@ -130,10 +132,6 @@ await createApp({
     // Validates SMTP config + verifies connectivity at startup, and
     // primes the transport the approval-gated `send_email` tool reuses.
     email(),
-    // Caches GitHub skill sources; `skillWorkspace` injects catalog + tools.
-    skills({
-      sources: ["databricks-solutions/ai-dev-kit#subdirectory=databricks-skills"],
-    }),
     mastra({
       storage: true,
       memory: true,

@@ -12,9 +12,20 @@
  */
 export * from "@dbx-tools/appkit-mastra-shared";
 export * from "@dbx-tools/model";
+export { createWorkspace } from "./workspaces.js";
 export * from "./agents.js";
 export * from "./chart.js";
 export * from "./config.js";
+export {
+  DatabricksWorkspaceFilesystem,
+  type DatabricksWorkspaceFilesystemOptions,
+  emptyFilesystem,
+  isDbfsPath,
+  isWorkspaceFilesPath,
+  normalizeDatabricksBasePath,
+  resolveDatabricksAbsolutePath,
+  toDatabricksWorkspacePath,
+} from "./filesystems.js";
 export * from "./genie.js";
 export * from "./mcp.js";
 export * from "./plugin.js";

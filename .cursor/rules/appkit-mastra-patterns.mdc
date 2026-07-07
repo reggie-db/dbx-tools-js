@@ -1,5 +1,5 @@
 ---
-description: Patterns specific to the appkit-mastra plugin (agents, writer events, chart pipeline)
+description: Patterns specific to the appkit-mastra plugin (agents, writer events, chart pipeline, workspace)
 globs: packages/appkit-mastra/**/*.ts
 alwaysApply: false
 ---
@@ -73,3 +73,54 @@ Per-user Genie conversation ids are persisted via `CacheManager`
 (AppKit's TTLCache equivalent) with sliding-TTL semantics. The
 stale-id recovery path (404 on follow-up) evicts the cache, clears
 the per-request context, and retries the turn once.
+
+## Workspace and Assistant skills
+
+Every `createAgent` call defaults `workspace` to `createWorkspace()`
+([`workspaces.ts`](src/workspaces.ts)). The workspace exposes a
+per-request composite filesystem backed by the OBO
+`WorkspaceClient` ([`filesystems.ts`](src/filesystems.ts)).
+
+With the default (`assistantSkills: true`), each request mounts:
+
+| Databricks path | Workspace mount | Purpose |
+| --- | --- | --- |
+| `/Workspace/.assistant/skills` | `/workspace_skills` | Shared Assistant skills |
+| `/Users/<email>/.assistant/skills` | `/workspace_user_skills` | Per-user skills |
+
+Mounts are read-only. Production requires `workspace` or `all-apis` on
+the forwarded access token (`tokenUtils.getAccessTokenScopes` stamped as
+`MASTRA_SCOPES_KEY` by [`server.ts`](src/server.ts)); development
+(`NODE_ENV=development`) skips the scope check. Mastra scans mounted
+paths for `SKILL.md` files.
+
+```ts
+import { createAgent, createWorkspace } from "@dbx-tools/appkit-mastra";
+
+// Default: Assistant skills on (no explicit workspace needed).
+const support = createAgent({ instructions: "..." });
+
+// Custom mounts alongside Assistant skills.
+const analyst = createAgent({
+  instructions: "...",
+  workspace: createWorkspace({
+    assistantSkills: true,
+    mounts: [
+      async ({ requestContext }) => ({
+        mounts: { "/data": myFilesystem },
+        skillPaths: [],
+      }),
+    ],
+  }),
+});
+
+// Opt out of built-in skill mounts.
+const bare = createAgent({
+  instructions: "...",
+  workspace: createWorkspace({ assistantSkills: false }),
+});
+```
+
+`createWorkspace`, `DatabricksWorkspaceFilesystem`, `emptyFilesystem`,
+and Databricks path helpers are exported from this package for apps that
+need direct filesystem access or tests.

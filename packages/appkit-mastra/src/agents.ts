@@ -28,6 +28,7 @@ import type { MemoryBuilder } from "./memory.js";
 import { buildModel, FALLBACK_MODEL_IDS } from "./model.js";
 import { ResultProcessor, stripStaleChartsProcessor } from "./processors.js";
 import { buildSummarizeTool } from "./summarize.js";
+import { createWorkspace } from "./workspaces.js";
 
 /**
  * Tool record accepted by every Mastra `Agent.tools` field and by the
@@ -147,7 +148,8 @@ function deriveToolId(description: string): string {
  * type inference and to match the AppKit API surface.
  */
 export function createAgent<T extends MastraAgentDefinition>(def: T): T {
-  return def;
+  const workspace = def.workspace ?? createWorkspace();
+  return { ...def, workspace };
 }
 
 /**
@@ -289,13 +291,9 @@ export interface MastraAgentDefinition {
    */
   storage?: boolean | MastraStorageConfigOverride;
   /**
-   * Mastra {@link Workspace} for this agent. When it exposes skills,
-   * Mastra injects `<available_skills>` metadata each turn and mounts
-   * `skill` / `skill_search` / `skill_read` at runtime.
-   *
-   * Use a zero-arg function so resolution happens at agent registration
-   * (for example `skillWorkspace` from `@dbx-tools/appkit-skills`
-   * after `aiDevKit()` has primed the cache).
+   * Mastra {@link Workspace} for this agent (filesystem, sandbox, or other
+   * providers). Assistant skills from Databricks workspace paths are wired
+   * via {@link createWorkspace}.
    */
   workspace?: Workspace | MastraAgentWorkspaceResolver;
 }
@@ -548,7 +546,11 @@ function isApprovalGatedTool(tool: unknown): boolean {
 }
 
 function resolveToolId(tool: unknown, fallbackKey: string): string {
-  if (tool && typeof tool === "object" && typeof (tool as { id?: string }).id === "string") {
+  if (
+    tool &&
+    typeof tool === "object" &&
+    typeof (tool as { id?: string }).id === "string"
+  ) {
     return (tool as { id: string }).id;
   }
   return fallbackKey;

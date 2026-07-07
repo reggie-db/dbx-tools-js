@@ -45,6 +45,14 @@ export const MASTRA_USER_EMAIL_KEY = "mastra__userEmail";
 export const MASTRA_REQUEST_ID_KEY = "mastra__requestId";
 
 /**
+ * `RequestContext` key for OAuth scopes parsed from the forwarded
+ * access token by {@link MastraServer.configureRequestContextScopes}.
+ * Workspace mounts that touch Databricks workspace files require
+ * `workspace` or `all-apis` in this list.
+ */
+export const MASTRA_SCOPES_KEY = "mastra__scopes";
+
+/**
  * Canonical list of `RequestContext` keys we want Mastra to extract
  * as metadata on every observability span (agent runs, model calls,
  * tool invocations, workflow steps).
