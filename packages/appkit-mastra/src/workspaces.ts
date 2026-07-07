@@ -17,7 +17,7 @@ import {
   type SkillsResolver,
   type WorkspaceFilesystem,
 } from "@mastra/core/workspace";
-import { stringUtils, tokenUtils } from "@dbx-tools/shared";
+import { stringUtils, logUtils, tokenUtils } from "@dbx-tools/shared";
 
 import {
   MASTRA_SCOPES_KEY,
@@ -40,6 +40,8 @@ const ASSISTANT_USER_SKILLS_MOUNT = "/workspace_user_skills";
 
 /** OAuth scopes that gate Databricks workspace file mounts. */
 const WORKSPACE_FILE_SCOPES = ["workspace", "all-apis"] as const;
+
+const log = logUtils.logger("mastra/workspaces");
 
 /* -------------------------------- types -------------------------------- */
 
@@ -109,6 +111,18 @@ export function createWorkspace(options: CreateWorkspaceOptions = {}): Workspace
     options.skills ??
     (resolvers.length > 0 ? buildWorkspaceSkillsResolver(resolvers) : undefined);
 
+  log.debug("workspace:create", {
+    id,
+    name,
+    resolverCount: resolvers.length,
+    assistantSkills: options.assistantSkills !== false,
+    customMountResolvers: options.mounts?.length ?? 0,
+    customSkillsResolver: Boolean(options.skills),
+    checkSkillFileMtime:
+      options.checkSkillFileMtime ?? options.assistantSkills !== false,
+    bm25: options.bm25 !== false,
+  });
+
   return new Workspace({
     id,
     name,
@@ -160,12 +174,23 @@ function resolveAssistantSkillsMounts(
   const requestContext = context.requestContext;
 
   if (!shouldMountAssistantSkills(requestContext)) {
+    log.debug("assistant-skills:skipped", {
+      reason: !requestContext
+        ? "no-request-context"
+        : "missing-workspace-scope",
+      nodeEnv: process.env.NODE_ENV,
+      scopes: context.requestContext?.get(MASTRA_SCOPES_KEY),
+    });
     return { mounts, skillPaths: [] };
   }
 
   const user = requestContext!.get(MASTRA_USER_KEY) as User | undefined;
   const client = user?.executionContext.client;
   if (!client) {
+    log.debug("assistant-skills:skipped", {
+      reason: "missing-obo-client",
+      userId: user?.id,
+    });
     return { mounts, skillPaths: [] };
   }
 
@@ -181,6 +206,14 @@ function resolveAssistantSkillsMounts(
       userAssistantSkillsPath(email),
     );
   }
+
+  log.debug("assistant-skills:mounted", {
+    sharedPath: ASSISTANT_SHARED_SKILLS_PATH,
+    sharedMount: ASSISTANT_WORKSPACE_SKILLS_MOUNT,
+    userMount: email ? ASSISTANT_USER_SKILLS_MOUNT : undefined,
+    userPath: email ? userAssistantSkillsPath(email) : undefined,
+    mountKeys: Object.keys(mounts),
+  });
 
   return { mounts, skillPaths: Object.keys(mounts) };
 }
@@ -216,6 +249,12 @@ function buildMountResolvers(
   if (mounts?.length) {
     resolvers.push(...mounts);
   }
+  log.debug("mounts:resolvers", {
+    assistantSkills,
+    builtInResolver: assistantSkills,
+    customResolverCount: mounts?.length ?? 0,
+    totalResolverCount: resolvers.length,
+  });
   return resolvers;
 }
 
@@ -264,13 +303,23 @@ async function resolveWorkspaceContribution(
   const mounts: Record<string, WorkspaceFilesystem> = {};
   const skillPaths: string[] = [];
 
-  for (const resolver of resolvers) {
+  for (const [index, resolver] of resolvers.entries()) {
     const contribution = await resolver(context);
+    log.debug("mounts:resolver", {
+      index,
+      mountKeys: Object.keys(contribution.mounts),
+      skillPaths: contribution.skillPaths ?? [],
+    });
     Object.assign(mounts, contribution.mounts);
     if (contribution.skillPaths?.length) {
       skillPaths.push(...contribution.skillPaths);
     }
   }
+
+  log.debug("mounts:merged", {
+    mountKeys: Object.keys(mounts),
+    skillPaths,
+  });
 
   return { mounts, skillPaths };
 }
@@ -286,7 +335,14 @@ async function resolveWorkspaceFilesystem(
   context: WorkspaceMountContext,
 ): Promise<WorkspaceFilesystem> {
   const { mounts } = await resolveWorkspaceContribution(resolvers, context);
-  if (Object.keys(mounts).length === 0) return emptyFilesystem();
+  const mountKeys = Object.keys(mounts);
+  if (mountKeys.length === 0) {
+    log.debug("filesystem:empty", {
+      hasRequestContext: Boolean(context.requestContext),
+    });
+    return emptyFilesystem();
+  }
+  log.debug("filesystem:composite", { mountKeys });
   return new CompositeFilesystem({ mounts });
 }
 
@@ -299,6 +355,7 @@ function buildWorkspaceSkillsResolver(
 ): SkillsResolver {
   return async (context: SkillsContext) => {
     const { skillPaths } = await resolveWorkspaceContribution(resolvers, context);
+    log.debug("skills:resolved", { skillPaths });
     return skillPaths ?? [];
   };
 }

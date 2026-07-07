@@ -6,9 +6,11 @@
  */
 
 import { forEachHeaderValue, type HeaderLike } from "./http.js";
+import { logUtils } from "./index.client.js";
 
 const BEARER_PREFIX_REGEX = /^bearer\s+/i;
 const SPLIT_REGEX = /\s+|\s*,\s*/;
+const log = logUtils.logger("shared/token");
 
 /** Decode a JWT segment (base64url with standard base64 padding). */
 function decodeJwtSegment(segment: string): string {
@@ -63,6 +65,7 @@ export function getAccessTokenPayload(
     }
   }
   if (!accessTokenPayload) accessTokenPayload = {};
+  log.debug("getAccessTokenPayload", { accessTokenPayload });
   return accessTokenPayload;
 }
 
@@ -77,7 +80,9 @@ export function getAccessTokenScopes(
   headerName?: string,
 ): Iterable<string> {
   const payload = getAccessTokenPayload(input, headerName);
-  return splitAccessTokenClaim(payload.scope);
+  const accessTokenScopes = iterateClaims(payload.scope);
+  log.debug("getAccessTokenScopes", { accessTokenScopes });
+  return accessTokenScopes;
 }
 
 /**
@@ -90,24 +95,37 @@ export function includesAccessTokenScope(
   scopes: unknown,
   allowed: readonly string[],
 ): boolean {
-  if (!Array.isArray(scopes)) return false;
-  return scopes.some((scope) =>
-    allowed.includes(typeof scope === "string" ? scope : String(scope)),
-  );
+  if (allowed.length) {
+    for (const scope of iterateClaims(scopes)) {
+      if (allowed.includes(scope)) {
+        log.debug("includesAccessTokenScope", { scope, allowed });
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Split a JWT `scope` claim string or array into individual scope tokens. */
-function* splitAccessTokenClaim(input: unknown): Iterable<string> {
-  if (typeof input === "string") {
-    for (const claim of input.split(SPLIT_REGEX)) {
-      const value = claim.trim();
-      if (value) {
-        yield value;
+function* iterateClaims(input: unknown, distinct = true): Iterable<string> {
+  const seen = distinct ? new Set<string>() : undefined;
+
+  function* visit(value: unknown): Iterable<string> {
+    if (typeof value === "string") {
+      for (const claim of value.split(SPLIT_REGEX)) {
+        const token = claim.trim();
+        if (!token || seen?.has(token)) {
+          continue;
+        }
+        seen?.add(token);
+        yield token;
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        yield* visit(item);
       }
     }
-  } else if (Array.isArray(input)) {
-    for (const value of input) {
-      yield* splitAccessTokenClaim(value);
-    }
   }
+
+  yield* visit(input);
 }
