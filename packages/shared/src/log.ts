@@ -57,6 +57,22 @@ function shouldEmit(level: LogLevel): boolean {
   return LEVEL_RANK[level] >= LEVEL_RANK[activeLevel()];
 }
 
+/**
+ * True when log calls at `level` would be emitted at the current
+ * `process.env.LOG_LEVEL` threshold. Use before building expensive
+ * debug attribute objects.
+ *
+ * @example
+ * ```ts
+ * if (logUtils.isLevelEnabled("debug")) {
+ *   log.debug("mounts:resolver", { contribution: await heavySnapshot() });
+ * }
+ * ```
+ */
+export function isLevelEnabled(level: LogLevel): boolean {
+  return shouldEmit(level);
+}
+
 const LOGGER_NAME_REGEX = /^(?:[a-z][a-z0-9+.-]*:\/\/)?.*\/([^/.]+)(?:\.[^/]+)?$/i;
 
 function extractLoggerName(

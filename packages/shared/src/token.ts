@@ -80,8 +80,11 @@ export function getAccessTokenScopes(
   headerName?: string,
 ): Iterable<string> {
   const payload = getAccessTokenPayload(input, headerName);
-  const accessTokenScopes = iterateClaims(payload.scope);
-  log.debug("getAccessTokenScopes", { accessTokenScopes });
+  let accessTokenScopes: Iterable<string> = iterateClaims(payload.scope);
+  if (logUtils.isLevelEnabled("debug")) {
+    accessTokenScopes = Array.from(accessTokenScopes);
+    log.debug("getAccessTokenScopes", { accessTokenScopes });
+  }
   return accessTokenScopes;
 }
 

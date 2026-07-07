@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
-import { logger } from "../src/log.js";
+import { isDebugEnabled, isLevelEnabled, logger } from "../src/log.js";
 
 // log.ts reads `process.env.LOG_LEVEL` lazily on every call, so we
 // force `debug` once before the level-routing test runs. With the
@@ -99,5 +99,34 @@ describe("logger", () => {
     expect(mocks.info).toHaveBeenCalledWith("[plugin-a] i");
     expect(mocks.warn).toHaveBeenCalledWith("[plugin-a] w");
     expect(mocks.error).toHaveBeenCalledWith("[plugin-a] e");
+  });
+});
+
+describe("isLevelEnabled", () => {
+  const previous = process.env.LOG_LEVEL;
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = previous;
+  });
+
+  it("returns true for levels at or above the active threshold", () => {
+    process.env.LOG_LEVEL = "info";
+    expect(isLevelEnabled("debug")).toBe(false);
+    expect(isLevelEnabled("info")).toBe(true);
+    expect(isLevelEnabled("warn")).toBe(true);
+    expect(isLevelEnabled("error")).toBe(true);
+  });
+
+  it("returns true for debug when LOG_LEVEL is debug", () => {
+    process.env.LOG_LEVEL = "debug";
+    expect(isLevelEnabled("debug")).toBe(true);
+    expect(isDebugEnabled()).toBe(true);
+  });
+
+  it("treats LOG_LEVEL case-insensitively", () => {
+    process.env.LOG_LEVEL = "WARN";
+    expect(isLevelEnabled("info")).toBe(false);
+    expect(isLevelEnabled("warn")).toBe(true);
   });
 });
