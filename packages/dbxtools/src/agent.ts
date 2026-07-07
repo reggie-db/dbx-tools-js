@@ -22,6 +22,12 @@ export interface AgentOptions {
    * `ucode codex exec …` in a shell.
    */
   capture?: boolean;
+  /**
+   * When `true` (default) and `capture` is enabled, write the parsed
+   * assistant text to stdout. Set `false` when the caller will log the
+   * result itself (e.g. release-notes drafting).
+   */
+  echo?: boolean;
 }
 
 /** Outcome of {@link runAgent}. */
@@ -112,7 +118,7 @@ export async function runAgent(
     timeoutMs,
   );
   const text = parseCodexStdout(result.stdout);
-  if (text) {
+  if (text && opts.echo !== false) {
     process.stdout.write(text);
     process.stdout.write("\n");
   }

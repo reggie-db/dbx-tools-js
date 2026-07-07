@@ -308,7 +308,10 @@ async function agentSummary(
     `Running ucode codex to draft release notes (timeout ${Math.round(timeoutMs / 1000)}s)...`,
   );
   try {
-    const { text, exitCode, stderr } = await runAgent(prompt, { timeoutMs });
+    const { text, exitCode, stderr } = await runAgent(prompt, {
+      timeoutMs,
+      echo: false,
+    });
     if (exitCode === 0 && text) return text;
     if (agentTimedOut(exitCode)) {
       consola.warn(

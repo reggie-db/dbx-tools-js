@@ -192,16 +192,17 @@ function resolveAssistantSkillsMounts(
     return { mounts, skillPaths: [] };
   }
 
-  mounts[ASSISTANT_WORKSPACE_SKILLS_MOUNT] = readOnlyDatabricksFilesystem(
+  mounts[ASSISTANT_WORKSPACE_SKILLS_MOUNT] = databricksFilesystem(
     client,
     ASSISTANT_SHARED_SKILLS_PATH,
   );
 
   const email = resolveScopedEmail(requestContext);
   if (email) {
-    mounts[ASSISTANT_USER_SKILLS_MOUNT] = readOnlyDatabricksFilesystem(
+    mounts[ASSISTANT_USER_SKILLS_MOUNT] = databricksFilesystem(
       client,
       userAssistantSkillsPath(email),
+      false,
     );
   }
 
@@ -279,14 +280,15 @@ function resolveScopedEmail(
 }
 
 /** Construct a read-only {@link DatabricksWorkspaceFilesystem} for `basePath`. */
-function readOnlyDatabricksFilesystem(
+function databricksFilesystem(
   client: WorkspaceClient,
   basePath: string,
+  readOnly: boolean = true,
 ): DatabricksWorkspaceFilesystem {
   return new DatabricksWorkspaceFilesystem({
     client,
     basePath,
-    readOnly: true,
+    readOnly,
   });
 }
 
