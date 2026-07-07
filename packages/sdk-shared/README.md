@@ -4,8 +4,8 @@ Zod schemas plus inferred TypeScript types for the Databricks SDK
 shapes the rest of the `@dbx-tools/*` packages consume. Everything
 under `./generated/` is regenerated from upstream
 `@databricks/sdk-experimental` `.d.ts` declarations by the
-`devkit codegen` command (see
-[`@dbx-tools/devkit`](../devkit)); nothing in here is
+`dbxtools codegen` command (see
+[`@dbx-tools/dbxtools`](../dbxtools)); nothing in here is
 hand-maintained.
 
 ```ts
@@ -64,7 +64,7 @@ Each consumer package declares its own `codegen.inputs` in
 }
 ```
 
-`devkit codegen` walks every package with a `codegen` field
+`dbxtools codegen` walks every package with a `codegen` field
 and, for each input:
 
 1. Reads the upstream `.d.ts`.
@@ -92,7 +92,7 @@ export * from "./generated/index.js";
 ```bash
 bun run codegen          # runs codegen across every package with a codegen field
 # or invoke the toolkit directly:
-devkit codegen
+dbxtools codegen
 ```
 
 Codegen refuses to write or delete any file inside `generated/` that

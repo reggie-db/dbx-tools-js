@@ -1,5 +1,5 @@
 /**
- * Run Codex headlessly via `ucode codex exec` for `devkit agent` and
+ * Run Codex headlessly via `ucode codex exec` for `dbxtools agent` and
  * release tooling that drafts notes programmatically.
  */
 
@@ -124,7 +124,7 @@ export async function runAgent(
 }
 
 /**
- * `devkit agent` entry: run Codex and return a process exit code (0 on
+ * `dbxtools agent` entry: run Codex and return a process exit code (0 on
  * success, 1 on failure or timeout).
  */
 export async function agent(opts: AgentCommandOptions): Promise<number> {

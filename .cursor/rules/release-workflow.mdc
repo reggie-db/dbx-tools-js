@@ -7,7 +7,7 @@ alwaysApply: false
 
 Releases are **tag-driven**. Pushing a `v<version>` tag to `origin`
 fires `.github/workflows/release.yml`, which builds every publishable
-workspace and runs `devkit release` against npm.
+workspace and runs `dbxtools release` against npm.
 
 There is no PR-based versioning bot and no auto-publish on push to
 `main`. The tag push is the deliberate ship signal.
@@ -21,7 +21,7 @@ bun run tag major           # major bump
 bun run tag --dry-run       # preview without writing or pushing
 ```
 
-`devkit tag` (the `tag()` function in `@dbx-tools/devkit`) handles the
+`dbxtools tag` (the `tag()` function in `@dbx-tools/dbxtools`) handles the
 full sequence in one shot:
 
 1. Reads the shared version from the first publishable package and
@@ -42,12 +42,12 @@ The annotated tag and GitHub Release both use a plain
 ## Local publish (debugging / one-off)
 
 ```bash
-devkit build
-devkit release --dry-run            # bun publish --dry-run per package
+dbxtools build
+dbxtools release --dry-run            # bun publish --dry-run per package
 bun run release                     # build + real publish
 ```
 
-`devkit release` first runs `devkit build`, then for each publishable
+`dbxtools release` first runs `dbxtools build`, then for each publishable
 package it temporarily *stamps* a complete `package.json` (expands the
 slim `exports` source pointer into the `source`/`types`/`default`
 shape and fills in `main`, `types`, `files`, `license`, `type`), runs

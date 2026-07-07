@@ -54,7 +54,7 @@ describe("stableCaretRange", () => {
 describe("forwardedUpdateArgs", () => {
   it("returns argv tokens after update", () => {
     expect(
-      forwardedUpdateArgs(["node", "devkit", "update", "--force", "@mastra/core"]),
+      forwardedUpdateArgs(["node", "dbxtools", "update", "--force", "@mastra/core"]),
     ).toEqual(["--force", "@mastra/core"]);
   });
 });

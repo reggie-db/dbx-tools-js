@@ -6,23 +6,23 @@ Lakebase-backed memory, and the standard Mastra agent stream the React
 client drives via `@mastra/client-js`.
 
 Wiring it up looks the same as the AppKit
-[`agents`](https://developers.databricks.com/docs/appkit/v0/plugins/agents)
+`[agents](https://developers.databricks.com/docs/appkit/v0/plugins/agents)`
 plugin - same `createAgent` / `tool` helpers, same `tools(plugins)`
 callback, same `ToolkitOptions`. Switching a given agent between the two
 is a one-line import change.
 
 The implementation lives under `src/`: agent registration in
-[`agents.ts`](src/agents.ts), the plugin + routes in
-[`plugin.ts`](src/plugin.ts) / [`server.ts`](src/server.ts), thread
-history / listing in [`history.ts`](src/history.ts) /
-[`threads.ts`](src/threads.ts), Model Serving resolution in
-[`model.ts`](src/model.ts) / [`serving.ts`](src/serving.ts), Genie
-tooling in [`genie.ts`](src/genie.ts), the chart pipeline in
-[`chart.ts`](src/chart.ts), Databricks workspace mounts in
-[`workspaces.ts`](src/workspaces.ts) / [`filesystems.ts`](src/filesystems.ts),
+`[agents.ts](src/agents.ts)`, the plugin + routes in
+`[plugin.ts](src/plugin.ts)` / `[server.ts](src/server.ts)`, thread
+history / listing in `[history.ts](src/history.ts)` /
+`[threads.ts](src/threads.ts)`, Model Serving resolution in
+`[model.ts](src/model.ts)` / `[serving.ts](src/serving.ts)`, Genie
+tooling in `[genie.ts](src/genie.ts)`, the chart pipeline in
+`[chart.ts](src/chart.ts)`, Databricks workspace mounts in
+`[workspaces.ts](src/workspaces.ts)` / `[filesystems.ts](src/filesystems.ts)`,
 and MLflow feedback logging in
-[`mlflow.ts`](src/mlflow.ts) (over the shared REST helper in
-[`rest.ts`](src/rest.ts)).
+`[mlflow.ts](src/mlflow.ts)` (over the shared REST helper in
+`[rest.ts](src/rest.ts)`).
 
 ## Quick start
 
@@ -63,10 +63,10 @@ await createApp({
 `tool` is the AppKit-shaped factory (`{ description, schema, execute }`)
 that adapts to Mastra's `createTool` under the hood. The full config
 shapes (`MastraAgentDefinition`, the plugin config) - every field and
-default - are typed in [`config.ts`](src/config.ts).
+default - are typed in `[config.ts](src/config.ts)`.
 
 On the React side, drop in the prebuilt chat UI from
-[`@dbx-tools/appkit-mastra-ui`](../appkit-mastra-ui); it wires itself
+`[@dbx-tools/appkit-mastra-ui](../appkit-mastra-ui)`; it wires itself
 from the plugin's published client config and streams over
 `@mastra/client-js`, so there's no transport code to write:
 
@@ -83,34 +83,34 @@ export default function ChatPage() {
 With no config, memory and storage are driven entirely by whether the
 `lakebase` plugin is registered:
 
-- **No `lakebase()`** - the agent is fully stateless: no threads, no
+- **No** `lakebase()` - the agent is fully stateless: no threads, no
   recall.
-- **`lakebase()` registered** - both auto-enable. Each agent gets its
+- `lakebase()` **registered** - both auto-enable. Each agent gets its
   own `PostgresStore` schema (threads stay isolated per agent); every
   agent shares one `PgVector` semantic-recall index.
 
 Override per plugin or per agent by passing `memory` / `storage` as
 `false` (opt out), `true` (explicit on), or a config object (dedicated
-index / schema). The fields are typed in [`config.ts`](src/config.ts);
-the wiring is in [`memory.ts`](src/memory.ts).
+index / schema). The fields are typed in `[config.ts](src/config.ts)`;
+the wiring is in `[memory.ts](src/memory.ts)`.
 
 ## Workspace and Assistant skills
 
 Every `createAgent` call applies a Mastra `Workspace` by default via
-`createWorkspace()` ([`workspaces.ts`](src/workspaces.ts)). The
+`createWorkspace()` (`[workspaces.ts](src/workspaces.ts)`). The
 workspace is resolved per request and backed by the OBO user's
-`WorkspaceClient` through [`filesystems.ts`](src/filesystems.ts).
+`WorkspaceClient` through `[filesystems.ts](src/filesystems.ts)`.
 
 Unless you opt out, `assistantSkills: true` mounts read-only Databricks
 trees where Mastra looks for `SKILL.md` files:
 
-| Databricks path | Workspace mount |
-| --- | --- |
-| `/Workspace/.assistant/skills` | `/workspace_skills` |
+| Databricks path                    | Workspace mount          |
+| ---------------------------------- | ------------------------ |
+| `/Workspace/.assistant/skills`     | `/workspace_skills`      |
 | `/Users/<email>/.assistant/skills` | `/workspace_user_skills` |
 
 Production mounts require `workspace` or `all-apis` on the forwarded
-access token. [`server.ts`](src/server.ts) stamps parsed scopes on
+access token. `[server.ts](src/server.ts)` stamps parsed scopes on
 `MASTRA_SCOPES_KEY` using `tokenUtils` from `@dbx-tools/shared`.
 `NODE_ENV=development` skips the scope gate.
 
@@ -176,10 +176,10 @@ management (registered alongside `/route/history`):
 Each thread is auto-titled from its opening turn (Mastra's
 `generateTitle`), but titling runs on the **small / fast chat tier**
 (`ModelClass.ChatFast`) via the dedicated summarizer in
-[`summarize.ts`](src/summarize.ts) - not the agent's primary model - so
+`[summarize.ts](src/summarize.ts)` - not the agent's primary model - so
 naming a conversation never spends the heavyweight model. The route
-handlers live in [`threads.ts`](src/threads.ts); the thread-id
-resolution is in [`server.ts`](src/server.ts). The drop-in `MastraChat`
+handlers live in `[threads.ts](src/threads.ts)`; the thread-id
+resolution is in `[server.ts](src/server.ts)`. The drop-in `MastraChat`
 from `@dbx-tools/appkit-mastra-ui` renders the whole conversation sidebar
 over these routes with no extra wiring.
 
@@ -192,8 +192,7 @@ the small / fast chat tier instead of the agent's primary model. It takes
 items") and a `maxWords` soft cap, and returns `{ summary }`. The same
 small-tier summarizer backs conversation titling above. Shadow it by
 defining a same-named tool in `config.tools` (or a per-agent `tools`), and
-reuse it programmatically via the exported `summarizeText(config, text,
-opts)` / `buildSummarizeTool(config)`.
+reuse it programmatically via the exported `summarizeText(config, text, opts)` / `buildSummarizeTool(config)`.
 
 ## The `tools(plugins)` callback
 
@@ -263,9 +262,9 @@ AppKit's stock `genie()` plugin is honored only for its `spaces` config
 directly via `@dbx-tools/genie` (`genieEventChat`) and the workspace
 `statementExecution` API. Each Genie turn forwards its wire
 `GenieChatEvent`s through `ctx.writer` for live UI progress. The exact
-tool set, ids, and writer-event contract live in [`genie.ts`](src/genie.ts)
+tool set, ids, and writer-event contract live in `[genie.ts](src/genie.ts)`
 and the `GenieWriterEvent` docs in
-[`@dbx-tools/appkit-mastra-shared`](../appkit-mastra-shared).
+`[@dbx-tools/appkit-mastra-shared](../appkit-mastra-shared)`.
 
 ## Embeds
 
@@ -283,8 +282,8 @@ The host UI splits the assistant text on these markers and long-polls
 the plugin's generic `${basePath}/embed/:type/:id` route until each
 entry settles. Cache entries carry a 1h TTL; after expiry the route
 404s and the marker falls through harmlessly. Implementation and the
-placement contract are in [`chart.ts`](src/chart.ts); the wire shapes
-are in [`@dbx-tools/appkit-mastra-shared`](../appkit-mastra-shared).
+placement contract are in `[chart.ts](src/chart.ts)`; the wire shapes
+are in `[@dbx-tools/appkit-mastra-shared](../appkit-mastra-shared)`.
 
 ## Feedback (MLflow)
 
@@ -312,14 +311,14 @@ Databricks MLflow REST API. Trace export is asynchronous, so a
 just-finished trace may not exist yet - the log call retries briefly on
 "not found" and otherwise fails softly (the chat stays usable). The
 current state is published to the client as
-`clientConfig().feedbackEnabled`; see [`mlflow.ts`](src/mlflow.ts) and
-the UI wiring in [`@dbx-tools/appkit-mastra-ui`](../appkit-mastra-ui).
+`clientConfig().feedbackEnabled`; see `[mlflow.ts](src/mlflow.ts)` and
+the UI wiring in `[@dbx-tools/appkit-mastra-ui](../appkit-mastra-ui)`.
 
 ## Model resolution
 
 Each agent call resolves a model lazily (so concurrent requests keep
 distinct user identities), delegating to
-[`@dbx-tools/model`](../model) for the actual workspace-aware selection
+`[@dbx-tools/model](../model)` for the actual workspace-aware selection
 (fuzzy name matching, score-based class classification, offline
 fallbacks). Its exports are re-exported here, so `ModelClass` /
 `modelForClass` and friends are available straight off
@@ -341,7 +340,7 @@ const classifier = createAgent({
 
 Per-request overrides arrive via the `X-Mastra-Model` header, a
 `?model=` query, or a `model` / `modelId` body field (see
-[`serving.ts`](src/serving.ts)). The cached endpoint catalogue is
+`[serving.ts](src/serving.ts)`). The cached endpoint catalogue is
 exposed at `GET ${basePath}/models` for model pickers; the same data is
 available in-process from a sibling plugin via
 `appkitUtils.require(this.context, mastra).exports()`.
@@ -349,7 +348,7 @@ available in-process from a sibling plugin via
 ## MCP server
 
 The plugin's agents are exposed as a Mastra
-[`MCPServer`](https://mastra.ai/docs/tools-mcp/mcp-overview) **by
+`[MCPServer](https://mastra.ai/docs/tools-mcp/mcp-overview)` **by
 default** so external MCP clients - Claude Desktop, Cursor, the Mastra
 playground, or another agent - can call them over the standard MCP
 transports. The server is registered on the Mastra instance via
@@ -398,10 +397,10 @@ paths are available in-process via
 ## Client API surface (`apiAccess`)
 
 `@mastra/express` registers its full management route table under the
-plugin mount - agent inference *plus* admin / mutating routes (direct
+plugin mount - agent inference _plus_ admin / mutating routes (direct
 tool execution, workflow control, raw memory read/write, telemetry,
 logs, scores). AppKit authenticates every request as the OBO user, but
-does not restrict *which* of those a browser client may call.
+does not restrict _which_ of those a browser client may call.
 
 `config.apiAccess` gates that surface at the plugin's dispatch point:
 
@@ -421,7 +420,7 @@ mastra({ agents: support, apiAccess: "full" }); // opt into the full API
 ```
 
 The gate is a pure allowlist (`isMastraRequestAllowed` in
-[`server.ts`](src/server.ts)); the browser chat client only ever uses
+`[server.ts](src/server.ts)`); the browser chat client only ever uses
 the agent stream and the `/route/*` routes, so the default breaks
 nothing.
 

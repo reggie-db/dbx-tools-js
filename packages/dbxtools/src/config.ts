@@ -1,10 +1,10 @@
 // Lightweight per-repo configuration for the toolkit. Everything here
 // is auto-derived from the workspace so a consuming repo needs zero
 // config in the common case; the only knobs are optional overrides
-// under a `devkit` key in the root `package.json`:
+// under a `dbxtools` key in the root `package.json`:
 //
 //   {
-//     "devkit": {
+//     "dbxtools": {
 //       "scope": "@acme",                  // npm scope used by `create`
 //       "repo": "acme/widgets",            // owner/name for release links
 //       "sharedPackage": "@acme/shared"    // shared-helpers dep wired by `create`
@@ -19,15 +19,15 @@ import pMemoize from "p-memoize";
 import { git, hasGit } from "./git.js";
 import { discoverPackages, toAbsolute, type PackageJson } from "./package.js";
 
-/** Optional `devkit` overrides read from the root `package.json`. */
-interface DevkitConfigOverrides {
+/** Optional `dbxtools` overrides read from the root `package.json`. */
+interface DbxtoolsConfigOverrides {
   scope?: string;
   repo?: string;
   sharedPackage?: string;
 }
 
 /** Resolved toolkit configuration for the current repo. */
-export interface DevkitConfig {
+export interface DbxtoolsConfig {
   /** npm scope (e.g. `@acme`) used when scaffolding new packages. */
   scope: string;
   /** `owner/name` slug used for release links, or null when undiscoverable. */
@@ -41,14 +41,14 @@ export interface DevkitConfig {
   sharedPackage: string | null;
 }
 
-/** Read the optional `devkit` block from the root `package.json`. */
-async function readOverrides(): Promise<DevkitConfigOverrides> {
+/** Read the optional `dbxtools` block from the root `package.json`. */
+async function readOverrides(): Promise<DbxtoolsConfigOverrides> {
   const rootMeta = (await Bun.file(
     toAbsolute("package.json"),
   ).json()) as PackageJson & {
-    devkit?: DevkitConfigOverrides;
+    dbxtools?: DbxtoolsConfigOverrides;
   };
-  return rootMeta.devkit ?? {};
+  return rootMeta.dbxtools ?? {};
 }
 
 /**
@@ -97,10 +97,10 @@ async function deriveRepo(): Promise<string | null> {
 
 /**
  * Resolve toolkit config for the current repo, memoized for the
- * process. Overrides under the root `package.json` `devkit` key win
+ * process. Overrides under the root `package.json` `dbxtools` key win
  * over the auto-derived defaults.
  */
-export const getDevkitConfig = pMemoize(async (): Promise<DevkitConfig> => {
+export const getDbxtoolsConfig = pMemoize(async (): Promise<DbxtoolsConfig> => {
   const overrides = await readOverrides();
   const scope = overrides.scope ?? (await deriveScope()) ?? "";
   const repo = overrides.repo ?? (await deriveRepo());

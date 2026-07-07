@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-// `devkit` CLI: a thin commander dispatcher over the toolkit's command
+// `dbxtools` CLI: a thin commander dispatcher over the toolkit's command
 // functions. Each subcommand parses its options and delegates to the
 // matching `src/*.ts` function, which is also exported from the package
 // root for programmatic use.
@@ -17,7 +17,7 @@ import { update, forwardedUpdateArgs } from "../src/update.js";
 import { verify } from "../src/verify.js";
 
 const program = new Command()
-  .name("devkit")
+  .name("dbxtools")
   .description("Workspace build, scaffold, and release toolkit for Bun monorepos.");
 
 program

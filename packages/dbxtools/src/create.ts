@@ -6,11 +6,11 @@
 //     src/index.ts          (barrel - what `exports["."]` points at)
 //     src/<dir>.ts          (plugin / standard) or src/protocol.ts (shared)
 //
-// The slim manifest is filled out at publish time (`devkit release`
+// The slim manifest is filled out at publish time (`dbxtools release`
 // stamps `main`/`types`/`files`/`license` and expands the `exports`
 // pointer into its `source`/`types`/`default` shape); there is no
-// per-package `build`/`publish` script because `devkit build` /
-// `devkit release` drive every package through the shared tsdown config.
+// per-package `build`/`publish` script because `dbxtools build` /
+// `dbxtools release` drive every package through the shared tsdown config.
 //
 // For `plugin`, `<dir>` is always `appkit-<bare>` (the command
 // auto-prefixes `appkit-`). For `shared`, `<dir>` is the slug verbatim.
@@ -19,7 +19,7 @@
 // Three kinds, selected by flag:
 //   - `--plugin`: AppKit Plugin subclass with an inline manifest. Lists
 //     `@databricks/appkit` as a peer dependency and depends on the
-//     configured shared-helpers package (`devkit.sharedPackage`, default
+//     configured shared-helpers package (`dbxtools.sharedPackage`, default
 //     `<scope>/shared`) for logger / plugin helpers when it exists.
 //   - `--shared`: dependency-free, browser-safe contract package with a
 //     single `src/index.ts` barrel re-exporting a `src/protocol.ts` seed.
@@ -61,7 +61,7 @@ import { consola } from "consola";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import semver from "semver";
-import { getDevkitConfig } from "./config.js";
+import { getDbxtoolsConfig } from "./config.js";
 import { discoverPackages, toAbsolute, writeJson } from "./package.js";
 import { fail } from "./script.js";
 
@@ -97,10 +97,10 @@ export async function create(options: CreateOptions): Promise<void> {
     fail(`invalid slug "${slug}" (lowercase kebab-case, must start with a letter)`);
   }
 
-  const { scope, sharedPackage } = await getDevkitConfig();
+  const { scope, sharedPackage } = await getDbxtoolsConfig();
   if (!scope) {
     fail(
-      "could not determine an npm scope; set `devkit.scope` in the root package.json",
+      "could not determine an npm scope; set `dbxtools.scope` in the root package.json",
     );
   }
 

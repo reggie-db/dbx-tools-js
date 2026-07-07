@@ -67,7 +67,7 @@ linked alongside; every package's own README covers its usage in depth.
 | [`@dbx-tools/appkit-config`](packages/appkit-config)                                                                             | `createApp` wrapper that auto-configures capabilities (e.g. `autopg()` Lakebase env).                                                                |
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + chat route + Lakebase memory + per-request Databricks workspace (Assistant `SKILL.md` trees); drop-in React chat UI. |
 | [`@dbx-tools/appkit-email`](packages/appkit-email) · [shared](packages/appkit-email-shared) · [ui](packages/appkit-email-ui)     | AppKit plugin + approval-gated `send_email` Mastra tool (SMTP, OBO sender); Approve / Deny card UI.                                                  |
-| [`@dbx-tools/devkit`](packages/devkit)                                                                                           | The `devkit` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
+| [`@dbx-tools/dbxtools`](packages/dbxtools)                                                                                           | The `dbxtools` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
 | [`@dbx-tools/zerobus`](packages/zerobus)                                                                                         | Thin wrapper over the Databricks Zerobus ingest SDK.                                                                                                 |
 | [`@dbx-tools/appkit-demo`](demo)                                                                                                 | Private, runnable Databricks App that wires everything together.                                                                                     |
 
@@ -121,7 +121,7 @@ bun run tag major          # major bump
 bun run tag --dry-run      # preview without writing or pushing
 ```
 
-`devkit tag` bumps the version in every publishable `packages/*/package.json`
+`dbxtools tag` bumps the version in every publishable `packages/*/package.json`
 (they're fixed, so they always bump together), commits the bump as
 `chore: release v<version>`, pushes the commit, then creates and pushes the
 `v<version>` tag with a `Release v<version>` message. After pushing the tag it

@@ -61,7 +61,7 @@ type WorkspaceMountResolver = (
 ) => WorkspaceMountContribution | Promise<WorkspaceMountContribution>;
 
 /** Options for {@link createWorkspace}. */
-interface CreateWorkspaceOptions {
+export interface CreateWorkspaceOptions {
   /** Workspace id; derived from `name` or `"workspace"` when omitted. */
   id?: string;
   /** Display name; derived from `id` when omitted. */
@@ -138,9 +138,7 @@ function userAssistantSkillsPath(userEmail: string): string {
  * Return whether the request token carries a scope that allows workspace
  * file API access (`workspace` or `all-apis` on {@link MASTRA_SCOPES_KEY}).
  */
-function hasWorkspaceFileScope(
-  requestContext: RequestContext | undefined,
-): boolean {
+function hasWorkspaceFileScope(requestContext: RequestContext | undefined): boolean {
   return tokenUtils.includesAccessTokenScope(
     requestContext?.get(MASTRA_SCOPES_KEY),
     WORKSPACE_FILE_SCOPES,

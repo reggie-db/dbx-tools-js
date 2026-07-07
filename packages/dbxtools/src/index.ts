@@ -1,7 +1,7 @@
 /**
- * @dbx-tools/devkit: monorepo scaffold, codegen, verification, and tag helpers.
+ * @dbx-tools/dbxtools: monorepo scaffold, codegen, verification, and tag helpers.
  *
- * The `devkit` bin wraps these same functions as a CLI; importing them
+ * The `dbxtools` bin wraps these same functions as a CLI; importing them
  * directly lets a consuming project compose its own automation.
  */
 
@@ -19,7 +19,7 @@ export {
   type AgentResult,
 } from "./agent.js";
 export { codegen } from "./codegen.js";
-export { getDevkitConfig, type DevkitConfig } from "./config.js";
+export { getDbxtoolsConfig, type DbxtoolsConfig } from "./config.js";
 export { create, type CreateOptions } from "./create.js";
 export { format } from "./format.js";
 export { git } from "./git.js";

@@ -39,7 +39,7 @@ import {
   agentTimedOut,
   runAgent,
 } from "./agent.js";
-import { getDevkitConfig } from "./config.js";
+import { getDbxtoolsConfig } from "./config.js";
 import { git, requireGitRepo } from "./git.js";
 import { discoverPackages, writeJson } from "./package.js";
 import { fail, errorMessage, nonEmptyLines } from "./script.js";
@@ -419,9 +419,9 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
 
   // Tagging commits, tags, and pushes - all of which need git and a
   // repo. Fail upfront with a clear message rather than partway through.
-  await requireGitRepo("devkit tag");
+  await requireGitRepo("dbxtools tag");
 
-  const { repo } = await getDevkitConfig();
+  const { repo } = await getDbxtoolsConfig();
   const { version: currentVersion, pkgs } = await findPublishables();
   const nextVersion = semver.inc(currentVersion, bump);
   if (!nextVersion) {

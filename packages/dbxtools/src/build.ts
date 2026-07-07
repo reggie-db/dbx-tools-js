@@ -1,5 +1,5 @@
 // Build pipeline for the publishable workspace packages, run via
-// `devkit build`. Runs `codegen` first so the gitignored, SDK-derived
+// `dbxtools build`. Runs `codegen` first so the gitignored, SDK-derived
 // `generated/` trees exist before any package is compiled.
 //
 // Every publishable (non-private) package is compiled by the single

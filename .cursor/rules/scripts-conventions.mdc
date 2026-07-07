@@ -1,14 +1,14 @@
 ---
-description: Conventions for the @dbx-tools/devkit toolkit under packages/devkit
-globs: packages/devkit/**/*.ts
+description: Conventions for the @dbx-tools/dbxtools toolkit under packages/dbxtools
+globs: packages/dbxtools/**/*.ts
 alwaysApply: false
 ---
 
-# devkit toolkit conventions
+# dbxtools toolkit conventions
 
 The workspace build/scaffold/release toolkit lives in
-`packages/devkit` as the publishable `@dbx-tools/devkit` package. The
-`devkit` bin (`bin/devkit.ts`) is a thin commander dispatcher; each
+`packages/dbxtools` as the publishable `@dbx-tools/dbxtools` package. The
+`dbxtools` bin (`bin/dbxtools.ts`) is a thin commander dispatcher; each
 subcommand delegates to a function in `src/` that is also exported
 from the package root for programmatic use. Shared plumbing is split
 by concern - reach for it before pulling in new deps or rolling your
@@ -22,12 +22,12 @@ own:
 - `src/script.ts` - `runScript`, `fail`, `errorMessage`,
   `nonEmptyLines`.
 - `src/project.ts` - `getProject` (the pacwich `FileSystemProject`).
-- `src/config.ts` - `getDevkitConfig` (auto-derived scope + repo +
-  shared-helpers package, overridable via a `devkit` key in the
+- `src/config.ts` - `getDbxtoolsConfig` (auto-derived scope + repo +
+  shared-helpers package, overridable via a `dbxtools` key in the
   consuming repo's root `package.json`).
 
 New command modules export a plain async function and are wired into
-`bin/devkit.ts`; keep CLI option parsing in the bin, not the module.
+`bin/dbxtools.ts`; keep CLI option parsing in the bin, not the module.
 
 ## Always await the shell helpers
 

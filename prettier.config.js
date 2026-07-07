@@ -9,8 +9,8 @@ export default {
   bracketSpacing: true,
   arrowParens: "always",
   // `prettier-plugin-organize-imports` (drops unused imports and sorts
-  // the rest) is injected by `devkit format` via an absolute path
-  // resolved from devkit's own install, so it isn't listed here by name
+  // the rest) is injected by `dbxtools format` via an absolute path
+  // resolved from dbxtools's own install, so it isn't listed here by name
   // - a bare name wouldn't resolve when the package manager nests the
-  // plugin under `packages/devkit/node_modules` instead of hoisting it.
+  // plugin under `packages/dbxtools/node_modules` instead of hoisting it.
 };

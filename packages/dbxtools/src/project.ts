@@ -2,7 +2,7 @@
 // `pacwich run` the project root comes from the injected workspace-script
 // metadata; run directly it falls back to pacwich's own cwd-based
 // discovery, so the toolkit works the same whether it is invoked through
-// the `devkit` bin or imported as a library.
+// the `dbxtools` bin or imported as a library.
 
 import pMemoize from "p-memoize";
 import {

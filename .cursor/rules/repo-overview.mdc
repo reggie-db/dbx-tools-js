@@ -13,7 +13,7 @@ Databricks Apps. Sixteen publishable packages plus a runnable demo.
 | Path | Package | Role |
 | --- | --- | --- |
 | `packages/shared` | `@dbx-tools/shared` | Plugin lookup, cookies, strings, logger, memoize, auth-aware REST helper, access-token scope parsing (`tokenUtils`). Browser-safe surface via `index.client.ts`. |
-| `packages/sdk-shared` | `@dbx-tools/sdk-shared` | Zod schemas regenerated from Databricks SDK `.d.ts` (driven by `devkit codegen`). |
+| `packages/sdk-shared` | `@dbx-tools/sdk-shared` | Zod schemas regenerated from Databricks SDK `.d.ts` (driven by `dbxtools codegen`). |
 | `packages/genie-shared` | `@dbx-tools/genie-shared` | Wire-format types + `GenieChatEvent` union for Genie streaming. |
 | `packages/genie` | `@dbx-tools/genie` | `genieChat` (raw) + `genieEventChat` (semantic events) drivers. |
 | `packages/model-shared` | `@dbx-tools/model-shared` | Pure Model Serving capability tiers, score profile, endpoint descriptor, and tier classifier (browser-safe). |
@@ -26,7 +26,7 @@ Databricks Apps. Sixteen publishable packages plus a runnable demo.
 | `packages/appkit-email` | `@dbx-tools/appkit-email` | AppKit `email` plugin + approval-gated `send_email` Mastra tool. Sends over SMTP (sender derived from the OBO user on a configured domain), or, with no SMTP credentials, writes each email as HTML to a local outbox dir for testing. |
 | `packages/appkit-email-shared` | `@dbx-tools/appkit-email-shared` | Dependency-free email message / result contract (zod schemas + inferred types). |
 | `packages/appkit-email-ui` | `@dbx-tools/appkit-email-ui` | React `EmailPreview` / `EmailApprovalCard` for the `send_email` approval flow (`./react`). |
-| `packages/devkit` | `@dbx-tools/devkit` | The `devkit` build/scaffold/release toolkit behind the root `build`/`typecheck`/`format`/`codegen`/`verify`/`create`/`tag`/`release` scripts. Ships a `devkit` bin + library API; reusable as a dev dependency in other Bun monorepos. |
+| `packages/dbxtools` | `@dbx-tools/dbxtools` | The `dbxtools` build/scaffold/release toolkit behind the root `build`/`typecheck`/`format`/`codegen`/`verify`/`create`/`tag`/`release` scripts. Ships a `dbxtools` bin + library API; reusable as a dev dependency in other Bun monorepos. |
 | `packages/zerobus` | `@dbx-tools/zerobus` | Thin wrapper over the Databricks Zerobus ingest SDK. |
 | `demo` | `@dbx-tools/appkit-demo` | Private runnable Databricks App that wires everything up. |
 

@@ -1,4 +1,4 @@
-// Workspace formatter, run via `devkit format`:
+// Workspace formatter, run via `dbxtools format`:
 //
 //   - `syncpack format` normalizes every `package.json` in the
 //     workspace (key order, sorted dependency ranges, etc.).
@@ -26,8 +26,8 @@ import {
 } from "./package.js";
 import { bunx, sh } from "./shell.js";
 
-// Resolve against devkit's *own* install location (this module), so
-// `prettier` and its plugin always come from devkit's pinned deps -
+// Resolve against dbxtools's *own* install location (this module), so
+// `prettier` and its plugin always come from dbxtools's pinned deps -
 // not from a `bun x` temp download, where bare specifiers can't be
 // found. `import.meta.url` survives bundling and points at the shipped
 // dist file inside the consuming repo's node_modules.
@@ -117,11 +117,11 @@ export async function format(): Promise<void> {
       : "No lifecycle scripts to regroup.",
   );
 
-  // prettier over every workspace package, run from devkit's pinned
+  // prettier over every workspace package, run from dbxtools's pinned
   // prettier with the organize-imports plugin supplied by absolute path
   // (the root config carries options only; the plugin is injected here
   // so it resolves no matter where the package manager installed it).
-  // Both binary and plugin are resolved from devkit's own install rather
+  // Both binary and plugin are resolved from dbxtools's own install rather
   // than via `bun x`, which would fetch a throwaway prettier into a temp
   // dir that can't see the plugin. Capture stdout (where prettier lists
   // every visited file) so we can drop its noisy "<file> (unchanged)"

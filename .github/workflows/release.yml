@@ -12,7 +12,7 @@ name: Release
 #   bun run tag                           # create + push v<version>
 #
 # The tag push fires this workflow. `bun run release` runs
-# `devkit release` from `@dbx-tools/devkit`, which builds every
+# `dbxtools release` from `@dbx-tools/dbxtools`, which builds every
 # publishable package and then publishes each with `bun publish`. The
 # build step is intentionally not duplicated here: `release` already
 # builds before it publishes. Just before each `bun publish`, `release`

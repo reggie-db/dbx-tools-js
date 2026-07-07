@@ -1,4 +1,4 @@
-// Workspace integrity check, run via `devkit verify`.
+// Workspace integrity check, run via `dbxtools verify`.
 //
 // Wraps pacwich's `verify`, which scans every workspace's source for
 // imports of sibling workspace packages that aren't declared as a

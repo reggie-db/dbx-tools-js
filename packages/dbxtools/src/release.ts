@@ -1,5 +1,5 @@
 // Publish pipeline for the publishable workspace packages, run via
-// `devkit release` (add `--dry-run` to rehearse without publishing).
+// `dbxtools release` (add `--dry-run` to rehearse without publishing).
 //
 // Source `package.json` files are deliberately minimal: name, version,
 // `type`, the deps, and a one-line `exports` pointer at the package's
