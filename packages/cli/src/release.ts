@@ -36,6 +36,8 @@
 //   - `main`/`types` derive from the `.` export when present, else the
 //     first expanded subpath; both, plus `files`/`license`/`type`, are
 //     only filled when the manifest hasn't already set them.
+//   - `bin` entries that point at `./bin/*.ts` in the source manifest are
+//     rewritten to the matching `./dist/bin/*.js` built entry.
 
 import { consola } from "consola";
 import { build } from "./build.js";
@@ -104,6 +106,27 @@ function resolveWorkspaceDeps(
     if (version) next[name] = resolveWorkspaceSpec(spec, version);
   }
   return next;
+}
+
+/** Rewrite dev `bin` pointers (`./bin/foo.ts`) to built `dist` targets. */
+function stampBin(meta: PackageJson): PackageJson {
+  const bin = meta.bin;
+  if (!bin) return meta;
+
+  const stampTarget = (target: string): string =>
+    /^\.\/bin\/[^/]+\.[cm]?tsx?$/.test(target)
+      ? target.replace(/^\.\/bin\/(.+)\.[cm]?tsx?$/, "./dist/bin/$1.js")
+      : target;
+
+  if (typeof bin === "string") {
+    return { ...meta, bin: stampTarget(bin) };
+  }
+
+  const next: Record<string, string> = {};
+  for (const [name, target] of Object.entries(bin)) {
+    next[name] = stampTarget(target);
+  }
+  return { ...meta, bin: next };
 }
 
 /**
@@ -182,7 +205,7 @@ function stampManifest(
   ) {
     stamped.publishConfig = { access: "public" };
   }
-  return stamped;
+  return stampBin(stamped);
 }
 
 /**

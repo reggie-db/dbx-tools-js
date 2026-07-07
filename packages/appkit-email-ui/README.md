@@ -20,7 +20,8 @@ everywhere.
 npm install @dbx-tools/appkit-email-ui
 ```
 
-Peers: `@databricks/appkit-ui`, `react`, `react-dom`.
+Peers are satisfied transitively via [`@dbx-tools/appkit-ui`](../appkit-ui)
+(`@databricks/appkit-ui`, `react`, `react-dom`).
 
 ## Usage
 

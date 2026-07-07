@@ -1,0 +1,19 @@
+/*
+ * @dbx-tools/appkit-ui shared stylesheet.
+ *
+ * Feature UI packages (`appkit-email-ui`, `appkit-mastra-ui`, ...) import
+ * this once and add their own `@source` for local class strings.
+ *
+ * Provides:
+ *   1. Streamdown's base stylesheet (markdown / code-block layout).
+ *   2. The shiki token-paint shim used by Streamdown renderers.
+ */
+
+@import "tailwindcss";
+@import "streamdown/styles.css";
+
+@source "./react";
+
+[data-streamdown="code-block-body"] code span {
+  color: var(--sdm-c, inherit);
+}

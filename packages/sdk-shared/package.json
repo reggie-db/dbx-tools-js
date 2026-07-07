@@ -1,13 +1,13 @@
 {
   "name": "@dbx-tools/sdk-shared",
-  "version": "0.1.103",
+  "version": "0.1.104",
   "codegen": {
     "inputs": [
       "node_modules/@databricks/sdk-experimental/dist/apis/dashboards/model.d.ts"
     ]
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "catalog:"
   },
   "exports": {
     ".": "./src/index.ts"

@@ -1,13 +1,13 @@
 ---
-description: Conventions for the @dbx-tools/cli toolkit under packages/dbxtools
-globs: packages/dbxtools/**/*.ts
+description: Conventions for the @dbx-tools/cli toolkit under packages/cli
+globs: packages/cli/**/*.ts
 alwaysApply: false
 ---
 
 # dbxtools toolkit conventions
 
 The workspace build/scaffold/release toolkit lives in
-`packages/dbxtools` as the publishable `@dbx-tools/cli` package. The
+`packages/cli` as the publishable `@dbx-tools/cli` package. The
 `dbxtools` bin (`bin/dbxtools.ts`) is a thin commander dispatcher; each
 subcommand delegates to a function in `src/` that is also exported
 from the package root for programmatic use. Shared plumbing is split

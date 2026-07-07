@@ -11,19 +11,10 @@
  * Defines NO design tokens - the email preview styles exclusively with
  * AppKit semantic tokens and inherits the host app's theme.
  *
- * Provides:
- *   1. Streamdown's base stylesheet (the email body renders through it).
- *   2. `@source` so the consumer's Tailwind scans this package's class
- *      strings. The path is relative to this file and resolves against
- *      the published `src/` tree, so it works in-repo and for installed
- *      consumers.
- *   3. The shiki token-paint shim (shared with the markdown renderer).
+ * Pulls shared Streamdown / shiki styling from `@dbx-tools/appkit-ui` and
+ * registers this package's React components with Tailwind via `@source`.
  */
 
-@import "streamdown/styles.css";
+@import "@dbx-tools/appkit-ui/styles.css";
 
 @source "./react";
-
-[data-streamdown="code-block-body"] code span {
-  color: var(--sdm-c, inherit);
-}

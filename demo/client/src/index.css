@@ -1,9 +1,6 @@
 @import "@databricks/appkit-ui/styles.css";
-@import "tailwindcss";
-/* Chat UI styles: pulls in Streamdown's base CSS, registers the
-   package source with Tailwind (`@source`), and paints shiki's
-   per-token colors. Defines no design tokens - the chat inherits this
-   app's AppKit theme. */
+@import "@dbx-tools/appkit-ui/styles.css";
+/* Feature UI styles: Streamdown base, Tailwind `@source`, shiki shim. */
 @import "@dbx-tools/appkit-mastra-ui/styles.css";
 
 html,

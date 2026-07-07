@@ -45,8 +45,15 @@ program
 
 program
   .command("verify")
-  .description("Fail on imports of sibling packages not declared as dependencies.")
-  .action(verify);
+  .description("Workspace verify pass (optional sibling dependency scan).")
+  .option(
+    "--workspace-deps",
+    "fail on imports of sibling packages not declared as dependencies",
+    false,
+  )
+  .action(async (opts: { workspaceDeps: boolean }) => {
+    await verify({ workspaceDeps: opts.workspaceDeps });
+  });
 
 program
   .command("update")

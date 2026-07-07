@@ -5,7 +5,7 @@ shapes the rest of the `@dbx-tools/*` packages consume. Everything
 under `./generated/` is regenerated from upstream
 `@databricks/sdk-experimental` `.d.ts` declarations by the
 `dbxtools codegen` command (see
-[`@dbx-tools/dbxtools`](../dbxtools)); nothing in here is
+[`@dbx-tools/cli`](../cli)); nothing in here is
 hand-maintained.
 
 ```ts

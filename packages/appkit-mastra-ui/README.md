@@ -13,8 +13,9 @@ semantic tokens.
 npm install @dbx-tools/appkit-mastra-ui
 ```
 
-Peer dependencies: `react`, `react-dom`, `@databricks/appkit-ui`, and
-`ai` (for the `UIMessage` type).
+Peer dependencies: `ai` (for the `UIMessage` type). React, React DOM, and
+`@databricks/appkit-ui` are provided transitively via
+[`@dbx-tools/appkit-ui`](../appkit-ui).
 
 ## Styles
 
@@ -29,7 +30,8 @@ your AppKit-UI theme:
 
 The stylesheet defines no core design tokens; the components style with
 AppKit semantic tokens (`--background`, `--primary`, `--success`,
-`--destructive`, `--warning`, ...) and inherit the host theme.
+`--destructive`, `--warning`, ...) and inherit the host theme. Shared
+Streamdown / shiki styling comes from `@dbx-tools/appkit-ui`.
 
 ## Drop-in: `MastraChat`
 

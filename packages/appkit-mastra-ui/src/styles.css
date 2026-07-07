@@ -13,17 +13,10 @@
  * AppKit semantic tokens, so it inherits whatever theme the host app
  * provides and restyles to match the surrounding brand for free.
  *
- * What it does provide:
- *   1. Streamdown's base stylesheet (markdown / code-block layout).
- *   2. `@source` so the consumer's Tailwind scans this package's class
- *      strings and generates the utilities the components rely on.
- *   3. The shiki token-paint shim (shared with the markdown renderer).
+ * Pulls shared Streamdown / shiki styling from `@dbx-tools/appkit-ui` and
+ * registers this package's React components with Tailwind via `@source`.
  */
 
-@import "streamdown/styles.css";
+@import "@dbx-tools/appkit-ui/styles.css";
 
 @source "./react";
-
-[data-streamdown="code-block-body"] code span {
-  color: var(--sdm-c, inherit);
-}

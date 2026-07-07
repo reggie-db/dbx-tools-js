@@ -10,7 +10,7 @@ Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
 Databricks Apps. The publishable packages plus a runnable demo. See
 the root [`README.md`](README.md) for the full package table. The
 workspace build/scaffold/release tooling itself ships as the
-`@dbx-tools/dbxtools` package (the `dbxtools` bin behind the root scripts).
+`@dbx-tools/cli` package (the `dbxtools` bin behind the root scripts).
 
 ```bash
 bun install                 # from repo root
@@ -44,7 +44,7 @@ a doc edit and the list rots); a symbol's own docstring may name what
 it documents. See
 [`.cursor/rules/docstring-style.mdc`](.cursor/rules/docstring-style.mdc).
 
-### 3. Workspace tooling (`@dbx-tools/dbxtools`)
+### 3. Workspace tooling (`@dbx-tools/cli`)
 
 - Always `await sh(...)` / `await bunx(...)` from `src/shell.ts`.
 - Use `discoverPackages()` / `discoverPackageJsons()` instead of

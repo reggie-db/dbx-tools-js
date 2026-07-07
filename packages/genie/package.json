@@ -1,8 +1,8 @@
 {
   "name": "@dbx-tools/genie",
-  "version": "0.1.103",
+  "version": "0.1.104",
   "dependencies": {
-    "@databricks/sdk-experimental": "^0.17.0",
+    "@databricks/sdk-experimental": "catalog:",
     "@dbx-tools/genie-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*"
   },

@@ -2,17 +2,21 @@
   "name": "@dbx-tools/appkit-demo",
   "version": "1.0.0",
   "dependencies": {
-    "@databricks/appkit": "^0.43.0",
-    "@databricks/appkit-ui": "^0.43.0",
+    "@databricks/appkit": "catalog:",
+    "@databricks/appkit-ui": "catalog:",
     "@dbx-tools/appkit-config": "workspace:*",
     "@dbx-tools/appkit-email": "workspace:*",
     "@dbx-tools/appkit-mastra": "workspace:*",
     "@dbx-tools/appkit-mastra-ui": "workspace:*",
+    "@dbx-tools/appkit-ui": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "react-router-dom": "^7.18.1",
-    "zod": "^4.4.3"
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "vite": "catalog:"
   },
   "license": "Apache-2.0",
   "main": "dist/server.js",

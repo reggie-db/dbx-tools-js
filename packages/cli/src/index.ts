@@ -46,4 +46,4 @@ export {
   update,
   updateCatalog,
 } from "./update.js";
-export { verify } from "./verify.js";
+export { verify, type VerifyOptions } from "./verify.js";

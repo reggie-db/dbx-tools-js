@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-config",
-  "version": "0.1.103",
+  "version": "0.1.104",
   "dependencies": {
     "@dbx-tools/shared": "workspace:*"
   },
@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "peerDependencies": {
-    "@databricks/appkit": "^0.43.0"
+    "@databricks/appkit": "catalog:"
   },
   "type": "module"
 }

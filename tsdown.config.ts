@@ -121,9 +121,17 @@ function collectAssets(node: unknown): void {
 collectAssets(pkg.exports);
 
 // A `bin` target like `dist/cli.js` ships built JS, so find the source that
-// emits to it (`src/cli.ts`, `cli.ts`, ...) and build that too.
+// emits to it (`src/cli.ts`, `cli.ts`, ...). A dev pointer like
+// `./bin/dbxtools.ts` is also accepted and built directly.
 const bins = typeof pkg.bin === "string" ? { default: pkg.bin } : (pkg.bin ?? {});
 for (const target of Object.values(bins)) {
+  if (TS_EXT.test(target) && target.startsWith("./")) {
+    const source = resolve(pkgDir, target.replace(/^\.\//, ""));
+    if (existsSync(source)) {
+      entry[entryKey(target)] = source;
+      continue;
+    }
+  }
   const key = target
     .replace(/^\.\//, "")
     .replace(/^dist\//, "")

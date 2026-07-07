@@ -1,31 +1,25 @@
 {
   "name": "@dbx-tools/appkit-mastra-ui",
-  "version": "0.1.103",
+  "version": "0.1.104",
   "dependencies": {
+    "@dbx-tools/appkit-email-ui": "workspace:*",
     "@dbx-tools/appkit-mastra-shared": "workspace:*",
+    "@dbx-tools/appkit-ui": "workspace:*",
     "@dbx-tools/genie-shared": "workspace:*",
-    "@dbx-tools/shared": "workspace:*",
-    "@mastra/client-js": "^1.28.0",
+    "@mastra/client-js": "catalog:",
     "@tanstack/react-table": "^8.21.3",
     "ai": "^5.0.193",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
-    "lucide-react": "^0.554.0",
-    "marked": "^18.0.5",
+    "marked": "catalog:",
     "nanoid": "^5.1.16",
     "shiki": "^4.3.0",
-    "sql-formatter": "^15.8.2",
-    "streamdown": "^2.5.0"
+    "sql-formatter": "^15.8.2"
   },
   "exports": {
     "./react": "./src/react/index.ts",
     "./styles.css": "./src/styles.css",
     "./package.json": "./package.json"
-  },
-  "peerDependencies": {
-    "@databricks/appkit-ui": "^0.43.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
   },
   "type": "module"
 }

@@ -1,4 +1,4 @@
-# @dbx-tools/dbxtools
+# @dbx-tools/cli
 
 Scaffold, formatting, codegen, verification, build, and release helpers for Bun +
 workspaces monorepos. It wraps the shared `tsdown` config for building and a
@@ -8,7 +8,7 @@ orthogonal to writing package code.
 ## Installation
 
 ```bash
-bun add -d @dbx-tools/dbxtools
+bun add -d @dbx-tools/cli
 ```
 
 Then point your root `package.json` scripts at the `dbxtools` bin for the helper
@@ -35,7 +35,7 @@ commands you want:
 | `dbxtools format`                             | `syncpack format`, regroup lifecycle hooks, then `prettier --write`.                                 |
 | `dbxtools build`                              | Compile every publishable package with the shared `tsdown` config.                                   |
 | `dbxtools codegen`                            | Regenerate each package's `generated/` zod tree from the `.d.ts` inputs its `package.json` declares. |
-| `dbxtools verify`                             | Fail on imports of sibling packages not declared as dependencies.                                    |
+| `dbxtools verify [--workspace-deps]`          | Workspace verify pass; `--workspace-deps` fails on undeclared sibling imports.                       |
 | `dbxtools create [--plugin\|--shared] <slug>` | Scaffold a new package under `packages/<slug>/`.                                                     |
 | `dbxtools release [--dry-run]`                | Build, then publish each package with a stamped (complete) manifest.                                 |
 | `dbxtools tag [patch\|minor\|major]`          | Version bump, commit, tag, push, and create a GitHub Release. `--notes-since v0.1.75` widens the notes baseline; default is the previous tag. `--no-ai-notes` skips Codex release notes. |
@@ -69,7 +69,7 @@ The same commands are exported as functions for projects that want to compose
 their own automation:
 
 ```ts
-import { build, codegen, create, release, tag, verify } from "@dbx-tools/dbxtools";
+import { build, codegen, create, release, tag, verify } from "@dbx-tools/cli";
 
 await build();
 await codegen();

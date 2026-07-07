@@ -1,12 +1,12 @@
 {
   "name": "@dbx-tools/cli",
-  "version": "0.1.103",
+  "version": "0.1.104",
   "bin": {
-    "dbxtools": "./dist/bin/dbxtools.js"
+    "dbxtools": "./bin/dbxtools.ts"
   },
   "dependencies": {
     "@types/semver": "^7.7.1",
-    "commander": "^15.0.0",
+    "commander": "catalog:",
     "consola": "^3.4.2",
     "p-memoize": "^8.0.0",
     "pacwich": "^0.1.2",
@@ -14,7 +14,7 @@
     "prettier-plugin-organize-imports": "^4.3.0",
     "semver": "^7.8.5",
     "ts-to-zod": "^5.1.0",
-    "typescript": "^5.9.3"
+    "typescript": "catalog:"
   },
   "exports": {
     ".": "./src/index.ts"
