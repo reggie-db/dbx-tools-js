@@ -39,7 +39,7 @@ const ASSISTANT_WORKSPACE_SKILLS_MOUNT = "/workspace_skills";
 const ASSISTANT_USER_SKILLS_MOUNT = "/workspace_user_skills";
 
 /** OAuth scopes that gate Databricks workspace file mounts. */
-const WORKSPACE_FILE_SCOPES = ["workspace", "all-apis"] as const;
+const WORKSPACE_FILE_SCOPES = ["workspace", "workspace.workspace", "all-apis"] as const;
 
 const log = logUtils.logger("mastra/workspaces");
 
@@ -110,7 +110,9 @@ export function createWorkspace(options: CreateWorkspaceOptions = {}): Workspace
   const skills =
     options.skills ??
     (resolvers.length > 0 ? buildWorkspaceSkillsResolver(resolvers) : undefined);
-
+  const checkSkillFileMtime =
+    options.checkSkillFileMtime ?? options.assistantSkills !== false;
+  const bm25 = options.bm25 !== false;
   log.debug("workspace:create", {
     id,
     name,
@@ -118,9 +120,8 @@ export function createWorkspace(options: CreateWorkspaceOptions = {}): Workspace
     assistantSkills: options.assistantSkills !== false,
     customMountResolvers: options.mounts?.length ?? 0,
     customSkillsResolver: Boolean(options.skills),
-    checkSkillFileMtime:
-      options.checkSkillFileMtime ?? options.assistantSkills !== false,
-    bm25: options.bm25 !== false,
+    checkSkillFileMtime,
+    bm25,
   });
 
   return new Workspace({
@@ -130,11 +131,10 @@ export function createWorkspace(options: CreateWorkspaceOptions = {}): Workspace
     ...(skills
       ? {
           skills,
-          checkSkillFileMtime:
-            options.checkSkillFileMtime ?? options.assistantSkills !== false,
+          checkSkillFileMtime,
         }
       : {}),
-    ...(options.bm25 !== false ? { bm25: true } : {}),
+    bm25,
   });
 }
 
@@ -175,9 +175,7 @@ function resolveAssistantSkillsMounts(
 
   if (!shouldMountAssistantSkills(requestContext)) {
     log.debug("assistant-skills:skipped", {
-      reason: !requestContext
-        ? "no-request-context"
-        : "missing-workspace-scope",
+      reason: !requestContext ? "no-request-context" : "missing-workspace-scope",
       nodeEnv: process.env.NODE_ENV,
       scopes: context.requestContext?.get(MASTRA_SCOPES_KEY),
     });
