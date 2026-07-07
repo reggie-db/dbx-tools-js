@@ -1,5 +1,5 @@
 /**
- * @dbx-tools/dbxtools: monorepo scaffold, codegen, verification, and tag helpers.
+ * @dbx-tools/cli: monorepo scaffold, codegen, verification, and tag helpers.
  *
  * The `dbxtools` bin wraps these same functions as a CLI; importing them
  * directly lets a consuming project compose its own automation.

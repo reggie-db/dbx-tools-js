@@ -21,7 +21,7 @@ bun run tag major           # major bump
 bun run tag --dry-run       # preview without writing or pushing
 ```
 
-`dbxtools tag` (the `tag()` function in `@dbx-tools/dbxtools`) handles the
+`dbxtools tag` (the `tag()` function in `@dbx-tools/cli`) handles the
 full sequence in one shot:
 
 1. Reads the shared version from the first publishable package and
@@ -48,7 +48,7 @@ bun run release                     # build + real publish
 ```
 
 `dbxtools release` first runs `dbxtools build`, then for each publishable
-package it temporarily *stamps* a complete `package.json` (expands the
+package it temporarily _stamps_ a complete `package.json` (expands the
 slim `exports` source pointer into the `source`/`types`/`default`
 shape and fills in `main`, `types`, `files`, `license`, `type`), runs
 `bun publish` from the package dir, and restores the original slim
