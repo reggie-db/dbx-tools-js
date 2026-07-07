@@ -395,7 +395,12 @@ export function parseCidr(input: string): Cidr | null {
   const bits = IP_BITS[ip.version];
   if (prefix > bits) return null;
   const base = ip.value & networkMask(bits, prefix);
-  return { version: ip.version, base, prefix, cidr: `${text.slice(0, slash)}/${prefix}` };
+  return {
+    version: ip.version,
+    base,
+    prefix,
+    cidr: `${text.slice(0, slash)}/${prefix}`,
+  };
 }
 
 /**

@@ -18,6 +18,7 @@ export * from "./chart.js";
 export * from "./config.js";
 export {
   DatabricksWorkspaceFilesystem,
+  type DatabricksMkdirsMode,
   type DatabricksWorkspaceFilesystemOptions,
   emptyFilesystem,
   isDbfsPath,

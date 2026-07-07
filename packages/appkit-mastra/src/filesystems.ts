@@ -11,8 +11,8 @@
  * paths without constructing a filesystem.
  */
 
-import { ApiError, WorkspaceClient } from "@databricks/sdk-experimental";
-import { apiUtils, commonUtils } from "@dbx-tools/shared";
+import { WorkspaceClient } from "@databricks/sdk-experimental";
+import { apiUtils, commonUtils, logUtils } from "@dbx-tools/shared";
 import type {
   CopyOptions,
   FileContent,
@@ -47,7 +47,29 @@ const DBFS_READ_CHUNK_BYTES = 1024 * 1024;
 const DBFS_PUT_MAX_BYTES = 1024 * 1024;
 const EMPTY_FILESYSTEM_EPOCH = new Date(0);
 
-/* -------------------------------- types -------------------------------- */
+/** Mastra error constructor for a known SDK filesystem failure, if any. */
+function filesystemSdkErrorType(
+  err: unknown,
+): (new (path: string) => Error) | undefined {
+  if (err) {
+    const ctx = apiUtils.errorContext(err);
+    if (ctx.notAccessible) {
+      return FileNotFoundError;
+    } else if (ctx.hasMessage("already", "exists")) {
+      return FileExistsError;
+    } else if (ctx.hasMessage("not", "directory")) {
+      return NotDirectoryError;
+    } else if (ctx.hasMessage("not", "file")) {
+      return IsDirectoryError;
+    }
+  }
+  return undefined;
+}
+
+const log = logUtils.logger("mastra/filesystems");
+
+/** How {@link DatabricksWorkspaceFilesystem.init} handles a missing {@link basePath}. */
+export type DatabricksMkdirsMode = boolean | "try";
 
 /** Options for {@link DatabricksWorkspaceFilesystem}. */
 export interface DatabricksWorkspaceFilesystemOptions extends MastraFilesystemOptions {
@@ -61,12 +83,16 @@ export interface DatabricksWorkspaceFilesystemOptions extends MastraFilesystemOp
    */
   basePath: string;
   /**
-   * When `true`, {@link init} and file operations fail if {@link basePath}
-   * is missing. When `false` (default), a missing base path yields an empty
-   * read-only namespace (only `/` exists).
+   * When the {@link basePath} is missing at {@link init}, create it with the
+   * matching Databricks `mkdirs` API. `"try"` (default) logs at debug and
+   * falls back to an empty read-only namespace on failure; `true` fails init;
+   * `false` skips creation and uses the empty namespace.
+   *
+   * A successful mkdir also satisfies the write-access probe when
+   * {@link readOnly} is omitted.
    */
-  requireBasePath?: boolean;
-  /** Block writes while still allowing reads. When omitted, {@link DatabricksWorkspaceFilesystem.init} probes write access. */
+  mkdirs?: DatabricksMkdirsMode;
+  /** Block writes while still allowing reads. When omitted, {@link init} probes write access. */
   readOnly?: boolean;
 }
 
@@ -158,10 +184,7 @@ async function dispatchFilesBackend<T>(
 }
 
 /** Return `buffer` as a string when `encoding` is set, otherwise unchanged. */
-function formatReadResult(
-  buffer: Buffer,
-  encoding?: BufferEncoding,
-): string | Buffer {
+function formatReadResult(buffer: Buffer, encoding?: BufferEncoding): string | Buffer {
   return encoding ? buffer.toString(encoding) : buffer;
 }
 
@@ -227,7 +250,7 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
   status: ProviderStatus = "pending";
 
   private readonly client: WorkspaceClient;
-  private readonly requireBasePath: boolean;
+  private readonly mkdirs: DatabricksMkdirsMode;
   private _readOnly: boolean | undefined;
   private _basePathMissing: boolean | undefined;
 
@@ -237,16 +260,15 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
 
   /**
    * @param options.client - Defaults to the AppKit execution-context client.
+   * @param options.mkdirs - Default `"try"`; see {@link DatabricksMkdirsMode}.
    * @param options.readOnly - When omitted, {@link init} probes write access.
-   * @param options.requireBasePath - When `false` (default), a missing
-   *   {@link basePath} yields an empty namespace instead of errors.
    */
   constructor(options: DatabricksWorkspaceFilesystemOptions) {
     super({ name: "DatabricksWorkspaceFilesystem", ...options });
     this.id = options.id ?? `databricks-fs-${commonUtils.fnvHash(options.basePath)}`;
     this.client = options.client ?? getExecutionContext().client;
     this.basePath = normalizeDatabricksBasePath(options.basePath);
-    this.requireBasePath = options.requireBasePath ?? false;
+    this.mkdirs = options.mkdirs ?? "try";
     this._readOnly = options.readOnly;
   }
 
@@ -278,17 +300,9 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
     const workspacePath = inputPath.startsWith("/")
       ? inputPath
       : this.workspacePath(this.resolvePath(inputPath));
-    if (apiUtils.isNotFoundError(err)) {
-      throw new FileNotFoundError(workspacePath);
-    }
-    if (err instanceof ApiError && err.errorCode === "RESOURCE_ALREADY_EXISTS") {
-      throw new FileExistsError(workspacePath);
-    }
-    if (err instanceof ApiError && err.errorCode === "NOT_DIRECTORY") {
-      throw new NotDirectoryError(workspacePath);
-    }
-    if (err instanceof ApiError && err.errorCode === "NOT_A_FILE") {
-      throw new IsDirectoryError(workspacePath);
+    const ErrorType = filesystemSdkErrorType(err);
+    if (ErrorType) {
+      throw new ErrorType(workspacePath);
     }
     const message = commonUtils.errorMessage(err);
     throw new Error(`Databricks filesystem ${workspacePath}: ${message}`);
@@ -297,8 +311,8 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
   /* --- lifecycle --- */
 
   /**
-   * When {@link requireBasePath} is `false`, probe whether {@link basePath}
-   * exists and cache the result on {@link _basePathMissing}.
+   * Probe whether {@link basePath} exists and cache the result on
+   * {@link _basePathMissing}.
    */
   private async resolveBasePathStatus(): Promise<void> {
     if (this._basePathMissing !== undefined) return;
@@ -306,7 +320,7 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
       await this.assertAbsoluteReadable(this.basePath);
       this._basePathMissing = false;
     } catch (err) {
-      if (!this.requireBasePath && apiUtils.isNotFoundError(err)) {
+      if (apiUtils.errorContext(err).notAccessible) {
         this._basePathMissing = true;
         return;
       }
@@ -314,42 +328,41 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
     }
   }
 
-  /** Delegate to {@link emptyFilesystem} when the optional base path is missing. */
-  private async emptyFallback(): Promise<ReturnType<typeof emptyFilesystem> | undefined> {
-    if (this.requireBasePath) return undefined;
+  /** Delegate to {@link emptyFilesystem} when the base path is missing. */
+  private async emptyFallback(): Promise<
+    ReturnType<typeof emptyFilesystem> | undefined
+  > {
     await this.resolveBasePathStatus();
     return this._basePathMissing ? emptyFilesystem() : undefined;
   }
 
   override async init(): Promise<void> {
     await this.resolveBasePathStatus();
-    if (this._basePathMissing) {
-      return;
-    }
 
-    if (!this.readOnly) {
-      await this.ensureBaseExists();
+    if (this._basePathMissing) {
+      if (this.mkdirs === false) {
+        return;
+      }
+      try {
+        await this.mkdirAbsolute(this.basePath);
+        this._basePathMissing = false;
+        if (this._readOnly === undefined) {
+          this._readOnly = false;
+        }
+      } catch (err) {
+        if (this.mkdirs === true) {
+          this.rethrow(err, "/");
+        }
+        log.debug("mkdirs:try-failed", {
+          basePath: this.basePath,
+          error: commonUtils.errorMessage(err),
+        });
+      }
+      return;
     }
 
     if (this._readOnly === undefined) {
       await this.probeReadOnly();
-    }
-  }
-
-  /**
-   * Create the base directory when missing and writes are allowed.
-   *
-   * Uses raw SDK errors for the not-found branch so {@link apiUtils.isNotFoundError}
-   * still matches before {@link rethrow} wraps them as Mastra errors.
-   */
-  private async ensureBaseExists(): Promise<void> {
-    try {
-      await this.assertAbsoluteReadable(this.basePath);
-    } catch (err) {
-      if (!apiUtils.isNotFoundError(err)) {
-        this.rethrow(err, "/");
-      }
-      await this.mkdirAbsolute(this.basePath);
     }
   }
 
@@ -435,8 +448,7 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
   /** Delete a single file at `absolutePath` (non-recursive). */
   private async deleteAbsoluteFile(absolutePath: string): Promise<void> {
     await dispatchFilesBackend(absolutePath, {
-      dbfs: () =>
-        this.client.dbfs.delete({ path: absolutePath, recursive: false }),
+      dbfs: () => this.client.dbfs.delete({ path: absolutePath, recursive: false }),
       workspace: () =>
         this.client.workspace.delete({ path: absolutePath, recursive: false }),
       ucFiles: () => this.client.files.delete({ file_path: absolutePath }),
@@ -947,7 +959,7 @@ export class DatabricksWorkspaceFilesystem extends MastraFilesystem {
         mimeType: metadata["content-type"],
       };
     } catch (fileErr) {
-      if (!apiUtils.isNotFoundError(fileErr)) {
+      if (!apiUtils.errorContext(fileErr).notAccessible) {
         this.rethrow(fileErr, inputPath);
       }
       await this.client.files.getDirectoryMetadata({

@@ -607,7 +607,7 @@ export class MastraPlugin extends Plugin<MastraPluginConfig> {
     } catch (err) {
       // The Databricks SDK throws on 404; surface as `undefined`
       // so the route maps to a clean HTTP 404 instead of a 500.
-      if (apiUtils.isNotFoundError(err)) return undefined;
+      if (apiUtils.errorContext(err).notAccessible) return undefined;
       throw err;
     }
   }

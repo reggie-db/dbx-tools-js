@@ -8,7 +8,7 @@
  * numbers so downstream charts and aggregations don't have to, plus a
  * hard row cap callers clamp `limit` to so a runaway result set can't
  * hose a response. Upstream 404s are detected via
- * `apiUtils.isNotFoundError` at the call sites.
+ * `apiUtils.errorContext(err).notFound` at the call sites.
  *
  * Not Genie-specific: a Databricks `statement_id` is workspace
  * scoped and lives in the Statement Execution API regardless of

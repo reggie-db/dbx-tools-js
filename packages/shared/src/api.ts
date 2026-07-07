@@ -11,12 +11,7 @@
  */
 
 import type { CancellationToken, Config } from "@databricks/sdk-experimental";
-import {
-  ApiError,
-  Context,
-  HttpError,
-  WorkspaceClient,
-} from "@databricks/sdk-experimental";
+import { Context, WorkspaceClient } from "@databricks/sdk-experimental";
 
 // Direct import (not via the barrel). The package's NodeNext module
 // resolution wants explicit `.js` extensions on relative imports, and
@@ -24,8 +19,9 @@ import {
 // `noEmit` typecheck with a missing-extension error. A direct sibling
 // import stays typed and doesn't risk a future cycle.
 import { tryGetExecutionContext } from "./appkit.js";
-import { memoize, tieAbortSignal } from "./common.js";
+import { memoize, tieAbortSignal, errorMessages, errorNodes } from "./common.js";
 import { urlBuilder, type UrlBuilder } from "./net.browser.js";
+import { tokenizeWithOptions } from "./string.js";
 
 /** Databricks workspace ids are a 10-20 digit run embedded in the host. */
 const WORKSPACE_ID_REGEX = /\d{10,20}/;
@@ -75,26 +71,101 @@ export function toContext(
 }
 
 /**
- * True when `err` is a Databricks SDK "resource does not exist" error
- * (a deleted/expired conversation, a missing statement id, etc.).
- * Checks the typed {@link ApiError} 404 / `RESOURCE_DOES_NOT_EXIST`
- * shape first, then the lower-level {@link HttpError} 404, then a loose
- * message sniff for SDK shapes that surface as neither typed error.
- *
- * `messagePattern` (default `/does not exist|not found/i`) bounds that
- * last fallback so callers can tighten it for a specific resource.
+ * Lazy view over a thrown value for error classification via
+ * {@link errorContext}. HTTP status is taken from the last positive
+ * `statusCode` / `code` on the error tree; messages and tokens come
+ * from every `message` / `errorCode` field (including `cause` and
+ * `AggregateError.errors`).
  */
-export function isNotFoundError(
-  err: unknown,
-  messagePattern: RegExp = /does not exist|not found/i,
-): boolean {
-  if (err instanceof ApiError) {
-    if (err.statusCode === 404) return true;
-    if (err.errorCode === "RESOURCE_DOES_NOT_EXIST") return true;
+export type ErrorContext = ErrorContextImpl;
+
+class ErrorContextImpl {
+  private _statusCode: number | undefined;
+  private _messages: string[] | undefined;
+  private _messageTokens: string[] | undefined;
+
+  constructor(private readonly err: NonNullable<unknown>) {}
+
+  /**
+   * Last positive `statusCode` / `code` found while walking the error
+   * tree, else `undefined`. Status `0` is ignored.
+   */
+  get statusCode(): number | undefined {
+    if (this._statusCode === undefined) {
+      outer: for (const node of errorNodes(this.err)) {
+        if (typeof node !== "object" || node === null) continue;
+        for (const key of ["statusCode", "code"] as const) {
+          if (!(key in node)) continue;
+          const value = (node as Record<string, unknown>)[key];
+          if (typeof value === "number" && value > 99 && value < 600) {
+            this._statusCode = value;
+            break outer;
+          }
+        }
+      }
+      if (this._statusCode === undefined) {
+        this._statusCode = -1;
+      }
+    }
+    return this._statusCode == -1 ? undefined : this._statusCode;
   }
-  if (err instanceof HttpError && err.code === 404) return true;
-  if (err instanceof Error && messagePattern.test(err.message)) return true;
-  return false;
+
+  /** Every `message` / `errorCode` string in the error tree. */
+  get messages(): string[] {
+    if (this._messages === undefined) {
+      this._messages = [...errorMessages(this.err)];
+    }
+    return this._messages;
+  }
+
+  /** Lowercased tokens from {@link messages}. */
+  get messageTokens(): string[] {
+    if (this._messageTokens === undefined) {
+      this._messageTokens = [
+        ...tokenizeWithOptions({ lowerCase: true }, ...this.messages),
+      ];
+    }
+    return this._messageTokens;
+  }
+
+  /** True for any 4xx status or message tokens `not exist` / `not found`. */
+  get notAccessible(): boolean {
+    if (this.hasStatusCode(4)) return true;
+    return this.hasMessage("not", "exist") || this.hasMessage("not", "found");
+  }
+
+  /**
+   * Match HTTP status. Pass a full code (`404`) or a class (`4` for any
+   * 4xx). Additional filters are OR'd: returns `true` when any filter
+   * matches. Returns `false` when no status is on the error tree.
+   */
+  hasStatusCode(statusCodeFilter: number, ...statusCodeFilters: number[]): boolean {
+    const code = this.statusCode;
+    if (code) {
+      for (const filter of [statusCodeFilter, ...statusCodeFilters]) {
+        const match = (filter < 100 ? Math.trunc(code / 100) : code) === filter;
+        if (match) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * True when every token from the filter phrase(s) appears in
+   * {@link messageTokens}. Each argument is tokenized on non-alphanumeric
+   * boundaries; all resulting tokens must match (e.g.
+   * `hasMessage("not", "found")` or `hasMessage("not found")`).
+   */
+  hasMessage(messageFilter: string, ...messageFilters: string[]): boolean {
+    return [messageFilter, ...messageFilters]
+      .flatMap((filter) => Array.from(tokenizeWithOptions({ lowerCase: true }, filter)))
+      .every((filterToken) => this.messageTokens.includes(filterToken));
+  }
+}
+
+/** Build an {@link ErrorContext} for status and message checks. `null` / `undefined` become `{}`. */
+export function errorContext(err: unknown): ErrorContext {
+  return new ErrorContextImpl(err ?? {});
 }
 
 /**

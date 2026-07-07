@@ -56,11 +56,16 @@ describe("emptyFilesystem", () => {
 });
 
 describe("DatabricksWorkspaceFilesystem optional base path", () => {
-  test("returns an empty namespace when the base path is missing", async () => {
+  test("attempts mkdir when the base path is missing, even when read-only", async () => {
+    let mkdirCalls = 0;
     const client = {
       workspace: {
         getStatus: async () => {
           throw new Error("Path does not exist");
+        },
+        mkdirs: async () => {
+          mkdirCalls++;
+          throw new Error("permission denied");
         },
       },
     } as unknown as WorkspaceClient;
@@ -72,17 +77,23 @@ describe("DatabricksWorkspaceFilesystem optional base path", () => {
     });
 
     await fs.init();
+    expect(mkdirCalls).toBe(1);
     expect(await fs.readdir("/")).toEqual([]);
     expect(await fs.exists("/")).toBe(true);
     expect(await fs.exists("/demo-skill/SKILL.md")).toBe(false);
   });
 
-  test("fails init when requireBasePath is true and the base path is missing", async () => {
+  test("creates a missing base path for read-only mounts when mkdir succeeds", async () => {
+    let mkdirCalls = 0;
     const client = {
       workspace: {
         getStatus: async () => {
           throw new Error("Path does not exist");
         },
+        mkdirs: async () => {
+          mkdirCalls++;
+        },
+        list: async function* () {},
       },
     } as unknown as WorkspaceClient;
 
@@ -90,9 +101,104 @@ describe("DatabricksWorkspaceFilesystem optional base path", () => {
       client,
       basePath: "/Workspace/.assistant/skills",
       readOnly: true,
-      requireBasePath: true,
+    });
+
+    await fs.init();
+    expect(mkdirCalls).toBe(1);
+    expect(fs.readOnly).toBe(true);
+    expect(await fs.readdir("/")).toEqual([]);
+  });
+
+  test("returns an empty namespace when mkdirs try fails", async () => {
+    const client = {
+      workspace: {
+        getStatus: async () => {
+          throw new Error("Path does not exist");
+        },
+        mkdirs: async () => {
+          throw new Error("permission denied");
+        },
+      },
+    } as unknown as WorkspaceClient;
+
+    const fs = new DatabricksWorkspaceFilesystem({
+      client,
+      basePath: "/Workspace/.assistant/skills",
+      mkdirs: "try",
+    });
+
+    await fs.init();
+    expect(await fs.readdir("/")).toEqual([]);
+    expect(await fs.exists("/demo-skill/SKILL.md")).toBe(false);
+  });
+
+  test("fails init when mkdirs is true and the base path cannot be created", async () => {
+    const client = {
+      workspace: {
+        getStatus: async () => {
+          throw new Error("Path does not exist");
+        },
+        mkdirs: async () => {
+          throw new Error("permission denied");
+        },
+      },
+    } as unknown as WorkspaceClient;
+
+    const fs = new DatabricksWorkspaceFilesystem({
+      client,
+      basePath: "/Workspace/.assistant/skills",
+      mkdirs: true,
     });
 
     await expect(fs.init()).rejects.toThrow();
+  });
+
+  test("skips mkdir and uses an empty namespace when mkdirs is false", async () => {
+    const client = {
+      workspace: {
+        getStatus: async () => {
+          throw new Error("Path does not exist");
+        },
+        mkdirs: async () => {
+          throw new Error("mkdirs should not run");
+        },
+      },
+    } as unknown as WorkspaceClient;
+
+    const fs = new DatabricksWorkspaceFilesystem({
+      client,
+      basePath: "/Workspace/.assistant/skills",
+      mkdirs: false,
+    });
+
+    await fs.init();
+    expect(await fs.readdir("/")).toEqual([]);
+  });
+
+  test("treats a successful mkdir as writable without a probe file", async () => {
+    let mkdirCalls = 0;
+    const client = {
+      workspace: {
+        getStatus: async () => {
+          throw new Error("Path does not exist");
+        },
+        mkdirs: async () => {
+          mkdirCalls++;
+        },
+        import: async () => {
+          throw new Error("probe write should not run");
+        },
+      },
+    } as unknown as WorkspaceClient;
+
+    const fs = new DatabricksWorkspaceFilesystem({
+      client,
+      basePath: "/Workspace/.assistant/skills",
+      mkdirs: true,
+    });
+
+    await fs.init();
+    expect(mkdirCalls).toBe(1);
+    expect(fs.readOnly).toBe(false);
   });
 });

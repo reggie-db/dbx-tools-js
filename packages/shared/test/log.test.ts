@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
-import { isDebugEnabled, isLevelEnabled, logger } from "../src/log.js";
+import { isLevelEnabled, logger } from "../src/log.js";
 
 // log.ts reads `process.env.LOG_LEVEL` lazily on every call, so we
 // force `debug` once before the level-routing test runs. With the
@@ -121,7 +121,6 @@ describe("isLevelEnabled", () => {
   it("returns true for debug when LOG_LEVEL is debug", () => {
     process.env.LOG_LEVEL = "debug";
     expect(isLevelEnabled("debug")).toBe(true);
-    expect(isDebugEnabled()).toBe(true);
   });
 
   it("treats LOG_LEVEL case-insensitively", () => {

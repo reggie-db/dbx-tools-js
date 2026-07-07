@@ -494,7 +494,7 @@ function buildAskGenieTool(opts: { spaceId: string; alias: string; hint?: string
         // and try once more. Only retry when we *had* a seeded id -
         // a fresh call that 404s shouldn't loop.
         const seeded = readContextConversationId(requestContext, spaceId);
-        if (seeded && apiUtils.isNotFoundError(err)) {
+        if (seeded && apiUtils.errorContext(err).notAccessible) {
           log.warn("conversation-cache:stale, resetting", {
             spaceId,
             conversationId: seeded,
