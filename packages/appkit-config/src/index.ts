@@ -14,13 +14,11 @@
  * await createApp({ plugins: [server(), lakebase()] });
  * ```
  *
- * Today the package covers Lakebase Postgres discovery ({@link autopg},
- * still callable standalone), but it is scoped to grow: additional
- * capability auto-config slots in behind its own plugin/env signal in
- * `createApp` without changing the call site.
+ * Lakebase Postgres ({@link autoConfigureLakebase}) and local config
+ * resolution from env plus bundle validate JSON ({@link resolveConfigValue}).
  */
-export * from "./autopg.js";
+export * from "./config-value.js";
 export * from "./create-app.js";
+export * from "./lakebase-resolver.js";
 export * from "./pgaddress.js";
 export * from "./provision.js";
-export * from "./resolver.js";

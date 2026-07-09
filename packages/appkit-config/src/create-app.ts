@@ -14,50 +14,54 @@
  * ```
  *
  * Auto-configuration runs BEFORE delegating so plugins see a fully
- * populated `process.env` during their synchronous `setup()`. Each step
- * is gated on a signal so apps that don't use a given capability pay
- * nothing (and trigger no side effects):
- *
- * - Lakebase Postgres ({@link autopg}): runs only when a `lakebase`
- *   plugin is present in `config.plugins`. Resolves project / branch /
- *   endpoint / database / host and writes the `PG*` / `LAKEBASE_*` env
- *   vars the plugin reads. Skipped entirely otherwise, so it never
- *   provisions or auto-creates a Lakebase project for apps that don't
- *   ask for one.
- *
- * The package is intentionally broader than Postgres: future auto-config
- * steps for other capabilities slot into {@link autoConfigure} behind
- * their own plugin/env signal.
+ * populated `process.env` during their synchronous `setup()`. Lakebase
+ * Postgres ({@link autoConfigureLakebase}) runs only when a `lakebase`
+ * plugin is present in `config.plugins`.
  */
 
-import { createApp as appkitCreateApp } from "@databricks/appkit";
+import {
+  createApp as appkitCreateApp,
+  getUsernameWithApiLookup,
+} from "@databricks/appkit";
+import { logUtils } from "@dbx-tools/shared";
 
-import { autopg } from "./autopg.js";
+import { provisionCacheSchema } from "./provision.js";
+import {
+  applyLakebaseToEnv,
+  resolveLakebaseConnection,
+  type LakebaseConnection,
+  type LakebaseResolverInputs,
+} from "./lakebase-resolver.js";
 
-/** Config accepted by AppKit's `createApp` (and therefore by ours). */
 type CreateAppConfig = Parameters<typeof appkitCreateApp>[0];
 
-/** AppKit plugin name whose presence triggers Lakebase auto-config. */
+const log = logUtils.logger("create-app");
+
 const LAKEBASE_PLUGIN = "lakebase";
 
-/**
- * True when `config.plugins` contains a plugin registered under `name`.
- * `PluginData` always carries its registration `name`, so this is a
- * cheap, reliable signal without instantiating anything.
- */
-function usesPlugin(config: CreateAppConfig, name: string): boolean {
+function usesPlugin(config: CreateAppConfig | undefined, name: string): boolean {
   return Boolean(config?.plugins?.some((entry) => entry.name === name));
 }
 
-/**
- * Run every applicable auto-config step for the given app config. Steps
- * are independent and self-gating; add new ones here as the package
- * grows beyond Postgres.
- */
-async function autoConfigure(config: CreateAppConfig): Promise<void> {
+async function autoConfigure(config?: CreateAppConfig): Promise<void> {
   if (usesPlugin(config, LAKEBASE_PLUGIN)) {
-    await autopg();
+    await autoConfigureLakebase();
   }
+}
+
+/**
+ * Resolve Lakebase Postgres connection info from config + env, write the
+ * resolved values to `process.env`, and return the record. Call standalone
+ * before `createApp` when not using this package's `createApp` wrapper.
+ */
+export async function autoConfigureLakebase(): Promise<LakebaseConnection> {
+  const resolved = await resolveLakebaseConnection();
+  applyLakebaseToEnv(resolved);
+  const user = await getUsernameWithApiLookup({});
+  if (user) process.env.PGUSER ??= user;
+  log.info("env updated", { ...redactLakebaseConnection(resolved), user });
+  await provisionCacheSchema(log, user);
+  return resolved;
 }
 
 const create = async (config?: CreateAppConfig) => {
@@ -65,13 +69,19 @@ const create = async (config?: CreateAppConfig) => {
   return appkitCreateApp(config);
 };
 
-/**
- * Auto-configuring drop-in for AppKit's `createApp`. Mirrors its
- * signature exactly (including per-plugin export inference on the
- * returned `PluginMap`) and delegates to it after {@link autoConfigure}.
- *
- * The cast restores the source generic that `Parameters`/delegation
- * erase; the runtime behaviour is just "auto-configure, then call the
- * real `createApp` with the untouched arguments".
- */
+function redactLakebaseConnection(
+  resolved: LakebaseConnection,
+): Record<string, unknown> {
+  return {
+    project: resolved.project,
+    branch: resolved.branch,
+    endpoint: resolved.endpoint,
+    database: resolved.database,
+    host: resolved.host,
+    port: resolved.port,
+    sslMode: resolved.sslMode,
+  };
+}
+
+/** Auto-configuring drop-in for AppKit's `createApp`. */
 export const createApp = create as unknown as typeof appkitCreateApp;

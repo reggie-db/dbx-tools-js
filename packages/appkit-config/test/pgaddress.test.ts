@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseAddress } from "../src/pgaddress.js";
+import { parseAddress, parseResourcePath } from "../src/pgaddress.js";
 
 describe("parseAddress", () => {
   describe("empty / invalid", () => {
@@ -73,10 +73,14 @@ describe("parseAddress", () => {
       });
     });
 
-    test("database path (database leaf is dropped; resolver re-reads it)", () => {
+    test("database path surfaces resource id separately from PGDATABASE", () => {
       expect(
         parseAddress("projects/my-app/branches/main/databases/db-resource"),
-      ).toEqual({ project: "my-app", branch: "main" });
+      ).toEqual({
+        project: "my-app",
+        branch: "main",
+        databaseResourceId: "db-resource",
+      });
     });
 
     test("branch path", () => {
@@ -84,6 +88,10 @@ describe("parseAddress", () => {
         project: "my-app",
         branch: "main",
       });
+    });
+
+    test("parseResourcePath ignores bare branch ids", () => {
+      expect(parseResourcePath("production")).toEqual({});
     });
 
     test("project path", () => {

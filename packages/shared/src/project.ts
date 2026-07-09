@@ -1,10 +1,11 @@
 /**
- * Project introspection helpers shared across AppKit plugins.
+ * Project introspection helpers shared across dbx-tools packages.
  *
- * Resolve a human-friendly project name and parse git remote URLs into
- * repo names. Exposed as `projectUtils.*` from the shared barrel so
- * naming inside this module drops the redundant `project` prefix:
- * `projectUtils.name()` instead of `projectName()`, etc.
+ * Resolve workspace roots, human-friendly project names, and parse git
+ * remote URLs into repo names. Exposed as `projectUtils.*` from the
+ * shared barrel so naming inside this module drops the redundant
+ * `project` prefix: `projectUtils.name()` instead of `projectName()`,
+ * etc.
  *
  * **Server-only.** Imports `node:fs`, `node:path`, `node:child_process`,
  * and `node:util` at module load. Browser bundles must use
@@ -17,37 +18,48 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { memoize } from "./common.js";
+import { stat } from "./file.js";
+
 const execFileAsync = promisify(execFile);
-
-const nameByCwd = new Map<string, Promise<string>>();
-
-export interface NameOptions {
-  /** Directory to start from. Defaults to `process.cwd()`. */
-  cwd?: string;
-}
 
 interface PackageJson {
   name?: string;
   workspaces?: unknown;
 }
 
+const nameDefault = memoize(() => resolveProjectName(process.cwd()));
+
 /**
  * Resolve a human-friendly project name for the repo rooted at `cwd`.
  *
  * Order:
- * 1. `name` from the root `package.json` (via `npm pkg get name` when available,
- *    otherwise read the file after locating the root).
+ * 1. `name` from the root `package.json` (via `npm pkg get name` when
+ *    available, otherwise read the file after locating the root).
  * 2. Repository name from `git remote get-url origin`.
  * 3. Basename of the project root directory.
+ *
+ * When `cwd` is omitted or equals `process.cwd()`, the result is
+ * memoized for the process lifetime.
  */
-export function name(options?: NameOptions): Promise<string> {
-  const cwd = resolve(options?.cwd ?? process.cwd());
-  let pending = nameByCwd.get(cwd);
-  if (pending === undefined) {
-    pending = resolveProjectName(cwd);
-    nameByCwd.set(cwd, pending);
-  }
-  return pending;
+export function name(cwd?: string): Promise<string> {
+  return cwd && resolve(cwd) !== process.cwd()
+    ? resolveProjectName(cwd)
+    : nameDefault();
+}
+
+const rootDefault = memoize(() => resolveWorkspaceRoot(process.cwd()));
+
+/**
+ * Resolve the workspace root directory for `cwd`: the nearest ancestor
+ * (from {@link resolveProjectRoots} candidates) that contains a
+ * `package.json` file. When `cwd` is omitted or equals `process.cwd()`,
+ * the result is memoized for the process lifetime.
+ */
+export function root(cwd?: string): Promise<string> {
+  return cwd && resolve(cwd) !== process.cwd()
+    ? resolveWorkspaceRoot(cwd)
+    : rootDefault();
 }
 
 /**
@@ -77,85 +89,87 @@ export function parseGitRemote(url: string): string | undefined {
   }
 }
 
-async function resolveProjectName(cwd: string): Promise<string> {
-  const root = await findProjectRoot(cwd);
+/**
+ * Resolve a display name for the project rooted at `cwd`. Prefer
+ * {@link name} unless you need the intermediate root path from
+ * {@link root}.
+ */
+export async function resolveProjectName(cwd: string): Promise<string> {
+  const workspaceRoot = await resolveWorkspaceRoot(cwd);
 
-  const fromPackage = (await readNameViaNpm(root)) ?? readNameFromPackageJson(root);
+  const fromPackage =
+    (await readNameViaNpm(workspaceRoot)) ?? readNameFromPackageJson(workspaceRoot);
   if (fromPackage) {
     return fromPackage;
   }
 
-  const fromGit = await readNameFromGitRemote(root);
+  const fromGit = await readNameFromGitRemote(workspaceRoot);
   if (fromGit) {
     return fromGit;
   }
 
-  return basename(root);
+  return basename(workspaceRoot);
 }
 
-async function findProjectRoot(startDir: string): Promise<string> {
-  const cwd = resolve(startDir);
-
-  const fromNpmWorkspace = await npmWorkspaceRoot(cwd);
-  if (fromNpmWorkspace && hasPackageJson(fromNpmWorkspace)) {
-    return preferWorkspacesRoot(fromNpmWorkspace);
-  }
-
-  const fromNpmPrefix = await npmPrefix(cwd);
-  if (fromNpmPrefix && hasPackageJson(fromNpmPrefix)) {
-    return preferWorkspacesRoot(fromNpmPrefix);
-  }
-
-  const walked = walkUpForPackageRoot(cwd);
-  if (walked) {
-    return walked;
-  }
-
-  const fromGit = await gitTopLevel(cwd);
-  if (fromGit && hasPackageJson(fromGit)) {
-    return fromGit;
-  }
-
-  return cwd;
-}
-
-function preferWorkspacesRoot(startDir: string): string {
-  return walkUpForPackageRoot(startDir) ?? startDir;
-}
-
-function walkUpForPackageRoot(startDir: string): string | undefined {
-  let dir = resolve(startDir);
-  let topmost: string | undefined;
-  let workspacesRoot: string | undefined;
-
-  while (true) {
-    const pkgPath = resolve(dir, "package.json");
-    if (existsSync(pkgPath)) {
-      topmost = dir;
-      const pkg = readPackageJson(pkgPath);
-      if (pkg?.workspaces !== undefined) {
-        workspacesRoot = dir;
-      }
+/**
+ * Pick the first {@link resolveProjectRoots} candidate whose tree
+ * contains a `package.json` file. Falls back to the last yielded root
+ * when none have a manifest (typically `cwd`).
+ */
+async function resolveWorkspaceRoot(cwd?: string): Promise<string> {
+  let lastRootDir: string | undefined;
+  for await (const rootDir of resolveProjectRoots(cwd)) {
+    const pkgStat = await stat(resolve(rootDir, "package.json"));
+    if (pkgStat?.isFile()) {
+      return rootDir;
     }
-
-    const parent = dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
+    lastRootDir = rootDir;
   }
-
-  return workspacesRoot ?? topmost;
+  return lastRootDir ?? resolve(cwd ?? process.cwd());
 }
 
-function hasPackageJson(dir: string): boolean {
-  return existsSync(resolve(dir, "package.json"));
+/**
+ * Yield candidate project root directories for `cwd`, in priority order.
+ *
+ * Each loader is best-effort (`npm` and `git` may be missing or fail):
+ *
+ * 1. `npm prefix` from `cwd`
+ * 2. npm workspace root (`npm root -w` parent)
+ * 3. `git rev-parse --show-toplevel` from `cwd`
+ * 4. `cwd` itself when every loader fails or yields a non-directory
+ *
+ * Duplicate paths are skipped. Only paths that {@link stat} reports as
+ * directories are yielded (except the final `cwd` fallback).
+ */
+export async function* resolveProjectRoots(cwd?: string): AsyncGenerator<string> {
+  cwd = cwd ? resolve(cwd) : process.cwd();
+  let found = false;
+  const rootDirs = new Set<string>();
+  for (const loader of [npmPrefix, npmWorkspaceRoot, gitTopLevel]) {
+    let rootDir: string | undefined = await loader(cwd);
+    if (!rootDir) {
+      continue;
+    }
+    rootDir = resolve(rootDir);
+    if (rootDirs.has(rootDir)) {
+      continue;
+    }
+    rootDirs.add(rootDir);
+    const rootStat = await stat(rootDir);
+    if (rootStat?.isDirectory()) {
+      found = true;
+      yield rootDir;
+    }
+  }
+  yield cwd;
 }
 
+/** Run `npm prefix` from `cwd`. Returns `undefined` when npm is missing. */
 async function npmPrefix(cwd: string): Promise<string | undefined> {
   return runNpm(["prefix"], cwd);
 }
 
+/** Workspace root via `npm root -w` (parent of the workspace `node_modules`). */
 async function npmWorkspaceRoot(cwd: string): Promise<string | undefined> {
   const nodeModules = await runNpm(["root", "-w"], cwd);
   if (!nodeModules) {
@@ -245,6 +259,7 @@ async function gitRemoteOriginUrl(root: string): Promise<string | undefined> {
   }
 }
 
+/** `git rev-parse --show-toplevel` from `cwd`. */
 async function gitTopLevel(cwd: string): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync(

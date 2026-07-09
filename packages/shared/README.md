@@ -14,6 +14,7 @@ import {
   appkitUtils,
   cloudUtils,
   commonUtils,
+  configUtils,
   httpUtils,
   logUtils,
   netUtils,
@@ -23,7 +24,7 @@ import {
 } from "@dbx-tools/shared";
 ```
 
-> `apiUtils`, `appkitUtils`, `projectUtils`, `cloudUtils`, and
+> `apiUtils`, `appkitUtils`, `configUtils`, `projectUtils`, `cloudUtils`, and
 > `tokenUtils` import Node-only modules (`@databricks/appkit`, `node:fs`,
 > `node:dns`, `Buffer`) and are intentionally **not** re-exported from
 > the browser entry. Vite / Webpack / esbuild builds that honor the
@@ -197,6 +198,31 @@ const payload = tokenUtils.getAccessTokenPayload(req, "Authorization");
 
 Used by `@dbx-tools/appkit-mastra` to stamp `MASTRA_SCOPES_KEY` on each
 request before workspace skill mounts are resolved.
+
+## `configUtils` - env + bundle validate resolution (server only)
+
+Layered config lookup for local development: `process.env` first, then
+`databricks bundle validate --output json` (never hand-parsed
+`databricks.yml`). Opt in to CLI / explicit overrides with
+`withCliSources()`:
+
+```ts
+import { configUtils } from "@dbx-tools/shared";
+
+const warehouseId = await configUtils.resolveConfigValue("WAREHOUSE_ID", {
+  target: "dev",
+});
+
+const withFlags = await configUtils.resolveConfigValue("MODEL_NAME", {
+  sources: configUtils.withCliSources(),
+  cli: { MODEL_NAME: flags.model },
+});
+```
+
+`findBundleRoot()` walks project roots from `projectUtils` and locates
+`databricks.yml`. `loadBundleConfig()` runs the validate CLI and caches
+per `(root, target)`; it returns `undefined` inside a Databricks App unless
+`allowDatabaricksAppEnv: true`. Pass `bundleData` to skip the CLI in tests.
 
 ## `stringUtils` - identifier + slug helpers
 

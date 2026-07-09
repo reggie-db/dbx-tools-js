@@ -17,11 +17,12 @@
  * are fetched with the global `fetch`.
  */
 
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { errorMessage, fnvHash, id, memoize } from "./common.js";
+import { stat } from "./file.js";
 import { createFetchError } from "./http.js";
 import { logger } from "./log.js";
 import {
@@ -294,12 +295,5 @@ async function fetchText(url: string): Promise<string> {
 
 /** Birth time of `path`, or `undefined` when it doesn't exist yet. */
 async function getCreated(path: string): Promise<Date | undefined> {
-  try {
-    return (await stat(path)).birthtime;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw err;
-  }
+  return (await stat(path))?.birthtime;
 }

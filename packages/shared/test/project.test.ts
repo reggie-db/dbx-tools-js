@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -54,7 +54,7 @@ describe("name", () => {
       );
     });
 
-    const name = await projectUtils.name({ cwd: join(root, "packages", "child") });
+    const name = await projectUtils.name(join(root, "packages", "child"));
     expect(name).toBe("root-app");
   });
 
@@ -66,7 +66,7 @@ describe("name", () => {
       );
     });
 
-    expect(await projectUtils.name({ cwd: root })).toBe("solo-package");
+    expect(await projectUtils.name(root)).toBe("solo-package");
   });
 
   it("falls back to the root directory basename when package.json has no name", async () => {
@@ -77,10 +77,10 @@ describe("name", () => {
     });
 
     const nested = join(root, "my-app-dir");
-    expect(await projectUtils.name({ cwd: nested })).toBe("my-app-dir");
+    expect(await projectUtils.name(nested)).toBe("my-app-dir");
   });
 
-  it("memoizes by resolved cwd", async () => {
+  it("memoizes the default cwd lookup", async () => {
     const root = makeTempProject((dir) => {
       writeFileSync(
         join(dir, "package.json"),
@@ -89,14 +89,47 @@ describe("name", () => {
     });
 
     const cwd = resolve(root);
-    const a = await projectUtils.name({ cwd });
-    const b = await projectUtils.name({ cwd: root });
+    const a = await projectUtils.name(cwd);
+    const b = await projectUtils.name(root);
     expect(a).toBe("memoized-name");
     expect(b).toBe(a);
   });
 
   it("resolves this repository from the workspace root", async () => {
     const repoRoot = resolve(import.meta.dirname, "../../..");
-    expect(await projectUtils.name({ cwd: repoRoot })).toBe("dbx-tools-js");
+    expect(await projectUtils.name(repoRoot)).toBe("dbx-tools-js");
+  });
+});
+
+describe("root", () => {
+  it("returns the workspace root with package.json", async () => {
+    const root = makeTempProject((dir) => {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "root-app", workspaces: ["packages/*"] }),
+      );
+      mkdirSync(join(dir, "packages", "child"), { recursive: true });
+      writeFileSync(
+        join(dir, "packages", "child", "package.json"),
+        JSON.stringify({ name: "child" }),
+      );
+    });
+
+    const workspaceRoot = await projectUtils.root(join(root, "packages", "child"));
+    expect(realpathSync(workspaceRoot)).toBe(realpathSync(root));
+  });
+});
+
+describe("resolveProjectRoots", () => {
+  it("yields cwd when no npm or git roots exist", async () => {
+    const root = makeTempProject((dir) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "solo" }));
+    });
+    const roots: string[] = [];
+    for await (const candidate of projectUtils.resolveProjectRoots(root)) {
+      roots.push(candidate);
+    }
+    expect(roots.length).toBeGreaterThan(0);
+    expect(roots.at(-1)).toBe(resolve(root));
   });
 });

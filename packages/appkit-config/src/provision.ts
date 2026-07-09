@@ -16,7 +16,7 @@
  * cannot grant and its Postgres role does not exist until its first
  * connection.
  *
- * Must run AFTER {@link applyToEnv} has written the resolved connection to
+ * Must run AFTER {@link applyLakebaseToEnv} has written the resolved connection to
  * `process.env` (so `createLakebasePool` picks up host / database /
  * endpoint) and BEFORE `createApp` initializes the cache.
  */

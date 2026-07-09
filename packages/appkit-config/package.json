@@ -1,8 +1,9 @@
 {
   "name": "@dbx-tools/appkit-config",
-  "version": "0.1.105",
+  "version": "0.1.106",
   "dependencies": {
-    "@dbx-tools/shared": "workspace:*"
+    "@dbx-tools/shared": "workspace:*",
+    "zod": "catalog:"
   },
   "exports": {
     ".": "./src/index.ts"

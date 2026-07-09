@@ -26,6 +26,25 @@ log.warn("write:error", { error: commonUtils.errorMessage(err) });
 
 Browser-safe (re-exported from `index.client.ts`).
 
+## Best-effort `fs.stat`
+
+Never wrap `node:fs/promises` `stat` in try/catch for missing paths.
+
+```ts
+// BAD
+try {
+  if ((await stat(path)).isFile()) { ... }
+} catch { ... }
+
+// GOOD
+import { fileUtils } from "@dbx-tools/shared";
+const info = await fileUtils.stat(path);
+if (info?.isFile()) { ... }
+```
+
+Server-only (`index.ts` entry). Returns `undefined` for empty/invalid
+paths and `ENOENT`; other I/O errors propagate.
+
 ## Best-effort writer.write (appkit-mastra)
 
 Never reinvent the "downstream stream may be closed, swallow errors"
@@ -54,3 +73,21 @@ import { appkitUtils } from "@dbx-tools/shared";
 
 const pool = appkitUtils.require(this.context, lakebase, "mastra").exports().pool;
 ```
+
+## `@dbx-tools/appkit-config` - check before duplicating
+
+Lakebase address parsing lives in `pgaddress.ts` only:
+
+- `parseAddress()` for any user/env input (URIs, resource paths, hostnames, bare project ids).
+- `parseResourcePath()` when the value is known to be a `projects/...` path (REST list `name` fields, bundle `POSTGRES_*` paths). Returns `{}` for bare branch ids so they are not mistaken for project ids.
+
+Lakebase REST discovery and env application live in `lakebase-resolver.ts` (`readLakebaseInputs`, `resolveLakebaseConnection`, `applyLakebaseToEnv`). Do not add regex or path-splitting helpers there - import from `pgaddress.js`.
+
+Env + bundle validate JSON resolution lives in `@dbx-tools/shared`
+(`configUtils.resolveConfigValue`, `configUtils.findBundleRoot`). Databricks
+App `config.env` flattening lives in `app-resolver.ts` (`flattenAppEnv`)
+and is wired into `config-value.ts` for local dev only. Auto-pick applies
+when the bundle has exactly one app; multi-app bundles require an explicit
+`bundleAppEnv` key. `loadBundleConfig` skips bundle validate inside a
+Databricks App (`commonUtils.isDatabricksAppEnv`). Do not hand-roll env key
+normalization in either package.

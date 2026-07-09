@@ -21,24 +21,40 @@ self-gating, so apps pay nothing for capabilities they don't use:
 
 | Capability                   | Trigger                                 | Effect                                     |
 | ---------------------------- | --------------------------------------- | ------------------------------------------ |
-| Lakebase Postgres (`autopg`) | a `lakebase` plugin in `config.plugins` | resolves + writes `PG*` / `LAKEBASE_*` env |
+| Lakebase Postgres (`autoConfigureLakebase`) | a `lakebase` plugin in `config.plugins` | resolves + writes `PG*` / `LAKEBASE_*` env |
 
 The package is intentionally broader than Postgres: new capability
 auto-config slots into `createApp` behind its own plugin/env signal
 without changing the call site.
 
-## Standalone `autopg()`
+## `resolveConfigValue`
 
-`autopg()` fills in every Lakebase Postgres env var the AppKit `lakebase`
+AppKit apps usually want bundle app `config.env` entries in addition to
+generic bundle variables. `resolveConfigValue` wraps
+`configUtils.resolveConfigValue` and enables that flattening by default
+(`bundleAppEnv: false` to skip, or pass an app key string to pin one).
+When the bundle defines more than one app, app `config.env` is ignored
+unless you pass a specific app key. Inside a deployed Databricks App,
+`loadBundleConfig` is a no-op so only `process.env` is read.
+
+```ts
+import { resolveConfigValue } from "@dbx-tools/appkit-config";
+
+const endpoint = await resolveConfigValue("LAKEBASE_ENDPOINT");
+```
+
+## Standalone `autoConfigureLakebase()`
+
+`autoConfigureLakebase()` fills in every Lakebase Postgres env var the AppKit `lakebase`
 plugin needs from whatever fragments your deployment actually carries.
 `createApp` runs it for you; call it directly only when you want the
 resolution without the wrapper:
 
 ```ts
-import { autopg } from "@dbx-tools/appkit-config";
+import { autoConfigureLakebase } from "@dbx-tools/appkit-config";
 import { createApp, lakebase, server } from "@databricks/appkit";
 
-await autopg();
+await autoConfigureLakebase();
 await createApp({ plugins: [lakebase(), server()] });
 ```
 
@@ -53,11 +69,11 @@ plugin runs, `process.env` is fully populated.
 
 ## What it accepts
 
-`autopg()` looks at, in priority order:
+`autoConfigureLakebase()` looks at, in priority order:
 
-1. Explicit `autopg({ project, branch, endpoint, database, host, port, sslMode, autoCreate })`
-2. Env vars - the same ones `lakebase` already reads:
-   - `LAKEBASE_PROJECT`, `LAKEBASE_BRANCH`, `LAKEBASE_ENDPOINT`
+1. Explicit `autoConfigureLakebase({ project, branch, endpoint, database, host, port, sslMode, autoCreate })`
+2. Env vars the `lakebase` plugin reads:
+   - `LAKEBASE_ENDPOINT`
    - `PGHOST`, `PGDATABASE`, `PGPORT`, `PGSSLMODE`
 3. Whatever the address parser can recover from
    `LAKEBASE_ENDPOINT` / `config.endpoint`
@@ -99,7 +115,7 @@ After parsing, the resolver fills gaps in this order:
 ## Options
 
 ```ts
-await autopg({
+await autoConfigureLakebase({
   // Skip writing process.env (just inspect the returned record).
   exportEnv: false,
   // Pin individual fields - any of these short-circuit the resolver.
@@ -113,7 +129,7 @@ await autopg({
 });
 ```
 
-`autopg()` returns a `Resolved` record (`project`, `branch`, `endpoint`,
+`autoConfigureLakebase()` returns a `Resolved` record (`project`, `branch`, `endpoint`,
 `database`, `host`, `port`, `sslMode`). When `exportEnv: true` (the
 default) it also writes the same values to `process.env`, only filling
 gaps - existing values are preserved.

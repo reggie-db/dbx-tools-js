@@ -2,8 +2,8 @@
  * Server-side entry point for `@dbx-tools/shared`. Re-exports
  * everything from the browser-safe {@link ./index.client.ts} barrel
  * and adds the server-only namespaces:
- *   - `projectUtils` imports `node:fs` / `node:child_process` /
- *     `node:path` / `node:util`.
+ *   - `fileUtils` / `projectUtils` / `configUtils` import `node:fs` /
+ *     `node:child_process` / `node:path` / `node:util`.
  *   - `apiUtils` / `appkitUtils` both import from `@databricks/appkit`,
  *     whose barrel transitively pulls in the typegen helpers and the
  *     `@ast-grep/napi` native binary. Keeping them out of the
@@ -23,8 +23,17 @@
 export * as apiUtils from "./api.js";
 export * as appkitUtils from "./appkit.js";
 export * as cloudUtils from "./cloud.js";
+export * as configUtils from "./config.js";
+export * as fileUtils from "./file.js";
 export * as netUtils from "./net.js";
 export * as projectUtils from "./project.js";
 export * as tokenUtils from "./token.js";
+
+export type {
+  BundleValidateJson,
+  ConfigSource,
+  LoadBundleConfigOptions,
+  ResolveConfigValueOptions,
+} from "./config.js";
 
 export * from "./index.client.js";

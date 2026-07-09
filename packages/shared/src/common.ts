@@ -1,3 +1,5 @@
+import type { Stats } from "node:fs";
+
 import fastDeepEqual from "fast-deep-equal";
 
 /** Minimal shape for objects that expose an optional `name` (e.g. AppKit plugins). */

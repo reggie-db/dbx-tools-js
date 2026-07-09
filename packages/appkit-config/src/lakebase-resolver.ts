@@ -27,18 +27,25 @@
  *      success. Then poll the default endpoint until it reports
  *      `current_state` `READY` or `IDLE`.
  *
- * The {@link autopg} helper then writes the resolved values back to
+ * The {@link autoConfigureLakebase} helper then writes the resolved values back to
  * `process.env` so the downstream `lakebase` plugin picks them up.
  *
  * @see https://docs.databricks.com/api/workspace/postgres
  */
 
 import { getWorkspaceClient } from "@databricks/appkit";
-import { projectUtils, stringUtils, type logUtils } from "@dbx-tools/shared";
+import { logUtils, projectUtils, stringUtils } from "@dbx-tools/shared";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { parseAddress } from "./pgaddress.js";
+import { resolveConfigValue } from "./config-value.js";
+import {
+  parseAddress,
+  parseResourcePath,
+  type LakebaseConnectionInputs,
+  type SslMode,
+} from "./pgaddress.js";
 
+const log = logUtils.logger("lakebase-resolver");
 const API_BASE = "/api/2.0/postgres";
 const DEFAULT_PORT = 5432;
 const DEFAULT_SSL_MODE: SslMode = "require";
@@ -50,40 +57,13 @@ const OPERATION_POLL_MS = 2_000;
 const ENDPOINT_READY_TIMEOUT_MS = 5 * 60_000;
 const ENDPOINT_READY_POLL_MS = 2_000;
 
-const ENDPOINT_NAME_RE = /^projects\/([^/]+)\/branches\/([^/]+)\/endpoints\/([^/]+)$/;
-const DATABASE_NAME_RE = /^projects\/([^/]+)\/branches\/([^/]+)\/databases\/([^/]+)$/;
-const BRANCH_NAME_RE = /^projects\/([^/]+)\/branches\/([^/]+)$/;
-const PROJECT_NAME_RE = /^projects\/([^/]+)$/;
-
-/** Postgres TLS mode passed through to `pg`. */
-export type SslMode = "require" | "disable" | "prefer";
-
 /**
- * User-supplied inputs (config or env) before any API resolution. Every
- * field is optional - the resolver tries to fill in missing pieces from
- * the Lakebase API when it has enough context (typically a `project`).
+ * User-supplied Lakebase inputs (config or env) before any API resolution.
+ * Extends {@link LakebaseConnectionInputs} with resolver-only options.
+ * {@link resolveLakebaseConnection} fills gaps from the Lakebase API when
+ * it has enough context (typically a `project`).
  */
-export interface ResolverInputs {
-  /** Lakebase project id, e.g. `my-app`. Triggers API discovery when set. */
-  project?: string;
-  /** Branch id within the project. Defaults to the server-marked default. */
-  branch?: string;
-  /**
-   * Lakebase address - accepts a canonical endpoint/branch/project
-   * resource path, a Postgres URI (`postgresql://user@host/db?...`),
-   * a bare Lakebase hostname, or a bare project id. Whatever pieces it
-   * carries seed the resolver before REST lookups happen. Reads from
-   * `LAKEBASE_ENDPOINT` when not set.
-   */
-  endpoint?: string;
-  /** Postgres database name (e.g. `databricks_postgres`). */
-  database?: string;
-  /** Postgres hostname; auto-derived from the endpoint when missing. */
-  host?: string;
-  /** Postgres port. Defaults to 5432. */
-  port?: number;
-  /** TLS mode. Defaults to `require`. */
-  sslMode?: SslMode;
+export interface LakebaseResolverInputs extends LakebaseConnectionInputs {
   /**
    * What to do when no project exists in the workspace at all.
    * - `undefined` (default): derive a project id from
@@ -95,13 +75,8 @@ export interface ResolverInputs {
   autoCreate?: string | false;
 }
 
-/** Fully-resolved connection. `port` and `sslMode` always have a value. */
-export interface Resolved {
-  project?: string;
-  branch?: string;
-  endpoint?: string;
-  database?: string;
-  host?: string;
+/** Fully-resolved Lakebase Postgres connection. */
+export interface LakebaseConnection extends LakebaseConnectionInputs {
   port: number;
   sslMode: SslMode;
 }
@@ -109,7 +84,7 @@ export interface Resolved {
 /**
  * Lakebase REST list responses follow the Google AIP convention:
  * `{ <plural-resource>: T[], next_page_token?: string }`. We only read
- * the first page; for autopg's "pick something sensible" semantics the
+ * the first page; for auto-config's "pick something sensible" semantics the
  * cap is fine.
  */
 interface ListResponse {
@@ -183,45 +158,43 @@ interface Operation {
  * Pull resolver inputs from `process.env`, parse the address blob, and
  * layer explicit config on top with this precedence:
  *
- *   `config.<field>` > matching env var > whatever {@link parseAddress}
- *   recovered from the `endpoint` / `LAKEBASE_ENDPOINT` blob.
+ *   `config.<field>` > {@link resolveConfigValue} (`env`, then bundle
+ *   validate JSON) > whatever {@link parseAddress} recovered from the
+ *   `endpoint` / `LAKEBASE_ENDPOINT` blob.
+ *
+ * Set `config.endpoint` (or `LAKEBASE_ENDPOINT`) to any input
+ * {@link parseAddress} understands: canonical resource paths, Postgres
+ * URIs, bare hostnames, or bare project ids.
  */
-export function readInputs(config: ResolverInputs): ResolverInputs {
-  const rawAddress = config.endpoint ?? process.env.LAKEBASE_ENDPOINT;
+export async function readLakebaseInputs(
+  config?: LakebaseResolverInputs,
+): Promise<LakebaseResolverInputs> {
+  const rawAddress =
+    config?.endpoint ?? (await resolveConfigValue("LAKEBASE_ENDPOINT"));
   const parsed = parseAddress(rawAddress);
-  const rawBranch = config.branch ?? process.env.LAKEBASE_BRANCH;
-  const rawLakebaseDatabase = process.env.LAKEBASE_DATABASE;
-  const parsedDatabasePath = rawLakebaseDatabase
-    ? parseDatabaseName(rawLakebaseDatabase)
-    : null;
-  const portEnv = process.env.PGPORT;
+  const portEnv = await resolveConfigValue("PGPORT");
   return {
     project:
-      config.project ??
-      process.env.LAKEBASE_PROJECT ??
-      parsed.project ??
-      projectIdFromName(rawBranch) ??
-      parsedDatabasePath?.project,
-    branch:
-      branchIdFromName(rawBranch) ??
-      rawBranch ??
-      parsed.branch ??
-      parsedDatabasePath?.branch,
+      config?.project ??
+      (await resolveConfigValue("postgres_project_id")) ??
+      parsed.project,
+    branch: config?.branch ?? parsed.branch,
     // Only canonical endpoint resource paths survive here; URIs and
     // bare hostnames set `host` instead and leave `endpoint` undefined
     // until the REST resolver fills it in.
     endpoint: parsed.endpoint,
-    database: config.database ?? process.env.PGDATABASE ?? parsed.database,
-    host: config.host ?? process.env.PGHOST ?? parsed.host,
+    database:
+      config?.database ?? (await resolveConfigValue("PGDATABASE")) ?? parsed.database,
+    host: config?.host ?? (await resolveConfigValue("PGHOST")) ?? parsed.host,
     port:
-      config.port ??
+      config?.port ??
       (portEnv ? Number.parseInt(portEnv, 10) : undefined) ??
       parsed.port,
     sslMode:
-      config.sslMode ??
-      (process.env.PGSSLMODE as SslMode | undefined) ??
+      config?.sslMode ??
+      ((await resolveConfigValue("PGSSLMODE")) as SslMode | undefined) ??
       parsed.sslMode,
-    autoCreate: config.autoCreate,
+    autoCreate: config?.autoCreate,
   };
 }
 
@@ -232,11 +205,10 @@ export function readInputs(config: ResolverInputs): ResolverInputs {
  * `endpoint`, `host`, and `database`. Otherwise issues REST calls and
  * may auto-create a project (see module docstring).
  */
-export async function resolveConnection(
-  config: ResolverInputs,
-  log: logUtils.Logger,
-): Promise<Resolved> {
-  const inputs = readInputs(config);
+export async function resolveLakebaseConnection(
+  config?: LakebaseResolverInputs,
+): Promise<LakebaseConnection> {
+  const inputs = await readLakebaseInputs(config);
   let { project, branch, endpoint, database, host } = inputs;
   const port = inputs.port ?? DEFAULT_PORT;
   const sslMode = inputs.sslMode ?? DEFAULT_SSL_MODE;
@@ -244,18 +216,16 @@ export async function resolveConnection(
   // Resource paths may carry redundant info; harvest project/branch
   // from any canonical path that snuck in via PGDATABASE or similar.
   if (endpoint && (!project || !branch)) {
-    const parsed = parseEndpointName(endpoint);
-    if (parsed) {
-      project ??= parsed.project;
-      branch ??= parsed.branch;
-    }
+    const parsedEndpoint = parseAddress(endpoint);
+    project ??= parsedEndpoint.project;
+    branch ??= parsedEndpoint.branch;
   }
   if (database && (!project || !branch)) {
-    const parsed = parseDatabaseName(database);
-    if (parsed) {
-      project ??= parsed.project;
-      branch ??= parsed.branch;
-      database = parsed.databaseId;
+    const parsedDatabase = parseAddress(database);
+    project ??= parsedDatabase.project;
+    branch ??= parsedDatabase.branch;
+    if (parsedDatabase.databaseResourceId) {
+      database = parsedDatabase.databaseResourceId;
     }
   }
 
@@ -269,7 +239,7 @@ export async function resolveConnection(
   // Host known but no resource path: scan the workspace to find which
   // endpoint owns this host so we can populate LAKEBASE_ENDPOINT.
   if (!project && host) {
-    const found = await findEndpointByHost(ws, host, log);
+    const found = await findEndpointByHost(ws, host);
     if (found) {
       project = found.project;
       branch = found.branch;
@@ -279,7 +249,7 @@ export async function resolveConnection(
 
   // No project anywhere in config/env/address: list, pick, or create.
   if (!project) {
-    project = await pickOrCreateProject(ws, config.autoCreate, log);
+    project = await pickOrCreateProject(ws, config?.autoCreate, log);
   }
 
   if (!branch) {
@@ -293,13 +263,13 @@ export async function resolveConnection(
   }
 
   if (!host && endpoint) {
-    const parsed = parseEndpointName(endpoint);
-    if (parsed) {
+    const parsedEndpoint = parseAddress(endpoint);
+    if (parsedEndpoint.project && parsedEndpoint.branch && parsedEndpoint.endpointId) {
       const ep = await waitEndpointReady(
         ws,
-        parsed.project,
-        parsed.branch,
-        parsed.endpointId,
+        parsedEndpoint.project,
+        parsedEndpoint.branch,
+        parsedEndpoint.endpointId,
         log,
       );
       host = ep.status?.hosts?.host;
@@ -320,46 +290,12 @@ export async function resolveConnection(
  * Existing env values are preserved; only missing keys are filled in,
  * which keeps explicit overrides authoritative.
  */
-export function applyToEnv(resolved: Resolved): void {
+export function applyLakebaseToEnv(resolved: LakebaseConnection): void {
   if (resolved.endpoint) process.env.LAKEBASE_ENDPOINT ??= resolved.endpoint;
   if (resolved.host) process.env.PGHOST ??= resolved.host;
   if (resolved.database) process.env.PGDATABASE ??= resolved.database;
   process.env.PGPORT ??= String(resolved.port);
   process.env.PGSSLMODE ??= resolved.sslMode;
-  if (resolved.project) process.env.LAKEBASE_PROJECT ??= resolved.project;
-  if (resolved.branch) process.env.LAKEBASE_BRANCH ??= resolved.branch;
-}
-
-/** Parse `projects/{p}/branches/{b}/endpoints/{e}` into its components. */
-export function parseEndpointName(
-  endpoint: string,
-): { project: string; branch: string; endpointId: string } | null {
-  const m = ENDPOINT_NAME_RE.exec(endpoint);
-  if (!m) return null;
-  return { project: m[1]!, branch: m[2]!, endpointId: m[3]! };
-}
-
-/** Parse `projects/{p}/branches/{b}/databases/{d}` into its components. */
-export function parseDatabaseName(
-  database: string,
-): { project: string; branch: string; databaseId: string } | null {
-  const m = DATABASE_NAME_RE.exec(database);
-  if (!m) return null;
-  return { project: m[1]!, branch: m[2]!, databaseId: m[3]! };
-}
-
-/** Extract the branch id from a full branch resource path. */
-function branchIdFromName(name: string | undefined): string | undefined {
-  if (!name) return undefined;
-  const m = BRANCH_NAME_RE.exec(name);
-  return m?.[2];
-}
-
-/** Extract the project id from a full project resource path. */
-function projectIdFromName(name: string | undefined): string | undefined {
-  if (!name) return undefined;
-  const m = PROJECT_NAME_RE.exec(name);
-  return m?.[1];
 }
 
 type WorkspaceClient = ReturnType<typeof getWorkspaceClient>;
@@ -457,15 +393,14 @@ async function getEndpoint(
 async function findEndpointByHost(
   ws: WorkspaceClient,
   host: string,
-  log: logUtils.Logger,
 ): Promise<{ project: string; branch: string; endpoint: string } | null> {
   const projects = await listProjects(ws);
   for (const p of projects) {
-    const projectId = projectIdFromName(p.name);
+    const projectId = parseResourcePath(p.name).project;
     if (!projectId) continue;
     const branches = await listBranches(ws, projectId);
     for (const b of branches) {
-      const branchId = branchIdFromName(b.name);
+      const branchId = parseResourcePath(b.name).branch;
       if (!branchId) continue;
       const endpoints = await listEndpoints(ws, projectId, branchId);
       const match = endpoints.find((e) => e.status?.hosts?.host === host);
@@ -495,7 +430,7 @@ async function findEndpointByHost(
  *    the resolved id exists, then return its id.
  * 3. Zero projects AND `autoCreate === false` -> throw.
  * 4. Multiple projects -> throw with the candidate list (set
- *    `LAKEBASE_PROJECT` to disambiguate).
+ *    `config.project` or pin a project id in `LAKEBASE_ENDPOINT`).
  */
 async function pickOrCreateProject(
   ws: WorkspaceClient,
@@ -504,7 +439,7 @@ async function pickOrCreateProject(
 ): Promise<string> {
   const projects = await listProjects(ws);
   if (projects.length === 1) {
-    const id = projectIdFromName(projects[0]!.name);
+    const id = parseResourcePath(projects[0]!.name).project;
     if (id) {
       log.debug("autopg: using only project", { project: id });
       return id;
@@ -513,18 +448,18 @@ async function pickOrCreateProject(
   if (projects.length === 0) {
     if (autoCreate === false) {
       throw new Error(
-        "autopg: no Lakebase projects found and `autoCreate: false`; create a project or set LAKEBASE_PROJECT",
+        "autopg: no Lakebase projects found and `autoCreate: false`; create a project or set config.project / LAKEBASE_ENDPOINT",
       );
     }
     const id = autoCreate ?? (await defaultProjectId());
     return ensureProject(ws, id, log);
   }
   const candidates = projects
-    .map((p) => projectIdFromName(p.name))
+    .map((p) => parseResourcePath(p.name).project)
     .filter((id): id is string => Boolean(id))
     .join(", ");
   throw new Error(
-    `autopg: multiple projects found; set LAKEBASE_PROJECT or config.project. Candidates: ${candidates}`,
+    `autopg: multiple projects found; set config.project or pin a project id in LAKEBASE_ENDPOINT. Candidates: ${candidates}`,
   );
 }
 
@@ -700,15 +635,15 @@ async function pickBranch(
   }
   const flagged = branches.find((b) => b.status?.default === true);
   const choice =
-    branchIdFromName(flagged?.name) ??
-    (branches.length === 1 ? branchIdFromName(branches[0]!.name) : undefined);
+    parseResourcePath(flagged?.name).branch ??
+    (branches.length === 1 ? parseResourcePath(branches[0]!.name).branch : undefined);
   if (!choice) {
     const candidates = branches
-      .map((b) => branchIdFromName(b.name))
+      .map((b) => parseResourcePath(b.name).branch)
       .filter((id): id is string => Boolean(id))
       .join(", ");
     throw new Error(
-      `autopg: project '${project}' has multiple branches and none marked default; set LAKEBASE_BRANCH or config.branch. Candidates: ${candidates}`,
+      `autopg: project '${project}' has multiple branches and none marked default; set config.branch or include the branch in LAKEBASE_ENDPOINT. Candidates: ${candidates}`,
     );
   }
   log.debug("autopg: resolved branch", { project, branch: choice });
