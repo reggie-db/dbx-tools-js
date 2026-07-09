@@ -23,7 +23,7 @@ speculatively.
 
 ## Scaffolding
 
-- Every `bun run create` kind - standard, `--plugin`, and `--shared` -
+- Every `bun dbxtools create` kind - standard, `--plugin`, and `--shared` -
   produces a **single `index.ts`**. None of them emit `index.client.ts`
   or an `exports` split.
 - `--shared` just seeds a dependency-free, browser-safe contract package

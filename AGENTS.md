@@ -10,14 +10,14 @@ Bun + TypeScript monorepo for `@dbx-tools/*` AppKit add-ons targeting
 Databricks Apps. The publishable packages plus a runnable demo. See
 the root [`README.md`](README.md) for the full package table. The
 workspace build/scaffold/release tooling itself ships as the
-`@dbx-tools/cli` package (the `dbxtools` bin behind the root scripts).
+`@dbx-tools/cli` package (the `dbxtools` bin).
 
 ```bash
 bun install                 # from repo root
 bun run typecheck           # workspace-wide tsc --noEmit
-bun run build               # tsc per publishable package
+bun dbxtools build          # compile every publishable package
 bun test                    # bun test across all packages
-bun run --filter '@dbx-tools/appkit-demo' dev   # run the demo
+bun run dev                 # run the demo app
 ```
 
 ## Core conventions
@@ -90,7 +90,7 @@ Tag-driven. `bun run tag` bumps every publishable package, commits
   Folds dirty files into the release commit. See
   [`.cursor/rules/release-workflow.mdc`](.cursor/rules/release-workflow.mdc).
 
-**Don't run `bun run tag`, `bun run release`, or any push command
+**Don't run `bun run tag`, `bun dbxtools release`, or any push command
 without explicit user consent in the current message.**
 
 ## Where to find more

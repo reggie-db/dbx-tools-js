@@ -14,11 +14,17 @@ import {
   useMastraThreads,
 } from "../lib/mastra-client.js";
 import type { MastraStreamResponse } from "../lib/mastra-stream.js";
+import {
+  createThreadSession,
+  DEFAULT_THREAD_SESSION_KEY,
+  isSessionRunning,
+  sessionKey,
+  type ThreadSession,
+} from "../lib/thread-sessions.js";
 import { ChatView } from "./chat-view.js";
 import { dedupeSuggestions } from "./suggestions.js";
 import type {
   ApprovalDecision,
-  ChatStatus,
   ChatViewProps,
   FeedbackSubmission,
   MessageFeedback,
@@ -359,65 +365,52 @@ export const useMastraChat = (
     () => explicitSuggestions ?? dedupeSuggestions(genieSuggestions),
     [explicitSuggestions, genieSuggestions],
   );
-  const [messages, setMessages] = useState<UIMessage[]>([]);
-  const [status, setStatus] = useState<ChatStatus>("ready");
-  // The error from the last failed turn, surfaced by ChatView as a
-  // destructive Alert. Cleared whenever a new turn starts.
-  const [error, setError] = useState<Error | null>(null);
-  // History pagination UI state. The authoritative "next page to
-  // fetch" lives in `historyPageRef` so concurrent callers see the
-  // updated value synchronously; `hasMoreHistory` and `isLoadingMore`
-  // exist only to drive the spinner / load-more trigger in ChatView.
-  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [sessionsTick, setSessionsTick] = useState(0);
+  const sessionsRef = useRef<Map<string, ThreadSession>>(new Map());
+  const notifySessions = useCallback(() => {
+    setSessionsTick((tick) => tick + 1);
+  }, []);
+  const getSession = useCallback((threadId: string): ThreadSession => {
+    let session = sessionsRef.current.get(threadId);
+    if (!session) {
+      session = createThreadSession();
+      sessionsRef.current.set(threadId, session);
+    }
+    return session;
+  }, []);
+  const updateSession = useCallback(
+    (threadId: string, updater: (session: ThreadSession) => ThreadSession) => {
+      const next = updater(getSession(threadId));
+      sessionsRef.current.set(threadId, next);
+      notifySessions();
+    },
+    [getSession, notifySessions],
+  );
+  const activeKey = sessionKey(activeThreadId);
+  const activeSession = useMemo(
+    () => getSession(activeKey),
+    [activeKey, getSession, sessionsTick],
+  );
+  const streamingThreadIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const [id, session] of sessionsRef.current.entries()) {
+      if (id === DEFAULT_THREAD_SESSION_KEY) continue;
+      if (isSessionRunning(session)) ids.push(id);
+    }
+    return ids;
+  }, [sessionsTick]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  // Atomic guards for history fetches. `historyPageRef` is the next
-  // page index to request and is bumped *before* the fetch fires so
-  // back-to-back calls never request the same page. `historyInFlightRef`
-  // gates concurrent calls so two scroll events near the top can't
-  // both pass an `isLoadingMore === false` check (state updates are
-  // async; refs are not).
-  const historyPageRef = useRef(0);
   const historyInFlightRef = useRef(false);
-  // Tool-call status keyed by the assistant message that owns them. We
-  // need an out-of-band channel because `UIMessage["parts"]` doesn't
-  // carry tool metadata in a way our `ChatView` reads. Indexed by
-  // assistant id so regenerating one message doesn't wipe sibling
-  // events, and rendered as inline shimmer/pills in the bubble.
-  const [toolEventsByMessage, setToolEventsByMessage] = useState<
-    Record<string, ToolEvent[]>
-  >({});
-  // Approval-gated tool calls keyed by assistant message. Populated
-  // from `tool-call-approval` chunks during streaming and consumed by
-  // ChatView's inline `ToolApprovalCard`. Each entry persists until
-  // the user approves/denies (or the tool run completes another way),
-  // at which point we drop the assistant key so the card disappears.
-  const [pendingApprovalsByMessage, setPendingApprovalsByMessage] = useState<
-    Record<string, PendingApproval[]>
-  >({});
-  // MLflow feedback per assistant message, keyed by message id. Seeded
-  // with the trace id captured from each streamed turn's response header
-  // (see `processStream`); `value` is filled in once the user thumbs.
-  // Consumed by ChatView to both gate and highlight the per-bubble
-  // feedback controls. A ref mirror lets `submitFeedback` read the
-  // latest trace id without churning its identity every thumb.
-  const [feedbackByMessage, setFeedbackByMessage] = useState<
-    Record<string, MessageFeedback>
-  >({});
-  const feedbackByMessageRef = useRef(feedbackByMessage);
-  feedbackByMessageRef.current = feedbackByMessage;
-  // We mirror `messages` into a ref so sendMessage / regenerate can read
-  // the latest history without putting side effects (the agent.stream
-  // call) inside a state updater. State updaters get invoked twice in
-  // React StrictMode, which would otherwise fire the stream request
-  // twice and produce duplicate assistant responses.
-  const messagesRef = useRef<UIMessage[]>([]);
-  const lastUserTextRef = useRef<string | null>(null);
+  const feedbackByMessageRef = useRef<Record<string, MessageFeedback>>({});
+  feedbackByMessageRef.current = activeSession.feedbackByMessage;
 
-  const writeMessages = useCallback((next: UIMessage[]) => {
-    messagesRef.current = next;
-    setMessages(next);
-  }, []);
+  const writeMessages = useCallback(
+    (threadId: string, next: UIMessage[]) => {
+      updateSession(threadId, (session) => ({ ...session, messages: next }));
+    },
+    [updateSession],
+  );
 
   /**
    * Pipe a Mastra stream Response through the same chunk handler used
@@ -429,28 +422,30 @@ export const useMastraChat = (
    */
   const processStream = useCallback(
     async (
+      threadId: string,
       stream: MastraStreamResponse,
       assistantId: string,
       runIdRef: { current: string | null },
       signal: AbortSignal,
     ) => {
-      // Capture the turn's MLflow trace id off the stream response
-      // header and pin it to this assistant message so a later thumbs /
-      // comment attaches to the right trace. Absent when MLflow logging
-      // isn't enabled (the server omits the header) - the feedback
-      // controls then simply don't render for the message.
       const traceId = readMlflowTraceId(stream);
       if (traceId) {
-        setFeedbackByMessage((prev) =>
-          prev[assistantId]?.traceId === traceId
-            ? prev
-            : { ...prev, [assistantId]: { ...prev[assistantId], traceId } },
+        updateSession(threadId, (session) =>
+          session.feedbackByMessage[assistantId]?.traceId === traceId
+            ? session
+            : {
+                ...session,
+                feedbackByMessage: {
+                  ...session.feedbackByMessage,
+                  [assistantId]: {
+                    ...session.feedbackByMessage[assistantId],
+                    traceId,
+                  },
+                },
+              },
         );
       }
-      // Replay carries forward whatever text / reasoning was already
-      // accumulated for `assistantId` so resuming after approval
-      // appends rather than overwrites.
-      const existing = messagesRef.current.find((m) => m.id === assistantId);
+      const existing = getSession(threadId).messages.find((m) => m.id === assistantId);
       // Text is tracked as ordered segments, one per `text-start` the
       // agent emits. In a multi-step turn the model opens a fresh text
       // block in each step (a short preamble before each tool call),
@@ -476,15 +471,13 @@ export const useMastraChat = (
       };
 
       const upsertAssistant = () => {
-        const prev = messagesRef.current;
+        const prev = getSession(threadId).messages;
         const next = [...prev];
         const idx = next.findIndex((m) => m.id === assistantId);
         const parts: UIMessage["parts"] = [];
         if (assistantReasoning) {
           parts.push({ type: "reasoning", text: assistantReasoning });
         }
-        // One text part per non-empty segment, in stream order, so the
-        // bubble renders each step's text as its own block.
         for (const segment of textSegments) {
           if (segment.length > 0) parts.push({ type: "text", text: segment });
         }
@@ -495,26 +488,26 @@ export const useMastraChat = (
         };
         if (idx === -1) next.push(message);
         else next[idx] = message;
-        writeMessages(next);
+        writeMessages(threadId, next);
       };
 
-      // Patch the tool-event list for `assistantId` without clobbering
-      // events that belong to other assistant turns in `messages`.
       const patchToolEvents = (update: (list: ToolEvent[]) => ToolEvent[]) => {
-        setToolEventsByMessage((prev) => ({
-          ...prev,
-          [assistantId]: update(prev[assistantId] ?? []),
+        updateSession(threadId, (session) => ({
+          ...session,
+          toolEventsByMessage: {
+            ...session.toolEventsByMessage,
+            [assistantId]: update(session.toolEventsByMessage[assistantId] ?? []),
+          },
         }));
       };
 
-      // Flip to "streaming" as soon as *any* visible signal lands
-      // (text, reasoning, or a tool call), so the input switch from
-      // "submitted" to "streaming" reflects real activity.
       let started = false;
       const markStreaming = () => {
         if (started) return;
         started = true;
-        setStatus("streaming");
+        updateSession(threadId, (session) =>
+          session.status === "streaming" ? session : { ...session, status: "streaming" },
+        );
       };
 
       try {
@@ -530,6 +523,7 @@ export const useMastraChat = (
             // the client-supplied runId got overridden server-side.
             if (chunk.runId && !runIdRef.current) {
               runIdRef.current = chunk.runId;
+              updateSession(threadId, (session) => ({ ...session, runId: chunk.runId! }));
             }
             switch (chunk.type) {
               case "text-start":
@@ -587,22 +581,25 @@ export const useMastraChat = (
                   });
                   break;
                 }
-                setPendingApprovalsByMessage((prev) => {
-                  const existing = prev[assistantId] ?? [];
-                  if (existing.some((a) => a.toolCallId === toolCallId)) {
-                    return prev;
+                updateSession(threadId, (session) => {
+                  const existingApprovals = session.pendingApprovalsByMessage[assistantId] ?? [];
+                  if (existingApprovals.some((a) => a.toolCallId === toolCallId)) {
+                    return session;
                   }
                   return {
-                    ...prev,
-                    [assistantId]: [
-                      ...existing,
-                      {
-                        toolName,
-                        toolCallId,
-                        runId: approvalRunId,
-                        input: args,
-                      },
-                    ],
+                    ...session,
+                    pendingApprovalsByMessage: {
+                      ...session.pendingApprovalsByMessage,
+                      [assistantId]: [
+                        ...existingApprovals,
+                        {
+                          toolName,
+                          toolCallId,
+                          runId: approvalRunId,
+                          input: args,
+                        },
+                      ],
+                    },
                   };
                 });
                 upsertAssistant();
@@ -681,90 +678,77 @@ export const useMastraChat = (
         throw error;
       }
     },
-    [writeMessages],
+    [getSession, updateSession, writeMessages],
   );
 
-  // The currently-active assistant turn. Refreshed on every fresh
-  // `runStream` and consumed by `handleApproval` so resumed streams
-  // attach back to the same bubble. Persists across renders because
-  // approvals can be resolved long after the originating render
-  // committed.
-  const currentAssistantIdRef = useRef<string | null>(null);
-  // Mastra runId for the active turn. Pre-seeded by `runStream`
-  // (client-supplied) and mutated in-place by `processStream` when
-  // chunks land. Read by `handleApproval` to call `approveToolCall`
-  // / `declineToolCall` against the right workflow instance.
-  const currentRunIdRef = useRef<string | null>(null);
-  // Abort handle for the active turn. `stop()` fires it; `processStream`
-  // watches the signal to unwind. Each new turn supersedes the prior
-  // controller so an in-flight run can't bleed into the next.
-  const abortRef = useRef<AbortController | null>(null);
-  // Monotonic token identifying the active turn. A run only writes its
-  // terminal status (`ready`/`error`) if its token is still current, so
-  // a stopped or superseded run can't clobber a newer turn's state.
-  const runTokenRef = useRef(0);
-
-  /**
-   * Run one streamed turn end-to-end: arm a fresh abort controller,
-   * supersede any prior turn, flip to `submitted`, open the stream via
-   * `open`, and pipe it through {@link processStream}. Shared by the
-   * initial send/regenerate path and the approval-resume path so the
-   * stop/supersede/error bookkeeping lives in exactly one place.
-   */
   const driveStream = useCallback(
     async (
+      threadId: string,
       assistantId: string,
       open: () => Promise<MastraStreamResponse>,
     ) => {
       const controller = new AbortController();
-      abortRef.current?.abort();
-      abortRef.current = controller;
-      const token = ++runTokenRef.current;
-      currentAssistantIdRef.current = assistantId;
-      setError(null);
-      setStatus("submitted");
+      let token = 0;
+      updateSession(threadId, (session) => {
+        session.abortController?.abort();
+        token = session.runToken + 1;
+        return {
+          ...session,
+          abortController: controller,
+          assistantId,
+          runId: session.runId,
+          error: null,
+          status: "submitted",
+          runToken: token,
+        };
+      });
+      const runIdRef = { current: getSession(threadId).runId };
       try {
+        const streamThreadId =
+          threadId === DEFAULT_THREAD_SESSION_KEY ? undefined : threadId;
+        mastraClient.setThreadId(streamThreadId);
         const stream = await open();
-        await processStream(stream, assistantId, currentRunIdRef, controller.signal);
-        if (runTokenRef.current === token) {
-          setStatus("ready");
-          // A completed turn may have created the thread (first message)
-          // or triggered server-side title generation; sync the list.
+        await processStream(threadId, stream, assistantId, runIdRef, controller.signal);
+        updateSession(threadId, (session) => {
+          if (session.runToken !== token) return session;
+          return {
+            ...session,
+            status: "ready",
+            abortController: session.abortController === controller ? null : session.abortController,
+            runId: runIdRef.current,
+          };
+        });
+        if (getSession(threadId).runToken === token) {
           refreshThreadsSoon();
         }
       } catch (caught) {
-        // A superseded or stopped run (token moved on) leaves the status
-        // to the newer turn / `stop()`; only the still-active run
-        // surfaces the error.
-        if (runTokenRef.current !== token) return;
+        if (getSession(threadId).runToken !== token) return;
         log.error("stream error", {
           error: commonUtils.errorMessage(caught),
         });
-        setError(commonUtils.toError(caught));
-        setStatus("error");
-      } finally {
-        if (abortRef.current === controller) abortRef.current = null;
+        updateSession(threadId, (session) => ({
+          ...session,
+          error: commonUtils.toError(caught),
+          status: "error",
+          abortController: session.abortController === controller ? null : session.abortController,
+          runId: runIdRef.current,
+        }));
       }
     },
-    [mastraClient, processStream, refreshThreadsSoon],
+    [getSession, mastraClient, processStream, refreshThreadsSoon, updateSession],
   );
 
   const runStream = useCallback(
-    (history: UIMessage[]) => {
+    (threadId: string, history: UIMessage[]) => {
       const assistantId = nanoid();
       const runId = nanoid();
-      // Pre-seed the runId so a follow-up `approveToolCall` stays
-      // anchored to the same workflow even if the first chunk is
-      // delayed. Server is authoritative; if it overrides we pick that
-      // up via `currentRunIdRef` inside `processStream`.
-      currentRunIdRef.current = runId;
-      return driveStream(assistantId, () => {
+      updateSession(threadId, (session) => ({
+        ...session,
+        assistantId,
+        runId,
+      }));
+      return driveStream(threadId, assistantId, () => {
         const agent = mastraClient.getAgent(agentId);
-        // Flatten each turn's text parts into role/content messages. The
-        // cast to `agent.stream`'s own input type is needed because a
-        // single object literal carries a *union* `role`
-        // (`"user" | "assistant" | "system"`), which TS won't narrow to
-        // any one arm of Mastra's discriminated message union on its own.
         const messagesForAgent = history.flatMap((m) =>
           m.parts
             .filter((p): p is { type: "text"; text: string } => p.type === "text")
@@ -773,22 +757,23 @@ export const useMastraChat = (
         return agent.stream(messagesForAgent, { runId }) as Promise<MastraStreamResponse>;
       });
     },
-    [driveStream, mastraClient, agentId],
+    [driveStream, mastraClient, agentId, updateSession],
   );
 
-  /**
-   * Abort the in-flight turn: invalidate its token so its completion
-   * can't flip status, signal `processStream` to unwind, and return the
-   * composer to idle. Any partial assistant text already streamed stays
-   * in the transcript.
-   */
   const stop = useCallback(() => {
-    runTokenRef.current++;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setError(null);
-    setStatus("ready");
-  }, []);
+    const threadId = activeKey;
+    updateSession(threadId, (session) => {
+      if (!isSessionRunning(session)) return session;
+      session.abortController?.abort();
+      return {
+        ...session,
+        abortController: null,
+        runToken: session.runToken + 1,
+        error: null,
+        status: "ready",
+      };
+    });
+  }, [activeKey, updateSession]);
 
   /**
    * Approve or deny an in-flight `requireApproval` tool call. The
@@ -799,8 +784,10 @@ export const useMastraChat = (
    */
   const handleApproval = useCallback(
     async (decision: ApprovalDecision) => {
-      const { runId, toolCallId, toolName } = decision;
-      const assistantId = currentAssistantIdRef.current;
+      const { runId: decisionRunId, toolCallId, toolName } = decision;
+      const session = getSession(activeKey);
+      const assistantId = session.assistantId;
+      const runId = decisionRunId ?? session.runId;
       if (!runId || !assistantId) {
         log.warn("approval missing runId or assistantId, cannot resume", {
           tool: toolName,
@@ -810,47 +797,42 @@ export const useMastraChat = (
         });
         return;
       }
-      // Drop the card immediately so the user gets feedback even if
-      // the resume request takes a moment.
-      setPendingApprovalsByMessage((prev) => {
-        const existing = prev[assistantId];
-        if (!existing) return prev;
+      updateSession(activeKey, (current) => {
+        const existing = current.pendingApprovalsByMessage[assistantId];
+        if (!existing) return current;
         const next = existing.filter((a) => a.toolCallId !== toolCallId);
         if (next.length === 0) {
-          const { [assistantId]: _drop, ...rest } = prev;
-          return rest;
+          const { [assistantId]: _drop, ...rest } = current.pendingApprovalsByMessage;
+          return { ...current, pendingApprovalsByMessage: rest };
         }
-        return { ...prev, [assistantId]: next };
+        return {
+          ...current,
+          pendingApprovalsByMessage: { ...current.pendingApprovalsByMessage, [assistantId]: next },
+        };
       });
       log.info(decision.approved ? "approved" : "denied", {
         tool: toolName,
         toolCallId,
         runId,
       });
-      await driveStream(assistantId, () =>
+      await driveStream(activeKey, assistantId, () =>
         decision.approved
           ? mastraClient.approveToolCallStream(agentId, { runId, toolCallId })
           : mastraClient.declineToolCallStream(agentId, { runId, toolCallId }),
       );
     },
-    [driveStream, mastraClient, agentId],
+    [activeKey, driveStream, getSession, mastraClient, agentId, updateSession],
   );
 
   const sendMessage = useCallback<ChatViewProps["sendMessage"]>(
     (message) => {
       const text = message.text ?? "";
       if (!text) return;
-      lastUserTextRef.current = text;
-      // As soon as a conversation gets a message, surface it in the
-      // sidebar (optimistically for a brand-new, not-yet-persisted
-      // thread; a no-op merge for one already in the server list).
+      const threadId = activeKey;
+      updateSession(threadId, (session) => ({ ...session, lastUserText: text }));
       if (activeThreadId) {
         noteThreadActivity(activeThreadId);
-        // First question in a fresh thread: title the row from it right
-        // now so the sidebar stops showing the "New conversation"
-        // placeholder before the server's auto-title arrives. Only the
-        // first message titles it, and a real server title later wins.
-        if (messagesRef.current.length === 0) {
+        if (getSession(threadId).messages.length === 0) {
           const provisional = deriveThreadTitle(text);
           if (provisional) {
             setProvisionalTitles((prev) =>
@@ -861,11 +843,11 @@ export const useMastraChat = (
           }
         }
       }
-      const next = [...messagesRef.current, makeUserMessage(text)];
-      writeMessages(next);
-      void runStream(next);
+      const next = [...getSession(threadId).messages, makeUserMessage(text)];
+      writeMessages(threadId, next);
+      void runStream(threadId, next);
     },
-    [runStream, writeMessages, activeThreadId, noteThreadActivity],
+    [runStream, writeMessages, activeThreadId, activeKey, getSession, noteThreadActivity, updateSession],
   );
 
   /**
@@ -877,6 +859,7 @@ export const useMastraChat = (
    * and would be unresolvable anyway, so we drop them too.
    */
   const handleClear = useCallback(async () => {
+    const threadId = activeKey;
     try {
       const result = await mastraClient.clearHistory({ agentId });
       log.info("history cleared", { cleared: result.cleared });
@@ -884,23 +867,13 @@ export const useMastraChat = (
       log.error("history clear error", {
         error: commonUtils.errorMessage(error),
       });
-      // Reset UI anyway so the user isn't stuck staring at a stale
-      // transcript; the server-side cleanup will catch up on next
-      // request or session expiry.
     }
-    writeMessages([]);
-    setToolEventsByMessage({});
-    setPendingApprovalsByMessage({});
-    setFeedbackByMessage({});
-    setHasMoreHistory(false);
-    historyPageRef.current = 1;
-    lastUserTextRef.current = null;
-    currentAssistantIdRef.current = null;
-    currentRunIdRef.current = null;
-    setError(null);
-    setStatus("ready");
-    // The active thread is now empty; drop any optimistic row for it so
-    // a just-started conversation doesn't linger in the sidebar.
+    const session = getSession(threadId);
+    session.abortController?.abort();
+    updateSession(threadId, () => ({
+      ...createThreadSession(),
+      historyLoaded: true,
+    }));
     if (activeThreadId) {
       setOptimisticThreads((prev) => {
         if (!prev[activeThreadId]) return prev;
@@ -913,44 +886,24 @@ export const useMastraChat = (
         return rest;
       });
     }
-    // Clearing deletes the thread server-side, so drop it from the list.
     refreshThreadsSoon();
-  }, [mastraClient, agentId, writeMessages, refreshThreadsSoon, activeThreadId]);
+  }, [mastraClient, agentId, activeKey, activeThreadId, getSession, refreshThreadsSoon, updateSession]);
 
-  /**
-   * Switch the active conversation to `threadId`. Aborts any in-flight
-   * turn on the current thread, then flips `activeThreadId` - the
-   * history effect re-points the client at the thread, resets the
-   * transcript, and loads its messages. No-op when already active.
-   */
   const selectThread = useCallback(
     (threadId: string) => {
       if (threadId === activeThreadId) return;
-      runTokenRef.current++;
-      abortRef.current?.abort();
-      abortRef.current = null;
       setActiveThreadId(threadId);
     },
     [activeThreadId],
   );
 
-  /**
-   * Start a fresh conversation: mint a new thread id and make it active.
-   * The thread row materializes server-side (and joins the list) on the
-   * first message; until then the transcript is just empty.
-   */
   const newThread = useCallback(() => {
-    runTokenRef.current++;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setActiveThreadId(nanoid());
-  }, []);
+    const id = nanoid();
+    sessionsRef.current.set(id, { ...createThreadSession(), historyLoaded: true });
+    notifySessions();
+    setActiveThreadId(id);
+  }, [notifySessions]);
 
-  /**
-   * Delete a conversation by id, then refresh the list. Deleting the
-   * active conversation rolls onto a fresh empty thread so the user is
-   * never left pointed at a thread that no longer exists.
-   */
   const deleteThread = useCallback(
     async (threadId: string) => {
       try {
@@ -962,8 +915,10 @@ export const useMastraChat = (
           error: commonUtils.errorMessage(error),
         });
       }
-      // Drop any optimistic row / provisional title for the deleted
-      // thread so it can't linger in the sidebar after removal.
+      const session = sessionsRef.current.get(threadId);
+      session?.abortController?.abort();
+      sessionsRef.current.delete(threadId);
+      notifySessions();
       setOptimisticThreads((prev) => {
         if (!prev[threadId]) return prev;
         const { [threadId]: _drop, ...rest } = prev;
@@ -975,14 +930,14 @@ export const useMastraChat = (
         return rest;
       });
       if (threadId === activeThreadId) {
-        runTokenRef.current++;
-        abortRef.current?.abort();
-        abortRef.current = null;
-        setActiveThreadId(nanoid());
+        const id = nanoid();
+        sessionsRef.current.set(id, { ...createThreadSession(), historyLoaded: true });
+        notifySessions();
+        setActiveThreadId(id);
       }
       refreshThreads();
     },
-    [mastraClient, agentId, activeThreadId, refreshThreads],
+    [mastraClient, agentId, activeThreadId, notifySessions, refreshThreads],
   );
 
   /**
@@ -1022,54 +977,46 @@ export const useMastraChat = (
   );
 
   const regenerate = useCallback(() => {
-    if (!lastUserTextRef.current) return;
-    // Drop the last assistant message before regenerating so the new
-    // stream replaces it instead of appending alongside. Clear the
-    // tool events and pending approvals for that turn too so the
-    // regenerated bubble starts with a blank slate.
-    const prev = messagesRef.current;
+    const threadId = activeKey;
+    const lastUserText = getSession(threadId).lastUserText;
+    if (!lastUserText) return;
+    const prev = getSession(threadId).messages;
     const lastAssistant =
       prev.length > 0 && prev.at(-1)?.role === "assistant" ? prev.at(-1) : null;
     const trimmed = lastAssistant ? prev.slice(0, -1) : prev;
     if (lastAssistant) {
-      setToolEventsByMessage((map) => {
-        const { [lastAssistant.id]: _events, ...rest } = map;
-        return rest;
-      });
-      setPendingApprovalsByMessage((map) => {
-        const { [lastAssistant.id]: _approvals, ...rest } = map;
-        return rest;
-      });
-      setFeedbackByMessage((map) => {
-        const { [lastAssistant.id]: _feedback, ...rest } = map;
-        return rest;
+      updateSession(threadId, (session) => {
+        const { [lastAssistant.id]: _events, ...toolEvents } = session.toolEventsByMessage;
+        const { [lastAssistant.id]: _approvals, ...pendingApprovals } =
+          session.pendingApprovalsByMessage;
+        const { [lastAssistant.id]: _feedback, ...feedback } = session.feedbackByMessage;
+        return {
+          ...session,
+          toolEventsByMessage: toolEvents,
+          pendingApprovalsByMessage: pendingApprovals,
+          feedbackByMessage: feedback,
+        };
       });
     }
-    writeMessages(trimmed);
-    void runStream(trimmed);
-  }, [runStream, writeMessages]);
+    writeMessages(threadId, trimmed);
+    void runStream(threadId, trimmed);
+  }, [activeKey, getSession, runStream, updateSession, writeMessages]);
 
-  // Hydrate the transcript with the latest page of stored messages on
-  // mount and whenever the active thread (or agent) changes. Pointing
-  // the client at `activeThreadId` here - before any fetch or stream -
-  // is what makes every subsequent call target the selected thread. We
-  // re-run when `basePath`, `agentId`, or `activeThreadId` changes (the
-  // model only affects subsequent generations, not stored history, so
-  // model changes don't refire this).
+  // Hydrate the active thread from the server when it has no local
+  // session yet. In-flight streams keep updating their session in the
+  // background, so switching back shows live partial text without
+  // refetching or aborting other threads' runs.
   useEffect(() => {
+    const threadId = activeKey;
+    mastraClient.setThreadId(activeThreadId);
+    const session = getSession(threadId);
+    if (session.historyLoaded) {
+      setIsLoadingHistory(false);
+      return;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
-    // Route the agent stream + custom routes at the active thread. When
-    // thread management is off, `activeThreadId` is undefined and the
-    // header is cleared, so the server falls back to the session cookie.
-    mastraClient.setThreadId(activeThreadId);
-    // Reset per-thread client state so switching conversations never
-    // bleeds the prior thread's transcript / pills / approvals / feedback
-    // through.
-    writeMessages([]);
-    setToolEventsByMessage({});
-    setPendingApprovalsByMessage({});
-    setFeedbackByMessage({});
     historyInFlightRef.current = true;
     setIsLoadingHistory(true);
     mastraClient
@@ -1081,22 +1028,23 @@ export const useMastraChat = (
       })
       .then((response) => {
         if (cancelled) return;
-        writeMessages(response.uiMessages as unknown as UIMessage[]);
-        // Tool events are live-stream only - the progress that
-        // built the SQL/thinking pills isn't persisted, so a
-        // reload renders the settled assistant text + any
-        // `[chart:<id>]` markers it carries. Charts re-resolve
-        // out-of-band: `<ChartSlot>` long-polls the chart cache
-        // by id; unknown / TTL-expired ids silently drop.
-        historyPageRef.current = 1;
-        setHasMoreHistory(response.hasMore);
+        updateSession(threadId, (current) => ({
+          ...current,
+          messages: response.uiMessages as unknown as UIMessage[],
+          historyLoaded: true,
+          hasMoreHistory: response.hasMore,
+          historyPage: 1,
+          toolEventsByMessage: {},
+          pendingApprovalsByMessage: {},
+          feedbackByMessage: {},
+        }));
       })
       .catch((error: unknown) => {
         if (cancelled || (error as { name?: string }).name === "AbortError") return;
         log.error("history load error", {
           error: commonUtils.errorMessage(error),
         });
-        setHasMoreHistory(false);
+        updateSession(threadId, (current) => ({ ...current, hasMoreHistory: false }));
       })
       .finally(() => {
         historyInFlightRef.current = false;
@@ -1106,50 +1054,45 @@ export const useMastraChat = (
       cancelled = true;
       controller.abort();
     };
-  }, [mastraClient, agentId, activeThreadId, writeMessages]);
+  }, [mastraClient, agentId, activeThreadId, activeKey, getSession, updateSession]);
 
-  // Lazy-load the next older page when the user scrolls near the top
-  // of the transcript. ChatView captures the pre-prepend scroll
-  // anchor before invoking us, so the visual position is preserved
-  // across the prepend; we just have to keep `messagesRef` and
-  // `messages` in sync via `writeMessages`.
-  //
-  // Concurrency: `historyInFlightRef` blocks overlapping calls and
-  // `historyPageRef` is bumped synchronously *before* the fetch
-  // fires, so two scroll events that both observe `isLoadingMore`
-  // mid-render can never request the same page twice (which would
-  // produce duplicate UIMessage ids and the React duplicate-key
-  // warning).
   const loadOlderHistory = useCallback(() => {
-    if (historyInFlightRef.current || !hasMoreHistory) return;
+    const threadId = activeKey;
+    const session = getSession(threadId);
+    if (historyInFlightRef.current || !session.hasMoreHistory) return;
     historyInFlightRef.current = true;
     setIsLoadingMore(true);
-    const page = historyPageRef.current;
-    historyPageRef.current = page + 1;
+    const page = session.historyPage;
+    updateSession(threadId, (current) => ({ ...current, historyPage: page + 1 }));
     mastraClient
       .history({ agentId, page, perPage: HISTORY_PAGE_SIZE })
       .then((response) => {
         const uiMessages = response.uiMessages as unknown as UIMessage[];
         if (uiMessages.length > 0) {
-          writeMessages([...uiMessages, ...messagesRef.current]);
+          const currentMessages = getSession(threadId).messages;
+          writeMessages(threadId, [...uiMessages, ...currentMessages]);
         }
-        setHasMoreHistory(response.hasMore);
+        updateSession(threadId, (current) => ({
+          ...current,
+          hasMoreHistory: response.hasMore,
+        }));
       })
       .catch((error: unknown) => {
         log.error("history load-more error", {
           page,
           error: commonUtils.errorMessage(error),
         });
-        // Roll back the page so a manual retry hits the same page,
-        // and stop the trigger so we don't thrash the failed call.
-        historyPageRef.current = page;
-        setHasMoreHistory(false);
+        updateSession(threadId, (current) => ({
+          ...current,
+          historyPage: page,
+          hasMoreHistory: false,
+        }));
       })
       .finally(() => {
         historyInFlightRef.current = false;
         setIsLoadingMore(false);
       });
-  }, [hasMoreHistory, mastraClient, agentId, writeMessages]);
+  }, [activeKey, getSession, mastraClient, agentId, updateSession, writeMessages]);
 
   // Chat export (opt-in). Resolves `[chart:<id>]` / `[data:<id>]` embeds
   // straight off the client so the export inlines the same charts /
@@ -1177,7 +1120,7 @@ export const useMastraChat = (
         "Conversation";
       try {
         await exportChat({
-          messages: messagesRef.current,
+          messages: getSession(activeKey).messages,
           format,
           resolver: exportResolver,
           title,
@@ -1190,7 +1133,7 @@ export const useMastraChat = (
         });
       }
     },
-    [exportResolver, activeThreadId, threads, exportUserLabel],
+    [exportResolver, activeThreadId, activeKey, getSession, threads, exportUserLabel],
   );
   const exportMessage = useCallback(
     async (message: UIMessage, format: ExportFormat) => {
@@ -1225,9 +1168,12 @@ export const useMastraChat = (
       const traceId = feedbackByMessageRef.current[message.id]?.traceId;
       if (!traceId) return;
       if (submission.value) {
-        setFeedbackByMessage((prev) => ({
-          ...prev,
-          [message.id]: { traceId, value: submission.value },
+        updateSession(activeKey, (session) => ({
+          ...session,
+          feedbackByMessage: {
+            ...session.feedbackByMessage,
+            [message.id]: { traceId, value: submission.value },
+          },
         }));
       }
       try {
@@ -1250,10 +1196,10 @@ export const useMastraChat = (
         });
       }
     },
-    [mastraClient],
+    [activeKey, mastraClient, updateSession],
   );
 
-  // Merge optimistic rows (conversations just started this session) with
+  // Merge optimistic rows
   // the server list, newest first, dropping any optimistic entry the
   // server already returns so a thread is never listed twice.
   const sidebarThreads = useMemo<ThreadSummary[]>(() => {
@@ -1317,15 +1263,15 @@ export const useMastraChat = (
   }, [threads, provisionalTitles]);
 
   return {
-    messages,
-    status,
-    error,
+    messages: activeSession.messages,
+    status: activeSession.status,
+    error: activeSession.error,
     sendMessage,
     regenerate,
     onStop: stop,
     suggestions,
-    toolEventsByMessage,
-    pendingApprovalsByMessage,
+    toolEventsByMessage: activeSession.toolEventsByMessage,
+    pendingApprovalsByMessage: activeSession.pendingApprovalsByMessage,
     onResolveToolApproval: handleApproval,
     // Picker is opt-in: only hand ChatView the catalogue + change
     // handler when `showModelPicker` is on, otherwise the header hides
@@ -1335,7 +1281,7 @@ export const useMastraChat = (
     onModelChange: showModelPicker ? setModel : undefined,
     onLoadMore: loadOlderHistory,
     isLoadingMore,
-    hasMore: hasMoreHistory,
+    hasMore: activeSession.hasMoreHistory,
     isLoadingHistory,
     onClear: handleClear,
     // Conversation management: hand ChatView the thread list + handlers
@@ -1345,6 +1291,7 @@ export const useMastraChat = (
       ? {
           threads: sidebarThreads,
           ...(activeThreadId ? { activeThreadId } : {}),
+          streamingThreadIds,
           isLoadingThreads,
           onSelectThread: selectThread,
           onNewThread: newThread,
@@ -1370,7 +1317,7 @@ export const useMastraChat = (
     // still gates per-message on a captured trace id.
     ...(feedbackAvailable
       ? {
-          feedbackByMessage,
+          feedbackByMessage: activeSession.feedbackByMessage,
           onFeedback: submitFeedback,
         }
       : {}),

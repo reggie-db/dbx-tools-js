@@ -175,6 +175,12 @@ export type ChatViewProps = {
   threads?: ThreadSummary[];
   /** Id of the currently-active thread, highlighted in the sidebar. */
   activeThreadId?: string;
+  /**
+   * Thread ids with an in-flight generation (`submitted` or `streaming`).
+   * Drives a per-row streaming indicator in the sidebar while a turn
+   * continues after the user switches away.
+   */
+  streamingThreadIds?: string[];
   /** True while the initial thread list is loading (drives a sidebar spinner). */
   isLoadingThreads?: boolean;
   /**

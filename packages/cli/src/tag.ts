@@ -553,7 +553,7 @@ export async function tag(opts: TagOptions = {}): Promise<void> {
         "bun install failed; skipping local publish so stale sibling pins aren't shipped. CI will publish from the tag.",
       );
     } else {
-      consola.log("Publishing packages to the local registry (bun run release)...");
+      consola.log("Publishing packages to the local registry (bun dbxtools release)...");
       await sh(["bun", "run", "release"], { nothrow: true });
     }
   }

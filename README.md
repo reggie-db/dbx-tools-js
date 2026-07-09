@@ -68,7 +68,7 @@ linked alongside; every package's own README covers its usage in depth.
 | [`@dbx-tools/appkit-mastra`](packages/appkit-mastra) · [shared](packages/appkit-mastra-shared) · [ui](packages/appkit-mastra-ui) | AppKit plugin mounting Mastra agents + chat route + Lakebase memory + per-request Databricks workspace (Assistant `SKILL.md` trees); drop-in React chat UI. |
 | [`@dbx-tools/appkit-email`](packages/appkit-email) · [shared](packages/appkit-email-shared) · [ui](packages/appkit-email-ui)     | AppKit plugin + approval-gated `send_email` Mastra tool (SMTP, OBO sender); Approve / Deny card UI.                                                  |
 | [`@dbx-tools/appkit-ui`](packages/appkit-ui)                                                                                     | Shared UI foundation for feature UI packages (AppKit UI peers, Streamdown stylesheet).                                                               |
-| [`@dbx-tools/cli`](packages/cli)                                                                                                     | The `dbxtools` build/scaffold/release toolkit (the `bun run build` / `tag` / `release` commands). Reusable as a dev dependency in other Bun monorepos. |
+| [`@dbx-tools/cli`](packages/cli)                                                                                                     | The `dbxtools` build/scaffold/release toolkit (`bun dbxtools …`). Reusable as a dev dependency in other Bun monorepos. |
 | [`@dbx-tools/zerobus`](packages/zerobus)                                                                                         | Thin wrapper over the Databricks Zerobus ingest SDK.                                                                                                 |
 | [`@dbx-tools/appkit-demo`](demo)                                                                                                 | Private, runnable Databricks App that wires everything together.                                                                                     |
 
@@ -78,8 +78,8 @@ From the repo root:
 
 ```bash
 bun install
-bun typecheck
-bun run build
+bun run typecheck
+bun dbxtools build
 ```
 
 Run the demo against a real workspace:
@@ -88,7 +88,7 @@ Run the demo against a real workspace:
 cd demo
 cp .env.example .env   # DATABRICKS_HOST, serving / Lakebase vars as documented there
 databricks auth login --host "$DATABRICKS_HOST"
-bun dev                # or `bun dev` from the repo root (`--filter` demo)
+bun dev                # or `bun run dev` from the repo root
 ```
 
 See [demo/README.md](demo/README.md) for layout, scripts, bundle deploy notes,
@@ -97,9 +97,9 @@ and how the client streams from the Mastra agent route under `/api/mastra`.
 ## Scaffold a new package
 
 ```bash
-bun run create --plugin <slug>   # AppKit plugin stub under packages/appkit-<slug>
-bun run create --shared <slug>   # browser-safe types-only package stub
-bun run create <slug>            # standard package stub
+bun dbxtools create --plugin <slug>   # AppKit plugin stub under packages/appkit-<slug>
+bun dbxtools create --shared <slug>   # browser-safe types-only package stub
+bun dbxtools create <slug>            # standard package stub
 ```
 
 ## Release
@@ -138,7 +138,7 @@ Every publishable package owns its shipped `main`, `types`, `exports`, and
 condition keeps editor/typecheck resolution pointed at raw `.ts` sources, while
 `types` and `default` point at the bundled artifacts in `packages/<slug>/dist/`.
 
-`bun run build` fans out with `bun run --filter='./packages/*' build`; each
+`bun dbxtools build` fans out with `bun run --filter='./packages/*' build`; each
 package runs the shared [`tsdown.config.ts`](tsdown.config.ts), which emits ESM
 JavaScript and `.d.ts` files. There is no publish-time manifest merge,
 `.publish/` staging directory, `package.default.json`, or `package.enforced.json`.
@@ -159,17 +159,17 @@ For maximum security, follow up with`Settings → Publishing access → Require
 ### Manual ad-hoc publish
 
 You can run the same publish flow locally - useful for one-off republishes or
-debugging the package tarballs. `bun run release` builds first, then publishes.
+debugging the package tarballs. `bun dbxtools release` builds first, then publishes.
 
 ```bash
 # Inspect tarballs without uploading anything.
-bun run publish:dry-run
+bun dbxtools release --dry-run
 
 # Publish all publishable packages with Bun.
-bun run release
+bun dbxtools release
 
 # Publish to a specific registry.
-NPM_CONFIG_REGISTRY=https://registry.npmjs.org bun run release
+NPM_CONFIG_REGISTRY=https://registry.npmjs.org bun dbxtools release
 ```
 
 ## License

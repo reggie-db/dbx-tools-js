@@ -90,7 +90,7 @@ export * from "./generated/index.js";
 ## Regenerating
 
 ```bash
-bun run codegen          # runs codegen across every package with a codegen field
+bun dbxtools codegen          # runs codegen across every package with a codegen field
 # or invoke the toolkit directly:
 dbxtools codegen
 ```

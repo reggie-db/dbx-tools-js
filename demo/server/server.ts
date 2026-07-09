@@ -7,7 +7,14 @@ import {
   mastra,
   tool,
 } from "@dbx-tools/appkit-mastra";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+const clientDist = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../client/dist",
+);
 
 // AppKit demo wiring for `@dbx-tools/appkit-mastra`.
 //
@@ -126,7 +133,7 @@ const host = process.env.HOST ?? (isDatabricksApp ? "0.0.0.0" : "127.0.0.1");
 
 await createApp({
   plugins: [
-    server({ host }),
+    server({ host, staticPath: clientDist }),
     genie(),
     lakebase(),
     // Validates SMTP config + verifies connectivity at startup, and

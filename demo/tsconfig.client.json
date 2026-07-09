@@ -5,11 +5,11 @@
     "useDefineForClassFields": true,
     "moduleDetection": "force",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    "types": [],
     "baseUrl": "./client",
     "paths": {
       "@/*": ["./src/*"]
     }
   },
-  "include": ["client/src", "shared/appkit-types"]
+  "include": ["client/src", "client/src/.generated", "shared/appkit-types"]
 }

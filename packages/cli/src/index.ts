@@ -6,6 +6,7 @@
  */
 
 export { build } from "./build.js";
+export { exec, type ExecOptions } from "./exec.js";
 export {
   AGENT_DEFAULT_TIMEOUT_MS,
   agent,

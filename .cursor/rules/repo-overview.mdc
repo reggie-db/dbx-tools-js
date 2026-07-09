@@ -36,7 +36,7 @@ Databricks Apps. Seventeen publishable packages plus a runnable demo.
 Capabilities follow a `<name>` / `<name>-shared` / `<name>-ui` trio
 (see `appkit-mastra*`, `appkit-email*`): server logic in the plugin
 package, a dependency-free wire contract in `-shared`, and React in
-`-ui`. Scaffold new packages with `bun run create [--plugin|--shared]
+`-ui`. Scaffold new packages with `bun dbxtools create [--plugin|--shared]
 <slug>` rather than hand-rolling `package.json` / `tsconfig`.
 
 A `-shared` (or any) package is a **single `index.ts`** by default. Only
@@ -52,10 +52,10 @@ stays single-entry.
 ```bash
 bun install                 # from repo root
 bun run typecheck           # bunx --bun tsc --noEmit (workspace-wide)
-bun run build               # build every publishable package (tsc per pkg)
+bun dbxtools build          # build every publishable package
 bun test                    # run bun test across all packages
 bun run tag                 # patch bump + commit + push + tag + push tag
-bun run --filter '@dbx-tools/appkit-demo' dev  # run the demo app
+bun run dev                 # run the demo app
 ```
 
 ## Workspace plumbing

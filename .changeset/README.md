@@ -20,7 +20,7 @@ selected. The `demo` package is private and never publishes.
 The canonical "main" version of the monorepo lives on the publishable
 `@dbx-tools/*` packages themselves (they bump together as a `fixed` group).
 The root `package.json` carries no `version` field - there's nothing to keep
-in sync. Newly scaffolded packages (`bun run create plugin <slug>`) read the
+in sync. Newly scaffolded packages (`bun dbxtools create plugin <slug>`) read the
 current group version straight off the published packages, so they start
 already in lockstep with the rest of the workspace.
 

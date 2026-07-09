@@ -189,10 +189,24 @@ interface Operation {
 export function readInputs(config: ResolverInputs): ResolverInputs {
   const rawAddress = config.endpoint ?? process.env.LAKEBASE_ENDPOINT;
   const parsed = parseAddress(rawAddress);
+  const rawBranch = config.branch ?? process.env.LAKEBASE_BRANCH;
+  const rawLakebaseDatabase = process.env.LAKEBASE_DATABASE;
+  const parsedDatabasePath = rawLakebaseDatabase
+    ? parseDatabaseName(rawLakebaseDatabase)
+    : null;
   const portEnv = process.env.PGPORT;
   return {
-    project: config.project ?? process.env.LAKEBASE_PROJECT ?? parsed.project,
-    branch: config.branch ?? process.env.LAKEBASE_BRANCH ?? parsed.branch,
+    project:
+      config.project ??
+      process.env.LAKEBASE_PROJECT ??
+      parsed.project ??
+      projectIdFromName(rawBranch) ??
+      parsedDatabasePath?.project,
+    branch:
+      branchIdFromName(rawBranch) ??
+      rawBranch ??
+      parsed.branch ??
+      parsedDatabasePath?.branch,
     // Only canonical endpoint resource paths survive here; URIs and
     // bare hostnames set `host` instead and leave `endpoint` undefined
     // until the REST resolver fills it in.

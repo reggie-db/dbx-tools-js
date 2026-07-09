@@ -34,7 +34,7 @@ full sequence in one shot:
 4. Pushes the commit, creates an annotated `v<version>` tag, pushes
    the tag.
 5. Creates the GitHub Release (when `gh` is on `PATH`) and runs the
-   local publish path (`bun run release`) unless `--no-publish`.
+   local publish path (`bun dbxtools release`) unless `--no-publish`.
 
 The annotated tag and GitHub Release both use a plain
 `Release v<version>` message.
@@ -42,9 +42,9 @@ The annotated tag and GitHub Release both use a plain
 ## Local publish (debugging / one-off)
 
 ```bash
-dbxtools build
-dbxtools release --dry-run            # bun publish --dry-run per package
-bun run release                     # build + real publish
+bun dbxtools build
+bun dbxtools release --dry-run            # bun publish --dry-run per package
+bun dbxtools release                     # build + real publish
 ```
 
 `dbxtools release` first runs `dbxtools build`, then for each publishable
@@ -58,7 +58,7 @@ complete.
 
 ## Don't auto-deploy
 
-Per workspace rules, never run `bun run tag`, `bun run release`,
+Per workspace rules, never run `bun run tag`, `bun dbxtools release`,
 `databricks bundle deploy`, or `git push` without the user explicitly
 asking in the current message. "Tag it", "ship it", "release it",
 "deploy" all count as explicit consent.

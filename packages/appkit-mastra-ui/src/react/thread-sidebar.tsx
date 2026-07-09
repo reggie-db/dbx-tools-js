@@ -9,6 +9,7 @@ import {
   cn,
 } from "@databricks/appkit-ui/react";
 import {
+  Loader2Icon,
   MessageSquarePlusIcon,
   PanelLeftIcon,
   PencilIcon,
@@ -29,6 +30,8 @@ export interface ThreadSidebarProps {
   threads: ThreadSummary[];
   /** Id of the active thread, rendered highlighted. */
   activeThreadId?: string;
+  /** Thread ids with a generation still in flight in the background. */
+  streamingThreadIds?: string[];
   /** True while the initial list loads (shows a spinner in place of the list). */
   isLoading?: boolean;
   /** Switch to a thread. */
@@ -58,6 +61,7 @@ export interface ThreadSidebarProps {
 export const ThreadSidebar = ({
   threads,
   activeThreadId,
+  streamingThreadIds = [],
   isLoading = false,
   onSelect,
   onNew,
@@ -158,6 +162,7 @@ export const ThreadSidebar = ({
           <ul className="flex flex-col gap-0.5">
             {threads.map((thread) => {
               const isActive = thread.id === activeThreadId;
+              const isStreaming = streamingThreadIds.includes(thread.id);
               const isConfirming = confirmDeleteId === thread.id;
               const isEditing = editingId === thread.id;
               if (isEditing) {
@@ -206,7 +211,15 @@ export const ThreadSidebar = ({
                     )}
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate">{threadTitle(thread)}</div>
+                      <div className="flex items-center gap-1.5 truncate">
+                        {isStreaming && (
+                          <Loader2Icon
+                            aria-label="Streaming"
+                            className="size-3 shrink-0 animate-spin text-primary"
+                          />
+                        )}
+                        <span className="truncate">{threadTitle(thread)}</span>
+                      </div>
                       {thread.updatedAt && (
                         <div className="truncate text-xs text-muted-foreground">
                           {relativeTime(thread.updatedAt)}

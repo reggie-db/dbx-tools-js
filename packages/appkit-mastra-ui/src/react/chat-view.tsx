@@ -85,6 +85,7 @@ export const ChatView = ({
   onClear,
   threads,
   activeThreadId,
+  streamingThreadIds = [],
   isLoadingThreads = false,
   onSelectThread,
   onNewThread,
@@ -287,6 +288,7 @@ export const ChatView = ({
           <ThreadSidebar
             threads={threads ?? []}
             {...(activeThreadId ? { activeThreadId } : {})}
+            streamingThreadIds={streamingThreadIds}
             isLoading={isLoadingThreads}
             onSelect={(id) => onSelectThread?.(id)}
             {...(onNewThread ? { onNew: onNewThread } : {})}

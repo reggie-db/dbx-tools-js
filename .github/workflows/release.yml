@@ -11,7 +11,7 @@ name: Release
 #   git push origin main
 #   bun run tag                           # create + push v<version>
 #
-# The tag push fires this workflow. `bun run release` runs
+# The tag push fires this workflow. `bun dbxtools release` runs
 # `dbxtools release` from `@dbx-tools/cli`, which builds every
 # publishable package and then publishes each with `bun publish`. The
 # build step is intentionally not duplicated here: `release` already
@@ -85,7 +85,7 @@ jobs:
         # build step is needed. `bun publish` reads these npm-config env
         # vars for the registry + auth token (it does not pick up the
         # token from setup-node's ~/.npmrc).
-        run: bun run release
+        run: bun dbxtools release
         env:
           NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}

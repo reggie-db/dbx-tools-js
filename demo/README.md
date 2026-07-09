@@ -41,26 +41,28 @@ demo/
   databricks.yml          # Databricks Asset Bundle: Lakebase autoscaling project
   tsconfig.json           # Solution: references client + server
   tsconfig.server.json    # Server-only typecheck
-  tsconfig.client.json    # Client-only typecheck (DOM, vite types, @/* alias)
+  tsconfig.client.json    # Client-only typecheck (DOM, @/* alias)
   tsdown.server.config.ts # Bundles server/server.ts into dist/ for prod
   server/
-    server.ts             # createApp -> plugins: [server(), genie(), lakebase(), email(), mastra({ agents })]
+    server.ts             # createApp -> plugins: [server({ staticPath }), ...]
   client/
     index.html
-    vite.config.ts        # React + Tailwind v4 + workspace `source` condition
+    build.ts              # Tailwind CLI + `bun build` for the browser bundle
+    tsconfig.json         # Bun bundler + tsc paths for `@/*`
     src/
+      index.css           # Tailwind entry (@import feature UI styles)
+      .generated/         # Tailwind output (gitignored; imported by main.tsx)
       main.tsx            # createRoot + ErrorBoundary
       App.tsx             # react-router-dom BrowserRouter root
       ErrorBoundary.tsx
-      index.css           # @import appkit-ui/styles.css + tailwindcss + @dbx-tools/appkit-mastra-ui/styles.css
       pages/
         Stream.tsx        # /stream - <MastraChat> drop-in from @dbx-tools/appkit-mastra-ui
 ```
 
 All sibling deps (`@dbx-tools/appkit-*`) are wired through `workspace:*`, so
-edits to any sibling source are picked up by Vite (via the `source` export
-condition) and by `tsx watch` (via `NODE_OPTIONS='--conditions=source'`)
-without a publish or rebuild.
+edits to any sibling source are picked up by `bun ./client/build.ts --watch`
+(via the `source` export condition) and by `tsx watch` on the server
+(`NODE_OPTIONS='--conditions=source'`) without a publish or rebuild.
 
 ## Setup
 
@@ -81,19 +83,20 @@ bun dev
 
 `bun run start` (production) instead reads `./.env` from this folder.
 
-`bun dev` starts the AppKit Express server, which mounts Vite as
-middleware on the same port so the React UI hot-reloads against the
-live server.
+`bun dev` runs an initial client build, then watches the client (`bun
+./client/build.ts --watch`) and server (`tsx watch` over `server/server.ts`) in
+parallel. AppKit serves the pre-built `client/dist` on the same port as the
+API (no Vite middleware).
 
 ## Scripts
 
 | Command                | What it does                                                      |
 | ---------------------- | ----------------------------------------------------------------- |
-| `bun dev`              | `tsx watch` over `server/server.ts` (also serves the client).     |
-| `bun run build`        | Builds the server then the client (Vite).                         |
+| `bun dev`              | Client watch + `tsx watch` over `server/server.ts`.               |
+| `bun run build`        | Builds the server then the client.                                |
 | `bun run build:server` | `tsc -b` the server project, then `tsdown` -> `dist/server.js`.   |
-| `bun run build:client` | Vite production build into `client/dist/`.                        |
-| `bun run start`        | Production entry: `node dist/server.js` against `./.env`.         |
+| `bun run build:client` | Tailwind CLI + `bun build` -> `client/dist/`.                     |
+| `bun run start`        | Production entry: `bun dist/server.js` against `./.env`.          |
 | `bun run typecheck`    | Type-check both `server/` and `client/`.                          |
 | `bun run sync`         | `appkit plugin sync --write --silent` to keep `app.yaml` in sync. |
 | `bun run typegen`      | `appkit generate-types` based on `appkit.plugins.json`.           |
