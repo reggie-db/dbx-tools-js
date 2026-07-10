@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/model-shared",
-  "version": "0.1.106",
+  "version": "0.1.107",
   "dependencies": {
     "zod": "catalog:"
   },
