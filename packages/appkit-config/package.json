@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/appkit-config",
-  "version": "0.1.107",
+  "version": "0.1.108",
   "bin": {
     "appkit-config-env": "./bin/appkit-config-env.ts"
   },

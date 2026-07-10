@@ -131,57 +131,65 @@ async function createConsolaLoggerFactory(
 /**
  * Console {@link LoggerFactory}; always succeeds.
  *
- * When `process.stderr` and `node:util` are available, formats each line
- * and writes only to stderr (Bun {@link bunConsoleInspect} per argument
- * when enabled, otherwise `util.formatWithOptions`). Otherwise binds
- * {@link createFormatter} prefixes into global `console.*` calls.
+ * When `process.stderr` is available, formats each line and writes only
+ * to stderr. Bun {@link bunConsoleInspect} formats each argument when
+ * enabled; otherwise `util.formatWithOptions` when `node:util` loads, or
+ * a `JSON.stringify` fallback when it does not. When stderr is
+ * unavailable, binds {@link createFormatter} prefixes into global
+ * `console.*` calls.
  */
 async function createConsoleLoggerFactory(
   globalProcessStdErr: any,
 ): Promise<LoggerFactory> {
   const utils = await import("node:util").catch(() => undefined);
   const factory = (name?: string) => {
-    const prefixFormatter = createFormatter(name, globalProcessStdErr);
+    const bunInspect = bunConsoleInspect();
+    const resetPrefixColor = bunInspect !== undefined;
+    const prefixFormatter = createFormatter(
+      name,
+      globalProcessStdErr,
+      resetPrefixColor,
+    );
     return Object.fromEntries(
       LOG_LEVELS.map((level) => {
-        const { prefix, colors, resetColor } = prefixFormatter(level);
+        const { prefix, colors } = prefixFormatter(level);
         const emitter = (...args: any[]) => {
           if (!shouldEmit(level, true)) return;
-          if (globalProcessStdErr !== undefined && utils !== undefined) {
-            let message: string;
-            const bunInspect = bunConsoleInspect();
-            if (bunInspect !== undefined) {
-              args = [
-                ...(prefix ? [prefix] : []),
-                ...args,
-                ...(resetColor ? [LOG_LEVEL_COLOR_RESET] : []),
-              ];
-              message = args
-                .map((arg) => {
+          const defaultOptions =
+            utils !== undefined ? utils.inspect?.defaultOptions : undefined;
+          if (globalProcessStdErr !== undefined) {
+            const messageParts = prefix ? [prefix] : [];
+            if (bunInspect !== undefined || utils === undefined) {
+              messageParts.push(
+                ...args.map((arg) => {
                   if (Array.isArray(arg) || (typeof arg === "object" && arg !== null)) {
-                    return bunInspect(arg, {
-                      colors: colors,
-                      depth: utils.inspect.defaultOptions?.depth ?? undefined,
-                    });
+                    if (bunInspect !== undefined) {
+                      return bunInspect(arg, {
+                        colors: colors,
+                        depth: defaultOptions?.depth ?? undefined,
+                      });
+                    } else {
+                      const seen = new WeakSet();
+                      return JSON.stringify(arg, (_, value) => {
+                        if (typeof value === "object" && value !== null) {
+                          if (seen.has(value)) return "[Circular]";
+                          seen.add(value);
+                        }
+                        return value;
+                      });
+                    }
                   } else {
                     return String(arg);
                   }
-                })
-                .join(" ");
+                }),
+              );
             } else {
-              message =
-                [
-                  prefix,
-                  utils.formatWithOptions(
-                    { ...utils.inspect.defaultOptions, colors: false },
-                    ...args,
-                  ),
-                  resetColor ? LOG_LEVEL_COLOR_RESET : undefined,
-                ]
-                  .filter(Boolean)
-                  .join(" ") + "\n";
+              messageParts.push(
+                utils.formatWithOptions({ ...defaultOptions, colors: false }, ...args),
+              );
             }
-            globalProcessStdErr.write(message + "\n");
+            if (!resetPrefixColor) messageParts.push(LOG_LEVEL_COLOR_RESET);
+            globalProcessStdErr.write(messageParts.join(" ") + "\n");
           } else {
             let levelFn = console[level];
             if (typeof levelFn !== "function") {
@@ -219,7 +227,7 @@ const createLogger: LoggerFactory = await (async () => {
 })();
 
 function bunConsoleInspect(): ((obj: any, options: any) => string) | undefined {
-  if (typeof Bun !== "undefined" && !toBoolean(Bun.env.LOG_BUN_CONSOLE_DISABLED)) {
+  if (typeof Bun !== "undefined" && !toBoolean(Bun.env?.LOG_BUN_CONSOLE_DISABLED)) {
     return Bun.inspect;
   }
   return undefined;
@@ -234,10 +242,10 @@ function bunConsoleInspect(): ((obj: any, options: any) => string) | undefined {
 function createFormatter(
   name: any,
   stream: any,
-): (level?: LogLevel) => { prefix: string; colors: boolean; resetColor: boolean } {
+  resetPrefixColor?: boolean,
+): (level?: LogLevel) => { prefix: string; colors: boolean } {
   const isBrowser = typeof window !== "undefined" && typeof document !== "undefined";
   const supportsColor = !isBrowser ? streamSupportsColor(stream) : false;
-  const resetPrefixColor = supportsColor && bunConsoleInspect() !== undefined;
   const namePrefix = name ? "[" + name + "]" : undefined;
   return (level?: LogLevel) => {
     const color =
@@ -250,7 +258,7 @@ function createFormatter(
       resetColor = resetPrefixColor || "info" === level;
       prefix = resetColor ? color + prefix + LOG_LEVEL_COLOR_RESET : color + prefix;
     }
-    return { prefix, colors: color !== undefined, resetColor };
+    return { prefix, colors: color !== undefined };
   };
 }
 
