@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/model",
-  "version": "0.1.111",
+  "version": "0.1.112",
   "dependencies": {
     "@dbx-tools/model-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",

@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/genie-shared",
-  "version": "0.1.111",
+  "version": "0.1.112",
   "dependencies": {
     "@dbx-tools/sdk-shared": "workspace:*",
     "@dbx-tools/shared": "workspace:*",
