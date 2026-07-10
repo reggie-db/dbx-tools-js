@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/cli",
-  "version": "0.1.109",
+  "version": "0.1.110",
   "bin": {
     "dbxtools": "./bin/dbxtools.ts"
   },

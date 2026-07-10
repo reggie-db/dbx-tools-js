@@ -147,7 +147,6 @@ async function createConsoleLoggerFactory(
       ? Bun.inspect
       : undefined;
   const resetColorsPrefix = bunInspect !== undefined;
-  console.log("resetColorsPrefix", resetColorsPrefix);
 
   const inspect = (arg: any, colors?: boolean) => {
     if (Array.isArray(arg) || (typeof arg === "object" && arg !== null)) {
@@ -378,13 +377,13 @@ export function logger(loggerName: NameLike | string | undefined): Logger {
   return createLogger(name);
 }
 
-if (import.meta.main) {
-  const log = logger("cool");
-  log.debug("debug");
-  log.info("info");
-  log.warn("warn");
-  log.error("error", [1, 2, 3], { a: 4 });
-  log.error("error", [1, 2, 3], { a: 4 }, new Error("test"));
-  log.error("error", [1, 2, 3], { a: 4 }, new Error("test"), new Error("test2"));
-  console.log("hello world");
-}
+// if (import.meta.main) {
+//   const log = logger("cool");
+//   log.debug("debug");
+//   log.info("info");
+//   log.warn("warn");
+//   log.error("error", [1, 2, 3], { a: 4 });
+//   log.error("error", [1, 2, 3], { a: 4 }, new Error("test"));
+//   log.error("error", [1, 2, 3], { a: 4 }, new Error("test"), new Error("test2"));
+//   console.log("hello world");
+// }
