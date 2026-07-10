@@ -142,53 +142,56 @@ async function createConsoleLoggerFactory(
   globalProcessStdErr: any,
 ): Promise<LoggerFactory> {
   const utils = await import("node:util").catch(() => undefined);
+  const bunInspect =
+    typeof Bun !== "undefined" && !toBoolean(Bun.env?.LOG_BUN_CONSOLE_DISABLED)
+      ? Bun.inspect
+      : undefined;
+  const resetColorsPrefix = bunInspect !== undefined;
+  console.log("resetColorsPrefix", resetColorsPrefix);
+
+  const inspect = (arg: any, colors?: boolean) => {
+    if (Array.isArray(arg) || (typeof arg === "object" && arg !== null)) {
+      if (bunInspect !== undefined) {
+        return bunInspect(arg, {
+          colors: colors,
+          depth: utils?.inspect?.defaultOptions?.depth ?? undefined,
+        });
+      } else if (utils !== undefined) {
+        return utils.inspect(arg, {
+          ...utils?.inspect?.defaultOptions,
+          colors: false,
+        });
+      } else {
+        const seen = new WeakSet();
+        return JSON.stringify(arg, (_, value) => {
+          if (typeof value === "object" && value !== null) {
+            if (seen.has(value)) return "[Circular]";
+            seen.add(value);
+          }
+          return value;
+        });
+      }
+    } else {
+      return String(arg);
+    }
+  };
+
   const factory = (name?: string) => {
-    const bunInspect = bunConsoleInspect();
-    const resetPrefixColor = bunInspect !== undefined;
     const prefixFormatter = createFormatter(
       name,
       globalProcessStdErr,
-      resetPrefixColor,
+      resetColorsPrefix,
     );
+
     return Object.fromEntries(
       LOG_LEVELS.map((level) => {
-        const { prefix, colors } = prefixFormatter(level);
+        const { prefix, colors, resetColors } = prefixFormatter(level);
         const emitter = (...args: any[]) => {
           if (!shouldEmit(level, true)) return;
-          const defaultOptions =
-            utils !== undefined ? utils.inspect?.defaultOptions : undefined;
           if (globalProcessStdErr !== undefined) {
             const messageParts = prefix ? [prefix] : [];
-            if (bunInspect !== undefined || utils === undefined) {
-              messageParts.push(
-                ...args.map((arg) => {
-                  if (Array.isArray(arg) || (typeof arg === "object" && arg !== null)) {
-                    if (bunInspect !== undefined) {
-                      return bunInspect(arg, {
-                        colors: colors,
-                        depth: defaultOptions?.depth ?? undefined,
-                      });
-                    } else {
-                      const seen = new WeakSet();
-                      return JSON.stringify(arg, (_, value) => {
-                        if (typeof value === "object" && value !== null) {
-                          if (seen.has(value)) return "[Circular]";
-                          seen.add(value);
-                        }
-                        return value;
-                      });
-                    }
-                  } else {
-                    return String(arg);
-                  }
-                }),
-              );
-            } else {
-              messageParts.push(
-                utils.formatWithOptions({ ...defaultOptions, colors: false }, ...args),
-              );
-            }
-            if (!resetPrefixColor) messageParts.push(LOG_LEVEL_COLOR_RESET);
+            messageParts.push(...args.map((arg) => inspect(arg, colors)));
+            if (resetColors) messageParts.push(LOG_LEVEL_COLOR_RESET);
             globalProcessStdErr.write(messageParts.join(" ") + "\n");
           } else {
             let levelFn = console[level];
@@ -226,13 +229,6 @@ const createLogger: LoggerFactory = await (async () => {
   );
 })();
 
-function bunConsoleInspect(): ((obj: any, options: any) => string) | undefined {
-  if (typeof Bun !== "undefined" && !toBoolean(Bun.env?.LOG_BUN_CONSOLE_DISABLED)) {
-    return Bun.inspect;
-  }
-  return undefined;
-}
-
 /**
  * Build a line prefix of `LEVEL [name]` on Node/Bun hosts, or `[name]`
  * alone in browsers (either part omitted when absent). Applies per-level
@@ -242,8 +238,8 @@ function bunConsoleInspect(): ((obj: any, options: any) => string) | undefined {
 function createFormatter(
   name: any,
   stream: any,
-  resetPrefixColor?: boolean,
-): (level?: LogLevel) => { prefix: string; colors: boolean } {
+  resetColorsPrefix?: boolean,
+): (level?: LogLevel) => { prefix: string; colors: boolean; resetColors: boolean } {
   const isBrowser = typeof window !== "undefined" && typeof document !== "undefined";
   const supportsColor = !isBrowser ? streamSupportsColor(stream) : false;
   const namePrefix = name ? "[" + name + "]" : undefined;
@@ -253,12 +249,15 @@ function createFormatter(
     let prefix = [!isBrowser && level ? level.toUpperCase() : undefined, namePrefix]
       .filter(Boolean)
       .join(" ");
-    let resetColor = false;
+    let resetColors = false;
     if (color) {
-      resetColor = resetPrefixColor || "info" === level;
-      prefix = resetColor ? color + prefix + LOG_LEVEL_COLOR_RESET : color + prefix;
+      const applyResetColorsPrefix = resetColorsPrefix || "info" === level;
+      if (!applyResetColorsPrefix) resetColors = true;
+      prefix = applyResetColorsPrefix
+        ? color + prefix + LOG_LEVEL_COLOR_RESET
+        : color + prefix;
     }
-    return { prefix, colors: color !== undefined };
+    return { prefix, colors: color ? true : false, resetColors };
   };
 }
 
