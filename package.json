@@ -19,6 +19,7 @@
     "@types/bun": "latest",
     "@types/node": "latest",
     "commander": "^15.0.0",
+    "consola": "^3.4.2",
     "express": "^5.2.1",
     "lucide-react": "^0.554.0",
     "marked": "^18.0.5",

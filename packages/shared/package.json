@@ -1,6 +1,6 @@
 {
   "name": "@dbx-tools/shared",
-  "version": "0.1.110",
+  "version": "0.1.111",
   "dependencies": {
     "@databricks/sdk-experimental": "catalog:",
     "fast-deep-equal": "catalog:",
@@ -29,6 +29,9 @@
   "main": "./dist/index.js",
   "peerDependencies": {
     "@databricks/appkit": "catalog:"
+  },
+  "optionalDependencies": {
+    "consola": "catalog:"
   },
   "type": "module",
   "types": "./dist/index.d.ts"

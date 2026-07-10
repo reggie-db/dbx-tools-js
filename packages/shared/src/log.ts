@@ -89,7 +89,10 @@ async function createConsolaLoggerFactory(
   const consolaDisabled = toBoolean(globalProcess?.env?.LOG_CONSOLA_DISABLED);
   if (!consolaDisabled) {
     try {
-      const { consola, createConsola, LogLevels } = await import("consola");
+      // @ts-ignore -- optional dependency
+      const { consola, createConsola, LogLevels } = await import(
+        /* @vite-ignore */ "consola"
+      );
       const defaultOptions = consola.options;
       const createConsolaOptions = {
         ...consola.options,
@@ -141,7 +144,7 @@ async function createConsolaLoggerFactory(
 async function createConsoleLoggerFactory(
   globalProcessStdErr: any,
 ): Promise<LoggerFactory> {
-  const utils = await import("node:util").catch(() => undefined);
+  const utils = await import(/* @vite-ignore */ "node:util").catch(() => undefined);
   const bunInspect =
     typeof Bun !== "undefined" && !toBoolean(Bun.env?.LOG_BUN_CONSOLE_DISABLED)
       ? Bun.inspect

@@ -1,13 +1,13 @@
 {
   "name": "@dbx-tools/cli",
-  "version": "0.1.110",
+  "version": "0.1.111",
   "bin": {
     "dbxtools": "./bin/dbxtools.ts"
   },
   "dependencies": {
     "@types/semver": "^7.7.1",
     "commander": "catalog:",
-    "consola": "^3.4.2",
+    "consola": "catalog:",
     "p-memoize": "^8.0.0",
     "pacwich": "^0.1.2",
     "prettier": "^3.9.3",
