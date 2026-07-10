@@ -14,7 +14,7 @@
  * Other utility namespaces are re-exported as-is. `common.ts` ships a
  * pure-JS FNV-1a `fnvHash` (no `node:crypto`) that `string.ts` uses
  * for slug suffixes, so the whole barrel is safe in the browser;
- * `http.ts` / `log.ts` already had no node-only imports.
+ * `http.ts`, `iterable.ts`, and `log.ts` already had no node-only imports.
  *
  * `apiUtils` and `appkitUtils` are intentionally **not** re-exported
  * here. Both import from `@databricks/appkit`, whose main barrel
@@ -27,6 +27,7 @@
  */
 export * as commonUtils from "./common.js";
 export * as httpUtils from "./http.js";
+export * as iterableUtils from "./iterable.js";
 export * as logUtils from "./log.js";
 export * as netUtils from "./net.browser.js";
 export * as stringUtils from "./string.js";

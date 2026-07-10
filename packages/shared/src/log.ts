@@ -1,66 +1,314 @@
-import type { NameLike } from "./common.js";
-
-/** Plugin-facing logger surface returned by {@link logger}. */
-export interface Logger {
-  debug(message: string, attributes?: Record<string, unknown>): void;
-  info(message: string, attributes?: Record<string, unknown>): void;
-  warn(message: string, attributes?: Record<string, unknown>): void;
-  error(message: string, attributes?: Record<string, unknown>): void;
-}
-
 /**
- * Severity ordering. A log call below the active threshold is
- * discarded entirely (no string formatting, no console call). The
- * threshold is read on every call from `process.env.LOG_LEVEL`,
- * case-insensitive, defaulting to `info` when unset / empty /
- * unrecognised. Set `LOG_LEVEL=debug` for verbose dev output,
- * `LOG_LEVEL=warn` to silence info chatter in production, etc.
+ * Tagged, leveled logging for AppKit plugins and shared helpers.
  *
- * Lazy on purpose: looking up `process.env.LOG_LEVEL` per call
- * costs nothing meaningful, and it lets test runners (and other
- * embedders) flip the level after `log.ts` has already been
- * imported, without restarting the process or reaching into
- * private state.
+ * {@link logger} resolves a tagged {@link Logger} via {@link createLogger},
+ * a {@link LoggerFactory} chosen once at module load. {@link LogLevel}
+ * filtering runs through {@link shouldEmit} in the consola reporter or in
+ * per-level wrappers on the `console` fallbacks.
+ *
+ * Sink selection chains two factories with nullish coalescing (first
+ * match wins):
+ *
+ * 1. {@link createConsolaLoggerFactory} when consola resolves and
+ *    `LOG_CONSOLA_DISABLED` is not truthy.
+ * 2. {@link createConsoleLoggerFactory} everywhere else.
+ *
+ * The console fallback writes formatted lines to `process.stderr` when
+ * it is available (Bun `inspect` per argument when
+ * `LOG_BUN_CONSOLE_DISABLED` is unset, otherwise `node:util`
+ * `formatWithOptions`), or delegates to global `console.*` when stderr
+ * or `node:util` is unavailable. Browser hosts omit the `LEVEL` text
+ * prefix (devtools show severity) and keep only the `[name]` tag.
+ *
+ * Env toggles (read once at init): `LOG_LEVEL`, `LOG_CONSOLA_DISABLED`,
+ * `LOG_BUN_CONSOLE_DISABLED`.
+ *
+ * Consola is an optional dependency of `@dbx-tools/shared`; the module
+ * loads without it.
  */
-export type LogLevel = "debug" | "info" | "warn" | "error";
 
-const LEVEL_RANK: Readonly<Record<LogLevel, number>> = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40,
-};
+import { memoize, toBoolean, type NameLike } from "./common.js";
 
+const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+const LOG_LEVEL_RANK = Object.fromEntries(
+  LOG_LEVELS.map((level, index) => [level, index]),
+) as Record<LogLevel, number>;
+const LOG_LEVEL_COLORS = Object.fromEntries(
+  LOG_LEVELS.map((level) => {
+    let color = "\x1b[90m"; // gray
+    switch (level) {
+      case "info":
+        color = "\x1b[34m"; // blue
+        break;
+      case "warn":
+        color = "\x1b[33m"; // yellow
+        break;
+      case "error":
+        color = "\x1b[31m"; // red
+        break;
+    }
+    return [level, color];
+  }),
+) as Record<LogLevel, string>;
+const LOG_LEVEL_COLOR_RESET = "\x1b[0m";
 const DEFAULT_LEVEL: LogLevel = "info";
 
 /**
- * Read the active threshold from `process.env.LOG_LEVEL`. Recognises
- * any case (`DEBUG`, `Debug`, `debug`), trims whitespace, falls back
- * to {@link DEFAULT_LEVEL} when unset / empty / unrecognised.
+ * Supported severities, lowest to highest: `debug`, `info`, `warn`,
+ * `error`. A call below the active threshold is discarded before any
+ * string work or sink I/O.
  *
- * Browser-safe: `process` is undefined in browser bundles unless a
- * polyfill or build-time replace is set up, so we guard the access.
- * In a Vite app, set `LOG_LEVEL` via `define` config or just leave
- * it - the default `info` is sane for production browser code.
+ * The threshold comes from `process.env.LOG_LEVEL` on every call
+ * (case-insensitive, default `info` when unset, empty, or unknown) so
+ * test runners and embedders can change verbosity after import without
+ * restarting the process.
  */
-function activeLevel(): LogLevel {
-  const env = typeof process !== "undefined" ? process.env : undefined;
-  const raw = env?.LOG_LEVEL?.toLowerCase().trim();
-  if (raw && Object.prototype.hasOwnProperty.call(LEVEL_RANK, raw)) {
-    return raw as LogLevel;
-  }
-  return DEFAULT_LEVEL;
-}
+export type LogLevel = (typeof LOG_LEVELS)[number];
 
-/** True when calls at `level` should reach the console. */
-function shouldEmit(level: LogLevel): boolean {
-  return LEVEL_RANK[level] >= LEVEL_RANK[activeLevel()];
+export type Logger = {
+  [K in LogLevel]: (...args: any[]) => void;
+};
+
+/** `(name?) => Logger` sink constructor returned by the init-time factory chain. */
+type LoggerFactory = (name?: string) => Logger;
+
+/**
+ * Consola-backed {@link LoggerFactory}, or `undefined` when consola is
+ * disabled, fails to import, or throws during setup.
+ *
+ * Builds one `createConsola` instance (badge off, level `verbose`) whose
+ * reporter calls {@link shouldEmit} on `logObj.type` before delegating to
+ * consola's default reporters. In Node, when `processStdErr` is set,
+ * recognized {@link LogLevel} types are redirected to stderr for that
+ * write. Tags use `withTag` (rendered `[name]`, not merged into args).
+ */
+async function createConsolaLoggerFactory(
+  globalProcess: any,
+  globalProcessStdErr: any,
+): Promise<LoggerFactory | undefined> {
+  const consolaDisabled = toBoolean(globalProcess?.env?.LOG_CONSOLA_DISABLED);
+  if (!consolaDisabled) {
+    try {
+      const { consola, createConsola, LogLevels } = await import("consola");
+      const defaultOptions = consola.options;
+      const createConsolaOptions = {
+        ...consola.options,
+        defaults: { badge: false },
+        // `LOG_LEVEL` is enforced in {@link shouldEmit}; keep consola permissive
+        // so a threshold change after import is not blocked by its own filter.
+        level: LogLevels.verbose,
+        reporters: [
+          {
+            log: (logObj, ctx) => {
+              const logLevel = parseLogLevel(logObj.type);
+              if (!shouldEmit(logLevel, true)) return;
+              const ctxStdout = ctx.options.stdout;
+              try {
+                if (globalProcessStdErr !== undefined && logLevel !== undefined) {
+                  ctx.options.stdout = globalProcessStdErr;
+                }
+                defaultOptions.reporters.forEach((reporter) =>
+                  reporter.log(logObj, ctx),
+                );
+              } finally {
+                ctx.options.stdout = ctxStdout;
+              }
+            },
+          },
+        ],
+      } as NonNullable<Parameters<typeof createConsola>[0]>;
+      const consolaLogger = createConsola(createConsolaOptions);
+      return (name?: string) => {
+        return name ? consolaLogger.withTag(name) : consolaLogger;
+      };
+    } catch (error) {
+      console.trace("Consola is not available, fallback to console", error);
+    }
+  }
+  return undefined;
 }
 
 /**
- * True when log calls at `level` would be emitted at the current
+ * Console {@link LoggerFactory}; always succeeds.
+ *
+ * When `process.stderr` and `node:util` are available, formats each line
+ * and writes only to stderr (Bun {@link bunConsoleInspect} per argument
+ * when enabled, otherwise `util.formatWithOptions`). Otherwise binds
+ * {@link createFormatter} prefixes into global `console.*` calls.
+ */
+async function createConsoleLoggerFactory(
+  globalProcessStdErr: any,
+): Promise<LoggerFactory> {
+  const utils = await import("node:util").catch(() => undefined);
+  const factory = (name?: string) => {
+    const prefixFormatter = createFormatter(name, globalProcessStdErr);
+    return Object.fromEntries(
+      LOG_LEVELS.map((level) => {
+        const { prefix, colors, resetColor } = prefixFormatter(level);
+        const emitter = (...args: any[]) => {
+          if (!shouldEmit(level, true)) return;
+          if (globalProcessStdErr !== undefined && utils !== undefined) {
+            let message: string;
+            const bunInspect = bunConsoleInspect();
+            if (bunInspect !== undefined) {
+              args = [
+                ...(prefix ? [prefix] : []),
+                ...args,
+                ...(resetColor ? [LOG_LEVEL_COLOR_RESET] : []),
+              ];
+              message = args
+                .map((arg) => {
+                  if (Array.isArray(arg) || (typeof arg === "object" && arg !== null)) {
+                    return bunInspect(arg, {
+                      colors: colors,
+                      depth: utils.inspect.defaultOptions?.depth ?? undefined,
+                    });
+                  } else {
+                    return String(arg);
+                  }
+                })
+                .join(" ");
+            } else {
+              message =
+                [
+                  prefix,
+                  utils.formatWithOptions(
+                    { ...utils.inspect.defaultOptions, colors: false },
+                    ...args,
+                  ),
+                  resetColor ? LOG_LEVEL_COLOR_RESET : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(" ") + "\n";
+            }
+            globalProcessStdErr.write(message + "\n");
+          } else {
+            let levelFn = console[level];
+            if (typeof levelFn !== "function") {
+              levelFn = console.log;
+            }
+            if (prefix) levelFn = levelFn.bind(console, prefix);
+            levelFn(...args);
+          }
+        };
+        return [level, emitter];
+      }),
+    ) as Logger;
+  };
+  const defaultFactory = memoize(factory);
+  return (name?: string) => (name ? factory(name) : defaultFactory());
+}
+
+/**
+ * Module-scoped {@link LoggerFactory}, initialized once via top-level
+ * `await`. Delegates to {@link createConsolaLoggerFactory}, then
+ * {@link createConsoleLoggerFactory}. Each {@link logger} call invokes
+ * the chosen factory with a resolved tag. Env toggles are read only
+ * during this init.
+ */
+const createLogger: LoggerFactory = await (async () => {
+  const globalProcess = typeof process !== "undefined" ? process : undefined;
+  const globalProcessStdErr =
+    globalProcess && typeof globalProcess.stderr?.write === "function"
+      ? globalProcess.stderr
+      : undefined;
+  return (
+    (await createConsolaLoggerFactory(globalProcess, globalProcessStdErr)) ??
+    (await createConsoleLoggerFactory(globalProcessStdErr))
+  );
+})();
+
+function bunConsoleInspect(): ((obj: any, options: any) => string) | undefined {
+  if (typeof Bun !== "undefined" && !toBoolean(Bun.env.LOG_BUN_CONSOLE_DISABLED)) {
+    return Bun.inspect;
+  }
+  return undefined;
+}
+
+/**
+ * Build a line prefix of `LEVEL [name]` on Node/Bun hosts, or `[name]`
+ * alone in browsers (either part omitted when absent). Applies per-level
+ * ANSI color when `streamSupportsColor` is true for the given stderr
+ * stream.
+ */
+function createFormatter(
+  name: any,
+  stream: any,
+): (level?: LogLevel) => { prefix: string; colors: boolean; resetColor: boolean } {
+  const isBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+  const supportsColor = !isBrowser ? streamSupportsColor(stream) : false;
+  const resetPrefixColor = supportsColor && bunConsoleInspect() !== undefined;
+  const namePrefix = name ? "[" + name + "]" : undefined;
+  return (level?: LogLevel) => {
+    const color =
+      supportsColor && level !== undefined ? LOG_LEVEL_COLORS[level] : undefined;
+    let prefix = [!isBrowser && level ? level.toUpperCase() : undefined, namePrefix]
+      .filter(Boolean)
+      .join(" ");
+    let resetColor = false;
+    if (color) {
+      resetColor = resetPrefixColor || "info" === level;
+      prefix = resetColor ? color + prefix + LOG_LEVEL_COLOR_RESET : color + prefix;
+    }
+    return { prefix, colors: color !== undefined, resetColor };
+  };
+}
+
+/** True when `stream` is a TTY and the terminal is not `dumb`. */
+function streamSupportsColor(stream?: unknown): boolean {
+  if (typeof process === "undefined" || typeof stream !== "object" || stream === null)
+    return false;
+  const { isTTY } = stream as { isTTY?: unknown };
+  if (isTTY !== true) return false;
+  const term = process.env?.TERM?.toLowerCase();
+  if ("dumb" == term) return false;
+  return true;
+}
+
+/** Parse a raw value as {@link LogLevel} (trimmed, case-insensitive). */
+function parseLogLevel(raw: unknown): LogLevel | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  let text = typeof raw === "string" ? raw : String(raw);
+  for (let i = 0; i < 2; i++) {
+    if (i > 0) {
+      const normalized = text.trim().toLowerCase();
+      if (text === normalized) break;
+      text = normalized;
+    }
+    if (!text) break;
+    else if (text in LOG_LEVEL_RANK) {
+      return text as LogLevel;
+    }
+  }
+  return undefined;
+}
+
+/** Active threshold from `process.env.LOG_LEVEL`, default {@link DEFAULT_LEVEL}. */
+function activeLevel(): LogLevel {
+  const env = typeof process !== "undefined" ? process.env : undefined;
+  return parseLogLevel(env?.LOG_LEVEL) ?? DEFAULT_LEVEL;
+}
+
+/**
+ * Whether `raw` meets the current `LOG_LEVEL` threshold.
+ *
+ * Parses `raw` as a {@link LogLevel}; when parsing fails, returns
+ * `defaultResult` if supplied, otherwise `false`. Used for consola
+ * reporter lines where unknown `logObj.type` values should pass through
+ * when `defaultResult` is `true`.
+ */
+function shouldEmit(raw: unknown, defaultResult?: boolean): boolean {
+  let level = parseLogLevel(raw);
+  if (level === undefined) return defaultResult ?? false;
+  return LOG_LEVEL_RANK[level] >= LOG_LEVEL_RANK[activeLevel()];
+}
+
+/**
+ * Whether a call at `level` would be emitted at the current
  * `process.env.LOG_LEVEL` threshold. Use before building expensive
- * debug attribute objects.
+ * debug payloads.
  *
  * @example
  * ```ts
@@ -75,26 +323,34 @@ export function isLevelEnabled(level: LogLevel): boolean {
 
 const LOGGER_NAME_REGEX = /^(?:[a-z][a-z0-9+.-]*:\/\/)?.*\/([^/.]+)(?:\.[^/]+)?$/i;
 
+/**
+ * Derive the tag string from a logger name, plugin, or path.
+ * Slash- and URL-shaped strings use the last path segment (extension
+ * stripped); plain strings pass through unchanged. Empty or missing
+ * names → `undefined` (untagged sink).
+ */
 function extractLoggerName(
   loggerName: NameLike | string | undefined,
 ): string | undefined {
   if (!loggerName) return undefined;
-  else if (typeof loggerName === "string") {
+  if (typeof loggerName === "string") {
     const match = loggerName.match(LOGGER_NAME_REGEX);
     return match?.[1] ?? loggerName;
-  } else {
-    return extractLoggerName(loggerName?.name);
   }
+  return extractLoggerName(loggerName.name);
 }
 
 /**
- * Build a per-plugin logger that writes to `console` with an optional
- * `[plugin-name]` prefix derived from `plugin.name` or the string you pass in.
+ * Build a tagged logger for a plugin or module.
  *
- * Calls below `process.env.LOG_LEVEL` are discarded before any
- * string work happens, so leaving `log.debug({...heavy details})`
- * in production code is free as long as `LOG_LEVEL` is `info` or
- * higher. Default level is `info`.
+ * The tag is `[name]` when `loggerName` is a non-empty string, a
+ * {@link NameLike} with `name`, or a file / URL path (the basename
+ * without extension is used). Consola applies the tag via `withTag`
+ * (render-time). The `console` fallbacks prepend `LEVEL [name]` on
+ * Node/Bun hosts or `[name]` alone in browsers via {@link createFormatter}.
+ *
+ * Calls below `process.env.LOG_LEVEL` are dropped by {@link shouldEmit}
+ * before the sink formats or writes the line.
  *
  * @example
  * ```ts
@@ -112,21 +368,16 @@ function extractLoggerName(
  */
 export function logger(loggerName: NameLike | string | undefined): Logger {
   const name = extractLoggerName(loggerName);
-  function log(
-    level: LogLevel,
-    consoleFn: (...args: unknown[]) => void,
-    message: string,
-    attributes?: Record<string, unknown>,
-  ): void {
-    if (!shouldEmit(level)) return;
-    const logMessage = name ? `[${name}] ${message}` : message;
-    const logArgs = [logMessage, attributes].filter(Boolean);
-    consoleFn(...logArgs);
-  }
-  return {
-    debug: (msg, attrs) => log("debug", console.debug, msg, attrs),
-    info: (msg, attrs) => log("info", console.info, msg, attrs),
-    warn: (msg, attrs) => log("warn", console.warn, msg, attrs),
-    error: (msg, attrs) => log("error", console.error, msg, attrs),
-  };
+  return createLogger(name);
+}
+
+if (import.meta.main) {
+  const log = logger("cool");
+  log.debug("debug");
+  log.info("info");
+  log.warn("warn");
+  log.error("error", [1, 2, 3], { a: 4 });
+  log.error("error", [1, 2, 3], { a: 4 }, new Error("test"));
+  log.error("error", [1, 2, 3], { a: 4 }, new Error("test"), new Error("test2"));
+  console.log("hello world");
 }

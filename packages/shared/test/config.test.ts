@@ -1,41 +1,6 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "bun:test";
 
 import * as configUtils from "../src/config.js";
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    rmSync(tempDirs.pop()!, { recursive: true, force: true });
-  }
-  configUtils.clearBundleConfigCache();
-});
-
-describe("findBundleRoot", () => {
-  it("finds databricks.yml under a project root candidate", async () => {
-    const root = mkdtempSync(join(tmpdir(), "shared-config-"));
-    tempDirs.push(root);
-    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "bundle-app" }));
-    writeFileSync(join(root, "databricks.yml"), "bundle:\n  name: test\n");
-
-    const nested = join(root, "packages", "app");
-    mkdirSync(nested, { recursive: true });
-    writeFileSync(join(nested, "package.json"), JSON.stringify({ name: "nested" }));
-
-    expect(realpathSync((await configUtils.findBundleRoot(nested))!)).toBe(realpathSync(root));
-  });
-
-  it("returns undefined when no bundle manifest exists", async () => {
-    const root = mkdtempSync(join(tmpdir(), "shared-config-empty-"));
-    tempDirs.push(root);
-    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "no-bundle" }));
-
-    expect(await configUtils.findBundleRoot(root)).toBeUndefined();
-  });
-});
 
 describe("getBundlePath", () => {
   it("reads bundle variable value objects", () => {
@@ -61,7 +26,7 @@ describe("resolveConfigValue", () => {
     delete process.env.MY_TEST_CONFIG_VALUE;
   });
 
-  it("skips bundle validate inside a Databricks App", async () => {
+  it("skips bundle and app.yaml inside a Databricks App", async () => {
     const prior = {
       DATABRICKS_APP_NAME: process.env.DATABRICKS_APP_NAME,
       DATABRICKS_HOST: process.env.DATABRICKS_HOST,
@@ -78,7 +43,8 @@ describe("resolveConfigValue", () => {
           sources: ["bundle", "env"],
         }),
       ).toBe("from-env");
-      expect(await configUtils.loadBundleConfig()).toBeUndefined();
+      expect(await configUtils.bundle()).toBeUndefined();
+      expect(await configUtils.appYaml()).toBeUndefined();
     } finally {
       for (const [key, value] of Object.entries(prior)) {
         if (value === undefined) {
@@ -88,5 +54,21 @@ describe("resolveConfigValue", () => {
         }
       }
     }
+  });
+
+  it("appends explicit to sources when provided", async () => {
+    expect(
+      await configUtils.resolveConfigValue("ONLY_IN_EXPLICIT", {
+        explicit: { ONLY_IN_EXPLICIT: "from-explicit" },
+      }),
+    ).toBe("from-explicit");
+  });
+
+  it("reads the first non-empty explicit array value", async () => {
+    expect(
+      await configUtils.resolveConfigValue("MULTI_VALUE", {
+        explicit: { MULTI_VALUE: ["", "  ", "first", "second"] },
+      }),
+    ).toBe("first");
   });
 });

@@ -755,3 +755,32 @@ export function isDatabricksAppEnv(env?: Record<string, string | undefined>): bo
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export function toBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  else if (typeof value === "string") {
+    value = value.trim().toLowerCase();
+    if (
+      value === "true" ||
+      value == "t" ||
+      value === "on" ||
+      value === "1" ||
+      value === "yes" ||
+      value === "y"
+    )
+      return true;
+    else if (
+      value === "false" ||
+      value == "f" ||
+      value === "off" ||
+      value === "0" ||
+      value === "no" ||
+      value === "n"
+    )
+      return false;
+  } else if (typeof value === "number") {
+    if (value === 1) return true;
+    else if (value === 0) return false;
+  }
+  return undefined;
+}

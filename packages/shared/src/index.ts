@@ -31,9 +31,13 @@ export * as tokenUtils from "./token.js";
 
 export type {
   BundleValidateJson,
+  ConfigFile,
+  ConfigMapValue,
   ConfigSource,
-  LoadBundleConfigOptions,
   ResolveConfigValueOptions,
 } from "./config.js";
+
+export type { Sequence } from "./iterable.js";
+export { emptySequence } from "./iterable.js";
 
 export * from "./index.client.js";

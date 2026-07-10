@@ -27,23 +27,24 @@
  *      success. Then poll the default endpoint until it reports
  *      `current_state` `READY` or `IDLE`.
  *
- * The {@link autoConfigureLakebase} helper then writes the resolved values back to
+ * {@link applyLakebaseToEnv} writes the resolved values back to
  * `process.env` so the downstream `lakebase` plugin picks them up.
  *
  * @see https://docs.databricks.com/api/workspace/postgres
  */
 
 import { getWorkspaceClient } from "@databricks/appkit";
-import { logUtils, projectUtils, stringUtils } from "@dbx-tools/shared";
+import { configUtils, logUtils, projectUtils, stringUtils } from "@dbx-tools/shared";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { resolveConfigValue } from "./config-value.js";
 import {
   parseAddress,
   parseResourcePath,
   type LakebaseConnectionInputs,
   type SslMode,
 } from "./pgaddress.js";
+
+const { resolveConfigValue } = configUtils;
 
 const log = logUtils.logger("lakebase-resolver");
 const API_BASE = "/api/2.0/postgres";
@@ -158,7 +159,7 @@ interface Operation {
  * Pull resolver inputs from `process.env`, parse the address blob, and
  * layer explicit config on top with this precedence:
  *
- *   `config.<field>` > {@link resolveConfigValue} (`env`, then bundle
+ *   `config.<field>` > `configUtils.resolveConfigValue` (`env`, then bundle
  *   validate JSON) > whatever {@link parseAddress} recovered from the
  *   `endpoint` / `LAKEBASE_ENDPOINT` blob.
  *
@@ -174,10 +175,7 @@ export async function readLakebaseInputs(
   const parsed = parseAddress(rawAddress);
   const portEnv = await resolveConfigValue("PGPORT");
   return {
-    project:
-      config?.project ??
-      (await resolveConfigValue("postgres_project_id")) ??
-      parsed.project,
+    project: config?.project ?? parsed.project,
     branch: config?.branch ?? parsed.branch,
     // Only canonical endpoint resource paths survive here; URIs and
     // bare hostnames set `host` instead and leave `endpoint` undefined

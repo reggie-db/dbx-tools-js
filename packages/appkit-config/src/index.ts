@@ -14,10 +14,9 @@
  * await createApp({ plugins: [server(), lakebase()] });
  * ```
  *
- * Lakebase Postgres ({@link autoConfigureLakebase}) and local config
- * resolution from env plus bundle validate JSON ({@link resolveConfigValue}).
+ * Lakebase Postgres via {@link autoConfigure} when a `lakebase` plugin
+ * is listed or `autoConfigure: true` is set on the config.
  */
-export * from "./config-value.js";
 export * from "./create-app.js";
 export * from "./lakebase-resolver.js";
 export * from "./pgaddress.js";

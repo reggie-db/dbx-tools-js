@@ -1,0 +1,66 @@
+{
+  "bundle": {
+    "name": "racetrac-store-intelligence",
+    "target": "beta"
+  },
+  "resources": {
+    "apps": {
+      "racetrac-si-app": {
+        "config": {
+          "env": [
+            {
+              "name": "DATABRICKS_WAREHOUSE_ID",
+              "value_from": "warehouse_id"
+            },
+            {
+              "name": "DATABRICKS_GENIE_SPACE_ID",
+              "value_from": "genie_space"
+            },
+            {
+              "name": "DATABRICKS_SERVING_ENDPOINT_NAME",
+              "value": "databricks-claude-sonnet-4-5"
+            },
+            {
+              "name": "LAKEBASE_ENDPOINT",
+              "value": "projects/racetrac-si-beta/branches/production/endpoints/primary"
+            },
+            {
+              "name": "PGDATABASE",
+              "value": "databricks_postgres"
+            },
+            {
+              "name": "POSTGRES_PROJECT",
+              "value": "projects/racetrac-si-beta"
+            },
+            {
+              "name": "POSTGRES_BRANCH",
+              "value": "projects/racetrac-si-beta/branches/production"
+            }
+          ]
+        },
+        "resources": [
+          {
+            "name": "warehouse_id",
+            "sql_warehouse": {
+              "id": "b087b375a8f43baa"
+            }
+          },
+          {
+            "name": "genie_space",
+            "genie_space": {
+              "space_id": "01f11e89f9f115a7b62f8ae1f4d1091d"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "variables": {
+    "postgres_project_id": {
+      "value": "racetrac-si-beta"
+    },
+    "chat_model": {
+      "value": "databricks-claude-sonnet-4-5"
+    }
+  }
+}

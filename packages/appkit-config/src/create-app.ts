@@ -15,8 +15,8 @@
  *
  * Auto-configuration runs BEFORE delegating so plugins see a fully
  * populated `process.env` during their synchronous `setup()`. Lakebase
- * Postgres ({@link autoConfigureLakebase}) runs only when a `lakebase`
- * plugin is present in `config.plugins`.
+ * Postgres runs when a `lakebase` plugin is present, or when
+ * `autoConfigure: true` is set on the config object.
  */
 
 import {
@@ -33,7 +33,9 @@ import {
   type LakebaseResolverInputs,
 } from "./lakebase-resolver.js";
 
-type CreateAppConfig = Parameters<typeof appkitCreateApp>[0];
+type CreateAppConfig = Parameters<typeof appkitCreateApp>[0] & {
+  autoConfigure?: boolean | "provision";
+};
 
 const log = logUtils.logger("create-app");
 
@@ -43,24 +45,37 @@ function usesPlugin(config: CreateAppConfig | undefined, name: string): boolean 
   return Boolean(config?.plugins?.some((entry) => entry.name === name));
 }
 
-async function autoConfigure(config?: CreateAppConfig): Promise<void> {
-  if (usesPlugin(config, LAKEBASE_PLUGIN)) {
-    await autoConfigureLakebase();
+/**
+ * Run enabled auto-configuration steps without calling AppKit's
+ * `createApp`. Lakebase Postgres resolves when `autoConfigure` is
+ * `true` or a `lakebase` plugin is listed in `config.plugins`.
+ * Defaults to `"provision"` (Lakebase env + optional cache schema).
+ * Pass `autoConfigure: false` to skip entirely.
+ */
+export async function autoConfigure(config?: CreateAppConfig): Promise<void> {
+  const { autoConfigure = "provision" } = config ?? {};
+  if (autoConfigure !== false) {
+    if (autoConfigure === true || usesPlugin(config, LAKEBASE_PLUGIN)) {
+      await autoConfigureLakebase(autoConfigure === "provision");
+    }
   }
 }
 
 /**
- * Resolve Lakebase Postgres connection info from config + env, write the
- * resolved values to `process.env`, and return the record. Call standalone
- * before `createApp` when not using this package's `createApp` wrapper.
+ * Resolve Lakebase Postgres connection info, write the resolved values to
+ * `process.env`, and return the record. Used by {@link autoConfigure};
+ * call {@link resolveLakebaseConnection} and {@link applyLakebaseToEnv}
+ * directly when finer control is needed.
  */
-export async function autoConfigureLakebase(): Promise<LakebaseConnection> {
+async function autoConfigureLakebase(provision: boolean): Promise<LakebaseConnection> {
   const resolved = await resolveLakebaseConnection();
   applyLakebaseToEnv(resolved);
   const user = await getUsernameWithApiLookup({});
   if (user) process.env.PGUSER ??= user;
   log.info("env updated", { ...redactLakebaseConnection(resolved), user });
-  await provisionCacheSchema(log, user);
+  if (provision) {
+    await provisionCacheSchema(log, user);
+  }
   return resolved;
 }
 

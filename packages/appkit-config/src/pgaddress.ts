@@ -161,7 +161,13 @@ function parseResourcePathSegments(s: string): ParsedAddress {
     return { project, branch: parts[3] };
   }
 
-  if (parts.length === 6 && parts[2] === "branches" && parts[4] === "endpoints" && parts[3] && parts[5]) {
+  if (
+    parts.length === 6 &&
+    parts[2] === "branches" &&
+    parts[4] === "endpoints" &&
+    parts[3] &&
+    parts[5]
+  ) {
     return {
       project,
       branch: parts[3],
@@ -170,7 +176,13 @@ function parseResourcePathSegments(s: string): ParsedAddress {
     };
   }
 
-  if (parts.length === 6 && parts[2] === "branches" && parts[4] === "databases" && parts[3] && parts[5]) {
+  if (
+    parts.length === 6 &&
+    parts[2] === "branches" &&
+    parts[4] === "databases" &&
+    parts[3] &&
+    parts[5]
+  ) {
     return {
       project,
       branch: parts[3],

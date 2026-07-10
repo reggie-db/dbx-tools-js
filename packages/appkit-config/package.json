@@ -1,8 +1,12 @@
 {
   "name": "@dbx-tools/appkit-config",
   "version": "0.1.106",
+  "bin": {
+    "appkit-config-env": "./bin/appkit-config-env.ts"
+  },
   "dependencies": {
     "@dbx-tools/shared": "workspace:*",
+    "commander": "catalog:",
     "zod": "catalog:"
   },
   "exports": {

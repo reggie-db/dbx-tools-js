@@ -20,7 +20,9 @@ import { promisify } from "node:util";
 
 import { memoize } from "./common.js";
 import { stat } from "./file.js";
+import { logger } from "./log.js";
 
+const log = logger("project");
 const execFileAsync = promisify(execFile);
 
 interface PackageJson {
@@ -147,6 +149,7 @@ export async function* resolveProjectRoots(cwd?: string): AsyncGenerator<string>
   const rootDirs = new Set<string>();
   for (const loader of [npmPrefix, npmWorkspaceRoot, gitTopLevel]) {
     let rootDir: string | undefined = await loader(cwd);
+
     if (!rootDir) {
       continue;
     }
@@ -164,13 +167,27 @@ export async function* resolveProjectRoots(cwd?: string): AsyncGenerator<string>
   yield cwd;
 }
 
+const npmPrefixDefault = memoize(() => npmPrefix(process.cwd(), true));
+
 /** Run `npm prefix` from `cwd`. Returns `undefined` when npm is missing. */
-async function npmPrefix(cwd: string): Promise<string | undefined> {
+async function npmPrefix(
+  cwd: string,
+  force: boolean = false,
+): Promise<string | undefined> {
+  if (!force && cwd === process.cwd()) return npmPrefixDefault();
+  log.debug("loading npm prefix", { cwd });
   return runNpm(["prefix"], cwd);
 }
 
+const npmWorkspaceRootDefault = memoize(() => npmWorkspaceRoot(process.cwd(), true));
+
 /** Workspace root via `npm root -w` (parent of the workspace `node_modules`). */
-async function npmWorkspaceRoot(cwd: string): Promise<string | undefined> {
+async function npmWorkspaceRoot(
+  cwd: string,
+  force: boolean = false,
+): Promise<string | undefined> {
+  if (!force && cwd === process.cwd()) return npmWorkspaceRootDefault();
+  log.debug("loading npm workspace root", { cwd });
   const nodeModules = await runNpm(["root", "-w"], cwd);
   if (!nodeModules) {
     return undefined;
@@ -259,8 +276,15 @@ async function gitRemoteOriginUrl(root: string): Promise<string | undefined> {
   }
 }
 
+const gitTopLevelDefault = memoize(() => gitTopLevel(process.cwd(), true));
+
 /** `git rev-parse --show-toplevel` from `cwd`. */
-async function gitTopLevel(cwd: string): Promise<string | undefined> {
+async function gitTopLevel(
+  cwd: string,
+  force: boolean = false,
+): Promise<string | undefined> {
+  if (!force && cwd === process.cwd()) return gitTopLevelDefault();
+  log.debug("loading git top level", { cwd });
   try {
     const { stdout } = await execFileAsync(
       "git",

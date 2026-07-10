@@ -19,43 +19,56 @@ Auto-config runs BEFORE delegating (so plugins see a populated
 `process.env` during their synchronous `setup()`) and every step is
 self-gating, so apps pay nothing for capabilities they don't use:
 
-| Capability                   | Trigger                                 | Effect                                     |
-| ---------------------------- | --------------------------------------- | ------------------------------------------ |
-| Lakebase Postgres (`autoConfigureLakebase`) | a `lakebase` plugin in `config.plugins` | resolves + writes `PG*` / `LAKEBASE_*` env |
+| Capability        | Trigger                                                                 | Effect                                     |
+| ----------------- | ----------------------------------------------------------------------- | ------------------------------------------ |
+| Lakebase Postgres | a `lakebase` plugin in `config.plugins`, or `autoConfigure: true`       | resolves + writes `PG*` / `LAKEBASE_*` env |
 
 The package is intentionally broader than Postgres: new capability
 auto-config slots into `createApp` behind its own plugin/env signal
 without changing the call site.
 
-## `resolveConfigValue`
+## `appkit-config-env`
 
-AppKit apps usually want bundle app `config.env` entries in addition to
-generic bundle variables. `resolveConfigValue` wraps
-`configUtils.resolveConfigValue` and enables that flattening by default
-(`bundleAppEnv: false` to skip, or pass an app key string to pin one).
-When the bundle defines more than one app, app `config.env` is ignored
-unless you pass a specific app key. Inside a deployed Databricks App,
-`loadBundleConfig` is a no-op so only `process.env` is read.
+Run Lakebase auto-config and print only the env vars it added or changed:
 
-```ts
-import { resolveConfigValue } from "@dbx-tools/appkit-config";
+```bash
+# POSIX: eval or source into your shell
+eval "$(bunx appkit-config-env -q)"
+# or
+source <(bunx appkit-config-env -q)
 
-const endpoint = await resolveConfigValue("LAKEBASE_ENDPOINT");
+bunx appkit-config-env -f windows -q   # cmd.exe: set KEY=value
+bunx appkit-config-env -f json -q
 ```
 
-## Standalone `autoConfigureLakebase()`
+Use `-q` to quiet auto-config logs. Output goes to stdout for piping.
 
-`autoConfigureLakebase()` fills in every Lakebase Postgres env var the AppKit `lakebase`
-plugin needs from whatever fragments your deployment actually carries.
-`createApp` runs it for you; call it directly only when you want the
+## Standalone `autoConfigure()`
+
+`autoConfigure()` fills in every Lakebase Postgres env var the AppKit
+`lakebase` plugin needs from whatever fragments your deployment actually
+carries. `createApp` runs it for you; call it directly when you want the
 resolution without the wrapper:
 
 ```ts
-import { autoConfigureLakebase } from "@dbx-tools/appkit-config";
+import { autoConfigure } from "@dbx-tools/appkit-config";
 import { createApp, lakebase, server } from "@databricks/appkit";
 
-await autoConfigureLakebase();
+await autoConfigure({ plugins: [lakebase()] });
 await createApp({ plugins: [lakebase(), server()] });
+```
+
+For resolver-only control (inspect before writing env, custom
+post-processing), use the lower-level exports:
+
+```ts
+import {
+  applyLakebaseToEnv,
+  resolveLakebaseConnection,
+} from "@dbx-tools/appkit-config";
+
+const resolved = await resolveLakebaseConnection({ autoCreate: false });
+applyLakebaseToEnv(resolved);
 ```
 
 ## Why a top-level helper instead of an AppKit plugin
@@ -69,9 +82,10 @@ plugin runs, `process.env` is fully populated.
 
 ## What it accepts
 
-`autoConfigureLakebase()` looks at, in priority order:
+`resolveLakebaseConnection()` (and therefore `autoConfigure()` /
+`createApp`) looks at, in priority order:
 
-1. Explicit `autoConfigureLakebase({ project, branch, endpoint, database, host, port, sslMode, autoCreate })`
+1. Explicit `resolveLakebaseConnection({ project, branch, endpoint, database, host, port, sslMode, autoCreate })`
 2. Env vars the `lakebase` plugin reads:
    - `LAKEBASE_ENDPOINT`
    - `PGHOST`, `PGDATABASE`, `PGPORT`, `PGSSLMODE`
@@ -115,9 +129,7 @@ After parsing, the resolver fills gaps in this order:
 ## Options
 
 ```ts
-await autoConfigureLakebase({
-  // Skip writing process.env (just inspect the returned record).
-  exportEnv: false,
+const resolved = await resolveLakebaseConnection({
   // Pin individual fields - any of these short-circuit the resolver.
   project: "dbx-tools",
   branch: "main",
@@ -127,12 +139,14 @@ await autoConfigureLakebase({
   autoCreate: false, // throw if no project exists
   // autoCreate: "my-custom-id", // create with this id
 });
+
+applyLakebaseToEnv(resolved); // writes gaps in process.env only
 ```
 
-`autoConfigureLakebase()` returns a `Resolved` record (`project`, `branch`, `endpoint`,
-`database`, `host`, `port`, `sslMode`). When `exportEnv: true` (the
-default) it also writes the same values to `process.env`, only filling
-gaps - existing values are preserved.
+`resolveLakebaseConnection()` returns a `LakebaseConnection` record
+(`project`, `branch`, `endpoint`, `database`, `host`, `port`,
+`sslMode`). `applyLakebaseToEnv()` writes the same values to
+`process.env`, only filling gaps - existing values are preserved.
 
 ## Address parser
 

@@ -202,16 +202,13 @@ request before workspace skill mounts are resolved.
 ## `configUtils` - env + bundle validate resolution (server only)
 
 Layered config lookup for local development: `process.env` first, then
-`databricks bundle validate --output json` (never hand-parsed
-`databricks.yml`). Opt in to CLI / explicit overrides with
-`withCliSources()`:
+app `config.env` from `bundle()` and hard-coded `app.yaml` env from
+`appYaml()`. Opt in to CLI / explicit overrides with `withCliSources()`:
 
 ```ts
 import { configUtils } from "@dbx-tools/shared";
 
-const warehouseId = await configUtils.resolveConfigValue("WAREHOUSE_ID", {
-  target: "dev",
-});
+const endpoint = await configUtils.resolveConfigValue("LAKEBASE_ENDPOINT");
 
 const withFlags = await configUtils.resolveConfigValue("MODEL_NAME", {
   sources: configUtils.withCliSources(),
@@ -219,10 +216,25 @@ const withFlags = await configUtils.resolveConfigValue("MODEL_NAME", {
 });
 ```
 
-`findBundleRoot()` walks project roots from `projectUtils` and locates
-`databricks.yml`. `loadBundleConfig()` runs the validate CLI and caches
-per `(root, target)`; it returns `undefined` inside a Databricks App unless
-`allowDatabaricksAppEnv: true`. Pass `bundleData` to skip the CLI in tests.
+`bundle(cwd?)` and `appYaml(cwd?)` discover files from project roots,
+return `{ path, data }`, and memoize when `cwd` is omitted or equals
+`process.cwd()`. Both return `undefined` inside a Databricks App. Pass
+`bundleData` / `appData` to skip disk reads in tests.
+
+## `iterableUtils` - lazy sequences
+
+`sequence()` wraps any iterable in a lazy, chainable API (`map`,
+`filter`, `distinct`, `find`, `toArray`, ...) for one-pass sources
+where re-iteration is not guaranteed unless caching is enabled:
+
+```ts
+import { iterableUtils } from "@dbx-tools/shared";
+
+const keys = iterableUtils
+  .sequence(["WAREHOUSE_ID", "warehouse-id"], { cache: true })
+  .map((k) => k.toUpperCase())
+  .distinct();
+```
 
 ## `stringUtils` - identifier + slug helpers
 
@@ -305,7 +317,7 @@ log.warn("write:error", { error: commonUtils.errorMessage(err) });
 `fnvHash` is intentionally **not** cryptographically secure - use it for
 keys and slugs, never for tokens or signatures.
 
-## `logUtils` - tagged console logger
+## `logUtils` - tagged logger
 
 `logger(plugin)` returns a leveled `{ debug, info, warn, error }` interface
 that auto-tags every line with the plugin's name:
@@ -321,9 +333,15 @@ class MyPlugin extends Plugin<MyConfig> {
 }
 ```
 
-The logger is intentionally console-backed (no extra deps). For richer
-sinks pass your own `{ debug, info, warn, error }` object - the plugins
-in this repo accept any matching shape.
+Output goes through [consola](https://github.com/unjs/consola) when that
+package resolves at runtime; otherwise the console fallback formats each
+line to `stderr` when available (`Bun.inspect` per argument unless
+`LOG_BUN_CONSOLE_DISABLED=true`, then `node:util`), or binds prefixes
+into global `console.*` when stderr / `node:util` is unavailable.
+Consola is not a required dependency of `@dbx-tools/shared`. Browser
+bundles omit the `LEVEL` text prefix (devtools already show severity).
+For richer sinks pass your own `{ debug, info, warn, error }` object -
+the plugins in this repo accept any matching shape.
 
 ### `LOG_LEVEL` filtering
 
@@ -338,9 +356,14 @@ LOG_LEVEL=warn  bun start  # production: hide info chatter
 ```
 
 The lookup is per-call (not module-load), so test runners can flip
-the threshold after the module has been imported. In browser bundles
-where `process.env.LOG_LEVEL` is undefined, the default `info`
-threshold applies.
+the threshold after the module has been imported. Use
+`logUtils.isLevelEnabled("debug")` to gate expensive debug payloads.
+In browser bundles where `process.env.LOG_LEVEL` is undefined, the
+default `info` threshold applies.
+
+Sink selection is fixed at import time. Disable consola with
+`LOG_CONSOLA_DISABLED=true` or Bun formatting with
+`LOG_BUN_CONSOLE_DISABLED=true`.
 
 ## License
 
